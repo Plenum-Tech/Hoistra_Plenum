@@ -6,7 +6,6 @@ Artifacts are for download/review — not asyncpg prepared-statement execution.
 
 import json
 import logging
-import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List
@@ -14,9 +13,10 @@ from uuid import UUID
 
 from cafm_shared.logging import get_logger
 
+from ..sql_identifiers import quote_ident
+
 logger = get_logger(__name__)
 
-_SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 
 
 def export_to_sql(
@@ -136,10 +136,8 @@ def _determine_insertion_order(
 
 
 def _quote_ident(name: str) -> str:
-    if _SAFE_IDENT.match(str(name)):
-        return str(name)
-    escaped = str(name).replace('"', '""')
-    return f'"{escaped}"'
+    # A keyword is quoted too: a bare "end" column stopped a whole write (29 Oct 2026).
+    return quote_ident(name)
 
 
 def _sql_literal(value: Any) -> str:

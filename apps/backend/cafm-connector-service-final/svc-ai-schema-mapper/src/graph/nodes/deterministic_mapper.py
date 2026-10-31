@@ -35,6 +35,9 @@ from ...matchers import (
 )
 from ..state import FieldMapping, MigrationState
 from ._timing import timed_node
+import time as _perf
+
+from ...udr import profiling
 from .mapping_cutoff import DETERMINISTIC_CUTOFF, partition_by_cutoff
 from .ontology_mapping import ontology_column_match, ontology_enabled
 
@@ -539,6 +542,40 @@ def _match_sheet_to_table(table_name: str, db_tables: list[str]) -> str | None:
     return None
 
 
+#: Sheet-name fragments → destination table, first match wins (Node 2 table routing, step 1).
+_TABLE_NAME_PATTERNS = [
+    ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
+    # Energy. The readings patterns come first because "Meter Readings" contains
+    # "meter", and a reading sheet routed to energy_meters writes eighteen thousand
+    # meters and no consumption at all.
+    ("meter_reading", "meter_readings"), ("meter reading", "meter_readings"),
+    ("half_hour", "meter_readings"), ("half hour", "meter_readings"),
+    ("halfhourly", "meter_readings"), ("half_hourly", "meter_readings"),
+    ("kwh", "meter_readings"),
+    ("consumption", "meter_readings"), ("reading", "meter_readings"),
+    ("energy_meter", "energy_meters"), ("energy meter", "energy_meters"),
+    ("mpan", "energy_meters"), ("mprn", "energy_meters"), ("meter", "energy_meters"),
+    ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
+    ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
+    ("part", "spare_parts"), ("inventory", "spare_parts"),
+    ("user", "technicians"), ("technician", "technicians"), ("personnel", "technicians"),
+    ("inspection", "findings"), ("finding", "findings"),
+    ("site", "locations"), ("location", "locations"),
+    # plenum_cafm.contracts is a read-only VIEW, so a "Contracts" sheet no longer finds it by
+    # name; the register belongs where FM_ENTITY_TO_TABLE puts the contract entity.
+    ("contract", "vendor_contracts"),
+]
+
+
+def route_by_sheet_name(sheet_name: str) -> str | None:
+    """The destination table a sheet's name points at, or None."""
+    name = (sheet_name or "").lower()
+    for pattern, entity_type in _TABLE_NAME_PATTERNS:
+        if pattern in name:
+            return entity_type
+    return None
+
+
 @timed_node("deterministic")
 async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
     """
@@ -564,6 +601,11 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
     state["field_mapping_reviewed"] = False
     state["hierarchy_reviewed"] = False
     migration_id = state.get("migration_id")
+    # Phase timings for this node, under MIGRATION_PROFILE. Step 1 was measured at about half
+    # a second for a 22-sheet workbook; this step is the one that takes minutes, and nothing
+    # here was timed, so turning the switch on said nothing about it. Three phases: the two
+    # reads of the target schema, and the per-sheet matching loop.
+    _mid = str(migration_id or "node2")
     cmms_name = state.get("cmms_name", "Unknown")
     parsed_tables = state.get("parsed_tables", {})
     # Full ingested file records (set by Node 1). Used as the PREFERRED source for the
@@ -599,7 +641,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         # against the routed target table's ACTUAL columns (not just the canonical list),
         # so table-specific columns (city, country, floors, gfa_sqm, …) map exactly.
         from ...db import get_plenum_cafm_columns_by_table
-        _columns_by_table = await get_plenum_cafm_columns_by_table()
+        with profiling.span(_mid, "analyse.read_target_columns"):
+            _columns_by_table = await get_plenum_cafm_columns_by_table()
         _db_tables = sorted(_columns_by_table.keys())
 
         # Node 1's table matcher (deterministic name match + Haiku fallback) — the best
@@ -628,9 +671,10 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         _dest_samples_by_table: dict = {}
         try:
             from ...db import get_plenum_cafm_sample_values_by_table
-            _dest_samples_by_table = await get_plenum_cafm_sample_values_by_table(
-                set(_ingest_table_matches.values()), allow=_columns_by_table
-            )
+            with profiling.span(_mid, "analyse.read_target_samples"):
+                _dest_samples_by_table = await get_plenum_cafm_sample_values_by_table(
+                    set(_ingest_table_matches.values()), allow=_columns_by_table
+                )
         except Exception:  # pragma: no cover — value gate is additive, never fatal
             _dest_samples_by_table = {}
 
@@ -652,6 +696,7 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         near_duplicate_columns_by_table: dict = {}
         all_confidences = []
 
+        _match_t0 = _perf.perf_counter()
         for table_name in sorted(parsed_tables.keys()):
             table_records = parsed_tables[table_name]
             # Prefer the FULL ingested rows for sample-value previews (real Excel/CSV data),
@@ -1232,15 +1277,13 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         # ── Build initial table_routing ────────────────────────────────────
         # Maps each source sheet name → target entity type for IntermediateSchema routing.
         # Priority: (1) source table name pattern, (2) dominant mapped canonical fields.
-        _TABLE_NAME_PATTERNS = [
-            ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
-            ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
-            ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
-            ("part", "spare_parts"), ("inventory", "spare_parts"),
-            ("user", "technicians"), ("technician", "technicians"), ("personnel", "technicians"),
-            ("inspection", "findings"), ("finding", "findings"),
-            ("site", "locations"), ("location", "locations"),
-        ]
+        # A sheet whose name IS a real plenum_cafm table is matched directly at step (0)
+        # below, before these patterns are consulted. That is right for every table but one:
+        # a sheet called "Meters" matches plenum_cafm.meters, an eighteen-row register that
+        # nothing reads for consumption, and the readings then have no meter to belong to.
+        # Energy lives in energy_meters and meter_readings.
+        _DIRECT_NAME_DENY = {"meters", "meter"}
+
         _ENTITY_FIELD_SIGNALS: dict[str, set[str]] = {
             "assets":            {"asset_code", "asset_name", "category", "make", "model", "serial"},
             "work_orders":       {"wo_code", "wo_priority", "wo_status", "wo_type", "maintenance_type"},
@@ -1249,11 +1292,15 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
             "technicians":       {"user_full_name", "user_title", "user_name", "reports_to"},
             "findings":          {"inspector_name", "inspection_date", "finding_type", "risk_level"},
             "locations":         {"site_id", "site_name", "site_type"},
+            "energy_meters":     {"mpan", "mprn", "meter_type", "meter_ref", "meter_reference"},
+            "meter_readings":    {"consumption_kwh", "kwh", "reading_at", "period_minutes"},
         }
 
         # (_ingest_table_matches computed above — Node 1 name+LLM table match — also
         #  seeds table_routing below so the Step-1 gate defaults to that guess.)
         table_routing: dict[str, str] = {}
+        profiling.record(_mid, "analyse.match_all_sheets", (_perf.perf_counter() - _match_t0) * 1000)
+
         for table_name, mappings in tier1_mappings_by_table.items():
             table_lower = table_name.lower().strip()
             matched_entity: str | None = None
@@ -1286,6 +1333,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
                 for targets in (_db_tables, list(_ENTITY_FIELD_SIGNALS.keys())):
                     for tgt in targets:
                         t = tgt.lower()
+                        if t in _DIRECT_NAME_DENY:
+                            continue      # see _DIRECT_NAME_DENY: "Meters" is not plenum_cafm.meters
                         if t in sheet_variants or t.rstrip("s") in sheet_variants:
                             matched_entity = tgt
                             break
@@ -1294,10 +1343,7 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
 
             # (1) Name-pattern match
             if not matched_entity:
-                for pattern, entity_type in _TABLE_NAME_PATTERNS:
-                    if pattern in table_lower:
-                        matched_entity = entity_type
-                        break
+                matched_entity = route_by_sheet_name(table_lower)
 
             # (2) Field-content inference
             if not matched_entity:
@@ -1353,6 +1399,10 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         })
 
         logger.info(f"[Node 2] Complete (MULTI-TABLE)")
+        # Print the phase table. Recording spans without this logs nothing, which is how
+        # turning the switch on produced no timings for this step at all. The run id is
+        # shared with step 1, so the table carries both steps' phases in one place.
+        profiling.emit_report(_mid, logger)
 
         migration_id = state.get("migration_id")
         if migration_id:

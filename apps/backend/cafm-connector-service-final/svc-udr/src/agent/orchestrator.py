@@ -12,29 +12,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..services.database_service import DatabaseService
+from ..services.principal import Principal
 from ..agent.tools.definitions import TOOL_DEFINITIONS
 from ..agent.tools.executor import ToolExecutor
-from ..agent.prompts import SYSTEM_PROMPT
+from ..agent.prompts import build_system_prompt
 from ..core.logging import get_logger
 
 log = get_logger(__name__)
 
 
 class UDROrchestrator:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, principal: "Principal | None" = None) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self._model = settings.anthropic_model
         self._session = session
+        self._principal = principal
 
     async def query(self, message: str) -> dict[str, Any]:
         """
         Process a natural-language database query.
         Returns {"reply": str, "success": bool, "tool_calls_made": int}.
         """
-        svc = DatabaseService(self._session)
+        # Bound to the caller. The agent chooses which tools to run and with what arguments;
+        # what it may see is not its decision, so the restriction is attached here rather than
+        # asked of the model.
+        svc = DatabaseService(self._session, self._principal)
         executor = ToolExecutor(svc)
 
         messages: list[dict] = [{"role": "user", "content": message}]
+        system = build_system_prompt()          # today's date, for "this month" and "overdue"
         tool_calls_made = 0
 
         log.info("udr.query.start", message_preview=message[:120])
@@ -43,7 +49,7 @@ class UDROrchestrator:
             response = await self._client.messages.create(
                 model=self._model,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
+                system=system,
                 tools=TOOL_DEFINITIONS,  # type: ignore[arg-type]
                 messages=messages,
             )
@@ -89,9 +95,13 @@ class UDROrchestrator:
                         continue
 
                     tool_calls_made += 1
-                    log.info("udr.tool.call", tool=block.name, input_keys=list(block.input.keys()))
+                    # The plan step the agent says this call is - kept in the log, never run.
+                    tool_input = dict(block.input or {})
+                    reasoning = str(tool_input.pop("reasoning", "") or "")[:500]
+                    log.info("udr.tool.call", tool=block.name, input_keys=list(tool_input.keys()),
+                             reasoning=reasoning)
 
-                    result = await executor.execute(block.name, block.input)
+                    result = await executor.execute(block.name, tool_input)
 
                     log.info(
                         "udr.tool.result",

@@ -24,7 +24,7 @@ def _aware(dt: datetime) -> datetime:
 async def log_occupancy_change(
     session: AsyncSession,
     *,
-    site_id: UUID,
+    building_id: UUID,
     occupancy_state: str,
     changed_at: datetime | None = None,
     notes: str | None = None,
@@ -34,7 +34,7 @@ async def log_occupancy_change(
     row = SiteOccupancyLog(
         id=uuid4(),
         organization_id=organization_id,
-        site_id=site_id,
+        building_id=building_id,
         occupancy_state=occupancy_state,
         changed_at=_aware(changed_at or datetime.now(timezone.utc)),
         notes=notes,
@@ -47,13 +47,14 @@ async def log_occupancy_change(
         action_type="energy.occupancy.log",
         source_feature="C",
         organization_id=organization_id,
-        detail={"site_id": str(site_id), "state": occupancy_state},
+        detail={"building_id": str(building_id), "state": occupancy_state},
     )
     await session.commit()
     return {
         "ok": True,
         "id": str(row.id),
-        "site_id": str(site_id),
+        "building_id": str(building_id),
+        "site_id": str(building_id),  # deprecated alias
         "occupancy_state": occupancy_state,
         "changed_at": row.changed_at.isoformat(),
     }
@@ -62,17 +63,17 @@ async def log_occupancy_change(
 async def has_occupancy_change(
     session: AsyncSession,
     *,
-    site_id: UUID | None,
+    building_id: UUID | None,
     window_start: datetime,
     window_end: datetime,
 ) -> bool:
     """True if any occupancy log falls in [window_start, window_end]."""
-    if not site_id:
+    if not building_id:
         return False
     q = (
         select(SiteOccupancyLog.id)
         .where(
-            SiteOccupancyLog.site_id == site_id,
+            SiteOccupancyLog.building_id == building_id,
             SiteOccupancyLog.changed_at >= _aware(window_start),
             SiteOccupancyLog.changed_at <= _aware(window_end),
         )

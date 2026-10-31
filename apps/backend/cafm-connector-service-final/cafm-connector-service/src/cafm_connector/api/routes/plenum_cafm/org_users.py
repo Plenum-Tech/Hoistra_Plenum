@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
+from cafm_connector.api.security import Principal, _detail, current_principal
 from cafm_connector.api.schemas.plenum_cafm import (
     OrganizationCreate, OrganizationResponse, OrganizationUpdate,
     UserCreate, UserResponse, UserUpdate,
@@ -71,7 +72,19 @@ async def update_organization(
 
 
 @router.delete("/organizations/{org_id}", status_code=200, tags=["Organizations"])
-async def delete_organization(org_id: str, db: AsyncSession = Depends(get_plenum_db)):
+async def delete_organization(
+    org_id: str,
+    caller: Principal = Depends(current_principal),
+    db: AsyncSession = Depends(get_plenum_db),
+):
+    # Superadmin only (12 Oct 2026). Deleting an organisation cascades to every one of its
+    # vendors (vendors_organization_id_fkey ON DELETE CASCADE) with no vendor-trail entry, and
+    # the Organization row has no company column for the session guard to narrow on — so this
+    # was any signed-in user deleting any company. Refused before the row is read. Nothing in
+    # the repository calls this route.
+    if not caller.is_superadmin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=_detail(
+            "Only a platform superadmin can delete an organisation.", "superadmin_required"))
     obj = await db.get(Organization, org_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -111,9 +124,49 @@ async def get_user(user_id: str, db: AsyncSession = Depends(get_plenum_db)):
     return UserResponse.model_validate(row)
 
 
+#: Stored in password_hash for an invited account. It is not a hash of anything: bcrypt
+#: cannot parse it, so every verification against it fails, and it can never be reached by
+#: guessing. The "!" prefix is the long-standing convention for "no usable password" and
+#: is what a person reading the column should see instead of something hash-shaped.
+UNUSABLE_PASSWORD = "!invited-no-password-set"
+
+
 @router.post("/users", response_model=UserResponse, status_code=201, tags=["Users"])
 async def create_user(body: UserCreate, db: AsyncSession = Depends(get_plenum_db)):
-    obj = User(id=uuid4(), **body.model_dump())
+    """Invite someone to the platform. No password is set here.
+
+    This endpoint used to accept `password_hash` from the request body and store it
+    verbatim — the caller chose the credential for an account belonging to someone else,
+    and no policy could be applied to a value that arrived pre-hashed.
+
+    Now the account is created with an unusable password and status "invited". The
+    person sets their own through the auth service's reset flow
+    (POST /api/auth/password/forgot, then /password/reset), which confirms the mailbox
+    at the same time. Nobody but the account holder ever knows the password.
+    """
+    address = (body.email or "").strip().lower()
+    if not address or "@" not in address:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    # Matched case-insensitively: Bala@x.com and bala@x.com are one mailbox, and the
+    # unique constraint on `email` alone would happily hold both as separate accounts.
+    existing = await db.execute(
+        select(User).where(func.lower(User.email) == address)
+    )
+    if existing.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail="That email already has an account.")
+
+    obj = User(
+        id=uuid4(),
+        organization_id=body.organization_id,
+        full_name=body.full_name,
+        email=address,
+        phone=body.phone,
+        role=body.role,
+        password_hash=UNUSABLE_PASSWORD,
+        status="invited",
+        email_verified=False,
+    )
     db.add(obj)
     await db.commit()
     await db.refresh(obj)

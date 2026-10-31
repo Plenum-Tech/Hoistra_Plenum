@@ -58,7 +58,8 @@ async def grouping_review_node(state: MigrationState) -> MigrationState:
             "Review the primary keys, foreign-key relationships and shared attributes (B20.1). "
             "For each FK / shared attribute, keep the detected classification, switch it (a FK "
             "demoted to Shared Attribute is not enforced and gets a lookup table instead; a "
-            "Shared Attribute promoted to FK skips its lookup table), or exclude it entirely. "
+            "Shared Attribute promoted to FK is enforced against the table its values live in), "
+            "or exclude it entirely. "
             "The pipeline does not continue until you approve."
         ),
     }
@@ -113,6 +114,48 @@ async def grouping_review_node(state: MigrationState) -> MigrationState:
         state["classification_rejected"] = applied.get("rejected_applied") or []
         state["classification_overrides"] = applied.get("overrides_applied") or {}
         logger.info(f"[Classification Gate] Applied — {applied}")
+
+        # Record the answer as a completed step, the way the column-mapping gate does. The gate's
+        # own payload is built BEFORE the person answers and is cleared on resume, so the Emitted
+        # DDL panel beside the card could only ever show the tables that existed before the
+        # click — every one except the table they had just asked for. On 30 Oct that sent us
+        # hunting a missing alarm_id and schedule_id twice while the run's log said both had been
+        # built. Re-publishing the gate payload would park the run as awaiting input again, so
+        # the post-answer truth goes here instead, where a finished step is read from.
+        if migration_id:
+            try:
+                from .schema_db_writer import migration_append_node_log_auto
+                _now = datetime.utcnow()
+                await migration_append_node_log_auto(
+                    migration_id, 4, "Classification Confirmed", _now, _now,
+                    output={
+                        "classification_confirmed": True,
+                        "lookup_tables_added": applied.get("lookup_tables_added") or [],
+                        "overrides_applied": applied.get("overrides_applied") or {},
+                        "rejected_applied": applied.get("rejected_applied") or [],
+                        "fk_candidates_removed": applied.get("fk_candidates_removed") or 0,
+                        "fk_candidates_added": applied.get("fk_candidates_added") or 0,
+                        # The whole report as it stands AFTER the answer, under the key the
+                        # status endpoint reads. _udr_node_output_field (app.py) walks node_logs
+                        # and keeps the LAST entry carrying "udr_column_intelligence", so this
+                        # supersedes the step-3 snapshot that was built before the person
+                        # answered. Publishing a trimmed "shared_attribute_tables" list here
+                        # instead wrote a key nothing reads: the record landed and the page went
+                        # on showing the pre-answer list, which cannot contain the table just
+                        # asked for. The full report also keeps the fields the B22.1 panel
+                        # renders — sample_values, fk_rewrites, create_ddl, fk_ddl.
+                        "udr_column_intelligence": ci,
+                    },
+                    logs=[
+                        f"Classification confirmed — "
+                        f"{len(applied.get('overrides_applied') or {})} re-classified, "
+                        f"{len(applied.get('rejected_applied') or [])} excluded",
+                        f"Lookup tables created by this answer: "
+                        f"{', '.join(applied.get('lookup_tables_added') or []) or 'none'}",
+                    ],
+                )
+            except Exception as _exc:  # pragma: no cover — the answer is applied regardless
+                logger.warning(f"[Classification Gate] could not record the confirmation: {_exc}")
 
     state["grouping_reviewed"] = True
     state["pre_semantic_review_payload"] = None

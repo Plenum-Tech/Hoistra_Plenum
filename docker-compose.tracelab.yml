@@ -1,0 +1,69 @@
+# Hoist Trace Lab: its own service and container (G0 addendum 2.1, 2.2).
+#
+# A NEW file: it never edits docker-compose.single-url.local.yml or docker-compose.azure-safe.yml,
+# and nothing starts unless the profile is named. With the local stack:
+#
+#   docker compose -p hoistra_plenum -f docker-compose.single-url.local.yml -f docker-compose.azure-safe.yml \
+#     -f docker-compose.tracelab.yml --profile tracelab up -d --build --no-deps trace-lab
+#
+# TRACE_LAB_DB_DSN names Trace Lab's OWN database (hoist_tracelab, created by Hussain or a DBA),
+# postgresql+asyncpg://..., with ?sslmode=require on Azure. Unset, the service starts and reports
+# itself unavailable. The main database (DB_URL) is used READ-ONLY. Boot only verifies the schema
+# (TRACE_LAB_SCHEMA=verify); migrations are applied by Hussain with python -m trace_lab.migrate.
+# Every downstream service URL points at Trace Lab's own allow-list proxy (addendum 2.5), and the
+# raw-httpx writers point at a dead port. Model and routing variables match svc-deepagents.
+services:
+  trace-lab:
+    profiles: ["tracelab"]
+    build:
+      context: ./apps/backend/cafm-connector-service-final
+      dockerfile: svc-trace-lab/Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      TRACE_LAB_DB_URL: ${TRACE_LAB_DB_DSN:-}
+      TRACE_LAB_SCHEMA: verify
+      TRACE_LAB_ENABLED: "1"
+      # LOCAL DEMO ONLY: lets a judge be built from a handful of labels to see the Judges and Watch screens.
+      # Its accuracy numbers mean nothing at this floor. Never set this on Azure (the default there is 10).
+      TRACE_LAB_JUDGE_EVAL_FLOOR: "1"
+      ACTIVITY_LOG_ENABLED: "false"
+      MIGRATION_BASE_URL: http://127.0.0.1:9
+      # Every downstream call - the golden runs' chat and Trace Lab's own identity lookups - goes
+      # through Trace Lab's loopback-only allow-list proxy (addendum 2.5), which forwards reads to the
+      # TRACE_LAB_UPSTREAM_* services below and refuses everything else.
+      UDR_BASE_URL: http://127.0.0.1:8010/__proxy/udr
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://127.0.0.1:8010/__proxy/oi
+      WO_MANAGEMENT_BASE_URL: http://127.0.0.1:8010/__proxy/wom
+      DOC_RAG_BASE_URL: http://127.0.0.1:8010/__proxy/docrag
+      TRACE_LAB_UPSTREAM_UDR: http://svc-udr:8006
+      TRACE_LAB_UPSTREAM_OI: http://svc-operations-intelligence:8009
+      TRACE_LAB_UPSTREAM_WOM: http://backend-app:8007
+      TRACE_LAB_UPSTREAM_DOCRAG: http://schema-mapper-app:8003
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ORCHESTRATOR_LLM_ROUTING: ${ORCHESTRATOR_LLM_ROUTING:-0}
+      COMPLIANCE_SKILL_PATH: ${COMPLIANCE_SKILL_PATH:-0}
+      COMPLIANCE_SELECTIVE_SKILLS: ${COMPLIANCE_SELECTIVE_SKILLS:-0}
+    command:
+      - uvicorn
+      - trace_lab.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8010"
+      - --root-path
+      - /backend/trace-lab
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8010"
+    restart: unless-stopped
+
+  # Local demo only: the dev frontend container (:5174) shows the Trace Lab entry when this file is
+  # merged in with --profile tracelab. The flag is read at build/dev time; unset, Trace Lab is absent
+  # (Golden Rule G0: the app is identical without it).
+  frontend-dev:
+    profiles: ["tracelab"]
+    environment:
+      VITE_TRACE_LAB: "1"

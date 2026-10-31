@@ -39,6 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared import name_lookup, name_match
 
 log = get_logger(__name__)
 
@@ -139,7 +140,21 @@ def choose_site_match(
     if len(hits) > 1:
         return None, "ambiguous_name"
 
-    if len(n) >= _MIN_CONTAINMENT_LEN:
+    # The name's other exact forms (29 Oct 2026): as letters and digits ("B090765" is the site
+    # coded "B-090765"), or with the kind word out ("JASMEET BUILDING" is the site "JASMEET").
+    # This LINKS a certificate, so the same name only — never part of one, never a close
+    # spelling — and a core no shorter than containment asks: such a core is inside the name
+    # as written, so this links nothing the containment tier below would not; it only prefers
+    # the exact one of its hits ("Jasmeet Heights Building" is Jasmeet Heights, not Jasmeet).
+    hits = _dedupe([r for r in rows if _same_name(name, r)])
+    if len(hits) == 1:
+        return hits[0], "name_exact_form"
+    if len(hits) > 1:
+        return None, "ambiguous_name_exact_form"
+
+    # The kind of record alone ("the building") names no site, even inside a longer name.
+    if len(n) >= _MIN_CONTAINMENT_LEN and name_lookup.names_something(
+            name, name_lookup.BUILDING_KIND_WORDS):
         hits = _dedupe([r for r in rows if _contains_match(n, r)])
         if len(hits) == 1:
             return hits[0], "name_contains"
@@ -149,13 +164,36 @@ def choose_site_match(
     return None, "no_match"
 
 
+def _same_name(name: Any, row: dict[str, Any]) -> bool:
+    """Whether ``name`` is one of the row's names or codes in an exact form (rungs 0-1)."""
+    texts = sorted(row.get("name_keys") or ())
+    if len(normalize_ref(name)) >= _MIN_REFERENCE_LEN:
+        texts += sorted(row.get("code_keys") or ())
+    return any(
+        name_lookup.rung(name, t, name_lookup.BUILDING_KIND_WORDS,
+                         max_rung=name_lookup.LINK_MAX_RUNG,
+                         min_core_len=_MIN_CONTAINMENT_LEN) is not None
+        for t in texts)
+
+
+def _phrase_within(short: str, long: str) -> bool:
+    """``short`` inside ``long`` (both normalised) from the start of a word, and to the end of a
+    word when it ends in a code, a number or a one-/two-letter word (29 Oct 2026). A bare
+    substring test linked a certificate for "Building 7" to the site "Building 70"."""
+    ws = short.split()
+    if not ws:
+        return False
+    end = r"(?![a-z0-9])" if name_match.exact_token(ws[-1]) else ""
+    return re.search(r"(?<![a-z0-9])" + re.escape(short) + end, long) is not None
+
+
 def _contains_match(n: str, row: dict[str, Any]) -> bool:
     for nk in row.get("name_keys") or set():
         if len(nk) < _MIN_CONTAINMENT_LEN:
             continue
         if abs(len(nk) - len(n)) > _MAX_CONTAINMENT_DELTA:
             continue
-        if n in nk or nk in n:
+        if _phrase_within(n, nk) or _phrase_within(nk, n):
             return True
     return False
 
@@ -321,6 +359,14 @@ async def resolve_site_link(
         for c in shape["name_columns"]:
             conds.append(f"{c} ILIKE :like")
             conds.append(f"LOWER(TRIM({c}::text)) = LOWER(TRIM(:exact))")
+        # The candidates choose_site_match's exact-form tier compares (29 Oct 2026): a name read
+        # with only the two above never saw "JASMEET" for "JASMEET BUILDING", nor "RT5,
+        # Crossrail" for "RT5 Crossrail". A read of candidates only — the choice stays below.
+        texts, compacts = name_lookup.exact_forms(nm, name_lookup.BUILDING_KIND_WORDS)
+        if compacts:
+            params["texts"], params["compacts"] = texts, compacts
+            cols = list(dict.fromkeys(shape["name_columns"] + shape["code_columns"]))
+            conds.append(name_lookup.exact_sql(cols, "texts", "compacts"))
     if ref:
         params["ref"] = ref
         for c in shape["code_columns"]:

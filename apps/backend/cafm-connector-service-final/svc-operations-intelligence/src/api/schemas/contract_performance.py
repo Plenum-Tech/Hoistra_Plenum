@@ -51,6 +51,12 @@ class ContractConfirmRequest(BaseModel):
     confirmed_by: UUID | None = None
 
 
+class ContractReopenRequest(BaseModel):
+    """Undoing a confirmation. Optional body: an anonymous reopen is still audited."""
+
+    reopened_by: UUID | None = None
+
+
 class AssetCriticalityRequest(BaseModel):
     asset_id: UUID
     asset_code: str | None = None
@@ -149,7 +155,11 @@ class InvoiceExtractVerifyRequest(BaseModel):
     source_text: str | None = None
     lines: list[dict[str, Any]] = Field(default_factory=list)
     work_orders: list[dict[str, Any]] = Field(default_factory=list)
+    #: An authoritative reference — someone typed it. Wins over the document.
     invoice_ref: str | None = None
+    #: A label to fall back on when the document prints no number: the uploaded filename.
+    #: Never used to identify the invoice, so it can never merge two of them.
+    invoice_ref_fallback: str | None = None
     vendor_id: UUID | None = None
     organization_id: UUID | None = None
     document_id: UUID | None = None
@@ -197,6 +207,11 @@ class InsightsResponse(BaseModel):
 
     ok: bool = True
     message: str | None = None
+    #: Per figure, why it could not be computed. A null variance is not a zero variance,
+    #: and the panel has to be able to say which — a vendor with two thousand scored work
+    #: orders and no recorded costs is a data gap, not an empty panel.
+    unavailable: dict[str, str] = Field(default_factory=dict)
+    work_orders_considered: int = 0
     cost_variance_pct: float | None = None
     labour_variance_pct: float | None = None
     matched_flagged_trend: list[float | None] = Field(default_factory=list)

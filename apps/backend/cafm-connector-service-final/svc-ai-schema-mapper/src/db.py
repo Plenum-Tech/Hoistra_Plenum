@@ -5,6 +5,7 @@ Sync connection string getter for PostgresSaver checkpointer (requires psycopg2,
 """
 
 import asyncio
+import os
 import logging
 import re
 import ssl
@@ -93,8 +94,10 @@ def _build_async_engine() -> AsyncEngine:
         "command_timeout": 45,
     }
 
-    # NullPool doesn't support pool_size/max_overflow parameters
-    if settings.environment == "development":
+    # NullPool doesn't support pool_size/max_overflow parameters. HOIST_DB_POOL=1 gives a development
+    # process the pooled engine below: with NullPool every session opened a new TLS connection to
+    # Azure, ~0.25 s each, dozens of times a gate on the migration worker (2 Oct 2026).
+    if settings.environment == "development" and os.environ.get("HOIST_DB_POOL") != "1":
         engine = create_async_engine(
             db_url,
             echo=False,
@@ -155,24 +158,32 @@ async def get_async_session() -> AsyncSession:
         yield session
 
 
+#: The columns of plenum_cafm's base tables — never its views, which no migration can write to.
+_BASE_TABLE_COLUMNS_SQL = (
+    "SELECT c.table_name, {cols} FROM information_schema.columns c "
+    "JOIN information_schema.tables t "
+    "  ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+    "WHERE c.table_schema = 'plenum_cafm' AND t.table_type = 'BASE TABLE' "
+    "ORDER BY c.table_name, c.ordinal_position"
+)
+
+
 async def get_plenum_cafm_columns_by_table() -> dict[str, set[str]]:
     """Map each plenum_cafm base table → its column names (lowercased).
 
     Used to constrain field matching to the routed target table's columns, so a
     source column only maps to a column that actually exists on its target table.
     Best-effort: returns {} on any failure (callers then skip the constraint).
+
+    Views are left out: information_schema.columns lists them too, and plenum_cafm.contracts
+    being taken for a table routed a "Contracts" sheet onto it and failed the write on
+    ALTER TABLE ... ADD COLUMN (tests/test_a_view_is_never_a_destination.py).
     """
     out: dict[str, set[str]] = {}
     try:
         session_factory = get_async_session_factory()
         async with session_factory() as session:
-            res = await session.execute(
-                text(
-                    "SELECT table_name, column_name FROM information_schema.columns "
-                    "WHERE table_schema = 'plenum_cafm' "
-                    "ORDER BY table_name, ordinal_position"
-                )
-            )
+            res = await session.execute(text(_BASE_TABLE_COLUMNS_SQL.format(cols="c.column_name")))
             for tbl, col in res.fetchall():
                 out.setdefault(str(tbl).lower(), set()).add(str(col).lower())
     except Exception:
@@ -181,6 +192,67 @@ async def get_plenum_cafm_columns_by_table() -> dict[str, set[str]]:
             exc_info=True,
         )
     return out
+
+
+async def get_plenum_cafm_primary_keys() -> dict[str, list[str]]:
+    """Map each plenum_cafm base table → its primary-key columns, in key order (lowercased).
+
+    Lets the classifier ask whether the destination already owns an attribute before normalising
+    it into a new lookup table — plenum_cafm.buildings owns building_id, so an upload that has no
+    `building` sheet should reference it rather than create a second table of the same values.
+
+    Best-effort: {} on any failure, and the classifier then behaves exactly as it did before.
+    """
+    out: dict[str, list[str]] = {}
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            res = await session.execute(text(
+                "SELECT tc.table_name, kcu.column_name "
+                "FROM information_schema.table_constraints tc "
+                "JOIN information_schema.key_column_usage kcu "
+                "  ON kcu.constraint_name = tc.constraint_name "
+                " AND kcu.table_schema = tc.table_schema "
+                "JOIN information_schema.tables t "
+                "  ON t.table_schema = tc.table_schema AND t.table_name = tc.table_name "
+                "WHERE tc.table_schema = 'plenum_cafm' "
+                "  AND tc.constraint_type = 'PRIMARY KEY' "
+                "  AND t.table_type = 'BASE TABLE' "
+                "ORDER BY tc.table_name, kcu.ordinal_position"
+            ))
+            for tbl, col in res.fetchall():
+                out.setdefault(str(tbl).lower(), []).append(str(col).lower())
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "[db] get_plenum_cafm_primary_keys failed — a shared attribute the destination "
+            "already owns will be normalised into a new lookup table instead of referencing it",
+            exc_info=True,
+        )
+    return out
+
+
+async def get_plenum_cafm_view_names() -> set[str]:
+    """The names of plenum_cafm's views and materialized views (lowercased).
+
+    A new table must never take one of these names: CREATE TABLE IF NOT EXISTS sees the view,
+    skips with a NOTICE, and every row then fails on "cannot insert into view".
+    Best-effort: returns an empty set on any failure.
+    """
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            res = await session.execute(text(
+                "SELECT c.relname FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'plenum_cafm' AND c.relkind IN ('v', 'm')"
+            ))
+            return {str(r[0]).lower() for r in res.fetchall()}
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "[db] get_plenum_cafm_view_names failed — new table names not checked against views",
+            exc_info=True,
+        )
+        return set()
 
 
 async def get_plenum_cafm_column_types_by_table() -> dict[str, dict[str, str]]:
@@ -196,11 +268,7 @@ async def get_plenum_cafm_column_types_by_table() -> dict[str, dict[str, str]]:
         session_factory = get_async_session_factory()
         async with session_factory() as session:
             res = await session.execute(
-                text(
-                    "SELECT table_name, column_name, data_type FROM information_schema.columns "
-                    "WHERE table_schema = 'plenum_cafm' "
-                    "ORDER BY table_name, ordinal_position"
-                )
+                text(_BASE_TABLE_COLUMNS_SQL.format(cols="c.column_name, c.data_type"))
             )
             for tbl, col, dtype in res.fetchall():
                 out.setdefault(str(tbl).lower(), {})[str(col).lower()] = str(dtype).lower()
@@ -281,3 +349,46 @@ def get_sync_db_url() -> str:
         url = f"{url}{'&' if '?' in url else '?'}sslmode=require"
 
     return url
+
+
+async def get_plenum_cafm_views() -> dict[str, list[str]]:
+    """Map each plenum_cafm view → the base tables it reads, lowercased.
+
+    A view is not a table and will not take DDL: ``ALTER TABLE ... ADD COLUMN`` on one fails
+    with ``cannot be performed on relation ... not supported for views``, and because the
+    migration runs its statements in one transaction, that one failure rolls back every
+    statement before it. ``plenum_cafm.contracts`` is the case that bit: it is a view over
+    ``contract_sla_parameters``, so a migration that routed any new column to "contracts"
+    could never finish.
+
+    Base tables come from ``information_schema.view_table_usage``, which lists what the view
+    reads. A view over a join names more than one, which is why the value is a list and the
+    caller decides whether one of them is the right home.
+
+    Best-effort: returns {} on any failure, and a caller that gets {} behaves as before.
+    """
+    out: dict[str, list[str]] = {}
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            res = await session.execute(
+                text(
+                    "SELECT v.table_name, u.table_name AS base_table "
+                    "  FROM information_schema.views v "
+                    "  LEFT JOIN information_schema.view_table_usage u "
+                    "         ON u.view_schema = v.table_schema AND u.view_name = v.table_name "
+                    "        AND u.table_schema = v.table_schema "
+                    " WHERE v.table_schema = 'plenum_cafm' "
+                    " ORDER BY v.table_name, u.table_name"
+                )
+            )
+            for view, base in res.fetchall():
+                entry = out.setdefault(str(view).lower(), [])
+                if base and str(base).lower() not in entry:
+                    entry.append(str(base).lower())
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "[db] get_plenum_cafm_views failed — DDL will not be checked against views",
+            exc_info=True,
+        )
+    return out

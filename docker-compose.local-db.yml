@@ -1,0 +1,94 @@
+# Point the whole stack at the LOCAL database instead of Azure.
+#
+# Why this file exists
+# -------------------
+# In docker-compose.single-url.local.yml every service reads ${PLENUM_DB_DSN}, and in .env
+# that is the Azure production database. The `postgres` service it starts alongside them is
+# never connected to by anything. So bringing the "local" stack up as documented points the
+# entire backend at production — with SEED_DEFAULT_PLENUM_ORG, SEED_APPROVAL_DEMO and
+# AUTO_SEED_UK_PACK all set to "true", which write.
+#
+# This overlay sets each service's database URL explicitly, so .env cannot reach them.
+#
+# Which database
+# --------------
+# hoistra-db — the pgvector container holding the imported portfolio. Not the compose
+# `postgres` service, for two reasons: it is empty, and it is postgres:16-alpine, which has
+# no pgvector, so the schema's document_chunks table cannot be created on it at all.
+#
+# host.docker.internal, not 127.0.0.1: inside a container, localhost is the container.
+#
+# Usage — note --no-deps
+# ----------------------
+# --no-deps is what stops compose starting its own postgres on 5432, which is the
+# "Bind for 0.0.0.0:5432 failed: port is already allocated" error: hoistra-db is already
+# there. Do not add `postgres` to the service list.
+#
+#   docker compose \
+#     -f docker-compose.single-url.local.yml \
+#     -f docker-compose.dev-ports.yml \
+#     -f docker-compose.local-db.yml \
+#     up -d --no-deps redis connector-app backend-app schema-mapper-app \
+#                     svc-udr svc-deepagents svc-operations-intelligence
+#
+# Check what a service actually connected to before trusting a screen:
+#   docker compose -f docker-compose.single-url.local.yml -f docker-compose.local-db.yml \
+#     exec svc-operations-intelligence sh -c 'echo $DATABASE_URL'
+
+x-local-db: &local_db postgresql+asyncpg://cafm:cafm@host.docker.internal:5432/hoistra
+x-host: &host_gateway
+  - "host.docker.internal:host-gateway"
+
+# Every spelling of the setting, on every service.
+#
+# apps/backend/.env is loaded as an env_file and defines the Azure DSN under BOTH `db_url`
+# and `DB_URL`. To compose those are two different variables, so overriding `DB_URL` alone
+# leaves the lowercase one in the container's environment still pointing at production —
+# and pydantic-settings matches case-insensitively, so which one the service reads is down
+# to iteration order. Setting all three names removes the question.
+x-db-env: &db_env
+  DATABASE_URL: *local_db
+  DB_URL: *local_db
+  db_url: *local_db
+  PLENUM_DB_URL: *local_db
+
+services:
+  connector-app:
+    extra_hosts: *host_gateway
+    environment:
+      <<: *db_env
+
+  backend-app:
+    extra_hosts: *host_gateway
+    environment:
+      <<: *db_env
+      # Off, or the container crash-loops before it serves anything.
+      # scripts/seed_approval_demo.py writes to a plenum_cafm.work_orders that has
+      # work_order_id / source / asset / location / issue_description / requester_email.
+      # The canonical table has none of those — it keys on id and carries wo_code,
+      # asset_id, location_id. The script targets an older shape of the table, so it is
+      # not a column rename; adapting it is its own piece of work. Nothing here needs it:
+      # the approvals rail reads plenum_cafm.approvals_queue_items, and with no demo rows
+      # it says nothing is waiting, which is true.
+      SEED_APPROVAL_DEMO: "false"
+
+  schema-mapper-app:
+    extra_hosts: *host_gateway
+    environment:
+      <<: *db_env
+
+  svc-udr:
+    extra_hosts: *host_gateway
+    environment:
+      <<: *db_env
+
+  svc-deepagents:
+    extra_hosts: *host_gateway
+    environment:
+      <<: *db_env
+
+  svc-operations-intelligence:
+    extra_hosts: *host_gateway
+    environment:
+      <<: *db_env
+      AUTH_DEFAULT_ORGANIZATION_ID: "00000000-0000-0000-0000-000000000001"

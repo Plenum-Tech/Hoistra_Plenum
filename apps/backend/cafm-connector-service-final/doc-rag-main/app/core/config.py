@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # Dev mode — set USE_SQLITE_DEV=false to use PostgreSQL.
     # When DB_URL is set, PostgreSQL is used automatically (plenum_cafm row-index APIs).
     use_sqlite_dev: bool = True
+    # Whether startup may issue DDL. `_run_migrations()` is idempotent, which made running
+    # it on every boot look free — it is not. ALTER TABLE takes AccessExclusiveLock whether
+    # or not the column is already there, and a pending exclusive lock blocks every later
+    # reader of that table. On 17 Sep 2026 one such ALTER, queued behind another instance's
+    # open transaction, stopped all traffic to plenum_cafm.ingestion_documents for 34
+    # minutes. Off by default: schema changes are a deployment step, not a side effect of
+    # a restart.
+    run_migrations_on_startup: bool = False
 
     # CMMS schema for raw table import / document_id writes (default plenum_cafm).
     plenum_cmms_schema: str = "plenum_cafm"

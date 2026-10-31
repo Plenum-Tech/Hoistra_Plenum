@@ -1,7 +1,7 @@
 """BE1-05/08/09/13/14 + BE2-09/12/16 — Work Order CRUD + status machine + history + bulk."""
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -22,6 +22,9 @@ from ...api.schemas.work_order import (
     StatusUpdate,
 )
 from ...services.approval_chain_service import approval_suggestion_after_create
+from ...services.principal import (Principal, acting_organization, assert_building,
+                                   current_principal, scope_select)
+from ...services.maintenance import AWAITING, BLOCKED, LIVE
 from ...api.schemas.journey import StatusHistoryEntry, BulkStatusUpdate
 from ...core.exceptions import (
     WorkOrderNotFound, InvalidStatusTransition,
@@ -33,6 +36,7 @@ from ...services.journey_service import (
     advance_journey_milestone,
 )
 from ...services.approval_workflow import ApprovalWorkflowService
+from ...services import work_order_lookup
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -55,16 +59,55 @@ def _wo_id() -> str:
     return f"WO-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[:18]}"
 
 
-async def _get_wo_or_404(work_order_id: str, session: AsyncSession) -> WorkOrder:
+async def _get_wo_or_404(
+    work_order_id: str, session: AsyncSession, principal: Principal | None = None
+) -> WorkOrder:
     try:
+        # The key is plenum_cafm.work_orders.id. A caller holding the human reference
+        # instead — the code people read and quote — gets the same row rather than a 404,
+        # so links and scripts written before the key moved keep working.
         result = await session.execute(
-            select(WorkOrder).where(WorkOrder.work_order_id == work_order_id)
+            select(WorkOrder).where(
+                # Compared as text on both sides: the key is a uuid on one database and an
+                # integer on the other, and wo_code is a varchar on both, so an untyped
+                # comparison raises "operator does not exist: character varying = integer".
+                or_(cast(WorkOrder.work_order_id, String) == str(work_order_id),
+                    cast(WorkOrder.wo_code, String) == str(work_order_id))
+            )
         )
+        rows = list(result.scalars().all())
+        by_key = [w for w in rows if str(w.work_order_id) == str(work_order_id)]
+        matches = by_key or (rows if len(rows) == 1 else None)
+        if matches is None:
+            # Nothing exact, or several sharing the code (wo_code is not unique). The code as
+            # people type it — "wo-1042", "WO1042" for WO-1042 — is compared case- and
+            # separator-insensitively, and only among the caller's own work orders: a looser
+            # match never reaches past the boundary the exact one is checked against.
+            matches = rows if principal is None else await work_order_lookup.by_code(
+                session, work_order_id,
+                scope=lambda q: scope_select(q, principal, WorkOrder.building_id))
     except SQLAlchemyError as exc:
         raise DatabaseError(str(exc)) from exc
-    wo = result.scalar_one_or_none()
+    if len(matches) > 1:
+        # Several work orders answer to this code. Picking one would act on whichever the
+        # database returned first; the caller is told which there are and asked for the key.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "work_order_ambiguous",
+                    "message": f"'{work_order_id}' matches {len(matches)} work orders: "
+                               f"{work_order_lookup.describe_candidates(matches)}. "
+                               f"Use the work order id."},
+        )
+    wo = matches[0] if matches else None
     if not wo:
+        if rows and principal is not None:
+            # Several exact matches, none on the caller's buildings: refused, as one would be.
+            assert_building(principal, rows[0].building_id)
         raise WorkOrderNotFound(work_order_id)
+    if principal is not None:
+        # A work order on somebody else's building is refused, not hidden: the caller
+        # named it, so "not found" would be a lie and 403 says what is actually wrong.
+        assert_building(principal, wo.building_id)
     return wo
 
 
@@ -80,6 +123,7 @@ async def _get_wo_or_404(work_order_id: str, session: AsyncSession) -> WorkOrder
 async def create_work_order(
     payload: WorkOrderCreate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info(
         "work_order.create.start",
@@ -88,6 +132,15 @@ async def create_work_order(
         priority=payload.priority,
         requester_email=payload.requester_email,
     )
+    # The building the work order is on. A named one must be among the caller's; with none
+    # named, a caller who can only see one building (allocated to one, or with one
+    # selected) gets that one stamped, so their own work order does not vanish from their
+    # own list the moment it is created.
+    building_id = payload.building_id
+    if building_id is not None:
+        assert_building(principal, building_id, action="raise work on")
+    elif principal.building_ids is not None and len(principal.building_ids) == 1:
+        building_id = principal.building_ids[0]
     org_id = None
     if settings.default_organization_id:
         try:
@@ -98,6 +151,7 @@ async def create_work_order(
     wo = WorkOrder(
         work_order_id=_wo_id(),
         organization_id=org_id,
+        building_id=building_id,
         title=payload.issue_description,
         source=payload.source,
         asset=payload.asset,
@@ -169,6 +223,11 @@ async def create_work_order(
 
 # ── List (BE2-16: pagination added) ──────────────────────────────────────────
 
+#: What ?open=true keeps (services.maintenance's BLOCKED / AWAITING / LIVE, and the
+#: platform's own in-flight statuses).
+OPEN_STATUSES = sorted(set(BLOCKED + AWAITING + LIVE) | {"preparing", "prepared", "active"})
+
+
 @router.get(
     "/",
     response_model=List[WorkOrderResponse],
@@ -180,9 +239,14 @@ async def list_work_orders(
     asset:         Optional[str]      = Query(None),
     from_date:     Optional[datetime] = Query(None),
     to_date:       Optional[datetime] = Query(None),
+    open_only:     bool               = Query(False, alias="open"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmins only: answer for this company instead of reading across "
+                          "all of them. Ignored for everybody else, who always get their own."),
     page:          int                = Query(1, ge=1),
     limit:         int                = Query(20, ge=1, le=200),
     session:       AsyncSession       = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.debug(
         "work_order.list",
@@ -190,8 +254,19 @@ async def list_work_orders(
         asset=asset, page=page, limit=limit,
     )
     q = select(WorkOrder).where(WorkOrder.work_order_id.isnot(None))
+    # Pinned to the same company /api/assets answers for, so the two reads the Assets page
+    # joins describe one portfolio. Without it a superadmin viewing company X got every
+    # company's work orders beside X's assets, and the page's by-name match counted company
+    # Y's open orders on "AHU-1" against X's AHU-1 (28 Sep 2026).
+    q = scope_select(q, principal, WorkOrder.building_id,
+                     organization_id=acting_organization(principal, organization_id))
     if status_filter:
         q = q.where(WorkOrder.status == status_filter)
+    if open_only:
+        # Every spelling of "not finished": the platform's own statuses and a migrated
+        # CMMS's ("Draft", "In progress", "Held"). A building with a few thousand completed
+        # orders otherwise pushed its open ones out of any page a screen could load.
+        q = q.where(func.lower(func.trim(WorkOrder.status)).in_(OPEN_STATUSES))
     if priority:
         q = q.where(WorkOrder.priority == priority)
     if asset:
@@ -200,7 +275,12 @@ async def list_work_orders(
         q = q.where(WorkOrder.created_at >= from_date)
     if to_date:
         q = q.where(WorkOrder.created_at <= to_date)
-    q = q.order_by(WorkOrder.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    # The key last, so the order is total. created_at is not unique — a workbook migration
+    # loads every row in one transaction, so every row shares one DEFAULT now() — and OFFSET
+    # paging over ties let Postgres order them differently on each page: the Assets page,
+    # which reads every page, got some orders four times and others never (28 Sep 2026).
+    q = (q.order_by(WorkOrder.created_at.desc(), WorkOrder.work_order_id.desc())
+          .offset((page - 1) * limit).limit(limit))
     try:
         result = await session.execute(q)
     except SQLAlchemyError as exc:
@@ -212,21 +292,25 @@ async def list_work_orders(
 
 
 @router.get("/filter/active",           response_model=List[WorkOrderResponse])
-async def get_active(session: AsyncSession = Depends(get_session)):
+async def get_active(session: AsyncSession = Depends(get_session),
+               principal: Principal = Depends(current_principal)):
     result = await session.execute(
-        select(WorkOrder)
-        .where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "active")
-        .order_by(WorkOrder.created_at.desc())
+        scope_select(
+            select(WorkOrder).where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "active"),
+            principal, WorkOrder.building_id,
+        ).order_by(WorkOrder.created_at.desc())
     )
     return result.scalars().all()
 
 
 @router.get("/filter/pending-approval", response_model=List[WorkOrderResponse])
-async def get_pending(session: AsyncSession = Depends(get_session)):
+async def get_pending(session: AsyncSession = Depends(get_session),
+               principal: Principal = Depends(current_principal)):
     result = await session.execute(
-        select(WorkOrder)
-        .where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "pending_approval")
-        .order_by(WorkOrder.created_at.desc())
+        scope_select(
+            select(WorkOrder).where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "pending_approval"),
+            principal, WorkOrder.building_id,
+        ).order_by(WorkOrder.created_at.desc())
     )
     return result.scalars().all()
 
@@ -243,8 +327,10 @@ async def get_pending(session: AsyncSession = Depends(get_session)):
 async def get_work_order_history(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    await _get_wo_or_404(work_order_id, session)   # 404 if not found
+    wo = await _get_wo_or_404(work_order_id, session, principal)   # 404 if not found
+    work_order_id = str(wo.work_order_id)   # history is keyed by id, whatever the caller typed
     try:
         result = await session.execute(
             select(StatusHistory)
@@ -271,6 +357,7 @@ async def get_work_order_history(
 async def bulk_status_update(
     payload: BulkStatusUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     if not payload.work_order_ids:
         raise HTTPException(
@@ -289,7 +376,8 @@ async def bulk_status_update(
     for wo_id in payload.work_order_ids:
         try:
             result = await session.execute(
-                select(WorkOrder).where(WorkOrder.work_order_id == wo_id)
+                scope_select(select(WorkOrder).where(WorkOrder.work_order_id == wo_id),
+                             principal, WorkOrder.building_id)
             )
             wo = result.scalar_one_or_none()
             if not wo:
@@ -398,6 +486,7 @@ async def suggest_approval(body: SuggestApprovalBody):
 async def get_work_order_status_track(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     """
     Full work order tracking: status, multi-step approval progress, technician,
@@ -405,7 +494,11 @@ async def get_work_order_status_track(
     """
     from ...services.work_order_status_track import build_work_order_status_track
 
-    track = await build_work_order_status_track(session, work_order_id)
+    # Resolved and checked like every other read of one work order: the key or the code however
+    # it is typed, and 403 for a work order on a building the caller is not allocated to. This
+    # route took the caller and never used it, so any signed-in user could read any track.
+    wo = await _get_wo_or_404(work_order_id, session, principal)
+    track = await build_work_order_status_track(session, str(wo.work_order_id))
     if not track.get("found"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -415,7 +508,25 @@ async def get_work_order_status_track(
 
 
 @router.get("/{work_order_id}/approval-chain")
-async def get_work_order_approval_chain(work_order_id: str):
+async def get_work_order_approval_chain(
+    work_order_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+):
+    """Who has to approve this order, in order.
+
+    This was the one handler in the router without a caller on it — every sibling has had one
+    all along — so the approval chain of any work order was readable by anybody who knew an id.
+    The order's own building is checked too: knowing an id is not the same as being allowed to
+    see what it is about.
+    """
+    from sqlalchemy import text as _text
+
+    building_id = (await session.execute(_text(
+        "SELECT building_id::text FROM plenum_cafm.work_orders WHERE id::text = :wid"),
+        {"wid": str(work_order_id)})).scalar()
+    if building_id:
+        assert_building(principal, building_id, action="read")
     svc = ApprovalWorkflowService(aimms_api_url=settings.aimms_api_url)
     chain = await svc.get_approval_chain(work_order_id)
     return {"work_order_id": work_order_id, "chain": chain}
@@ -426,6 +537,7 @@ async def customize_work_order_approval_chain(
     work_order_id: str,
     body: CustomizeChainBody,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     from sqlalchemy import text
     for override in body.chain:
@@ -449,9 +561,10 @@ async def request_dynamic_approval(
     work_order_id: str,
     body: RequestApprovalBody = RequestApprovalBody(),
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     """Create multi-step approval requests from DynamicApprovalEngine suggestion."""
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     svc = ApprovalWorkflowService(aimms_api_url=settings.aimms_api_url)
     wo_payload = {
         "work_order_id": wo.work_order_id,
@@ -474,6 +587,7 @@ async def send_approval_email(
     work_order_id: str,
     step_order: int = 1,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     """Send Outlook approval-request email to the approver for a chain step."""
     from ...services.approval_chain_service import send_approval_step_email
@@ -486,8 +600,9 @@ async def send_approval_email(
 # ── Get / Update ──────────────────────────────────────────────────────────────
 
 @router.get("/{work_order_id}", response_model=WorkOrderResponse, responses=_404)
-async def get_work_order(work_order_id: str, session: AsyncSession = Depends(get_session)):
-    return await _get_wo_or_404(work_order_id, session)
+async def get_work_order(work_order_id: str, session: AsyncSession = Depends(get_session),
+                         principal: Principal = Depends(current_principal)):
+    return await _get_wo_or_404(work_order_id, session, principal)
 
 
 @router.patch("/{work_order_id}", response_model=WorkOrderResponse, responses=_404_422)
@@ -495,8 +610,9 @@ async def update_work_order(
     work_order_id: str,
     payload: WorkOrderUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     updates = payload.model_dump(exclude_none=True)
     log.info("work_order.update.start", work_order_id=work_order_id, fields=list(updates.keys()))
     if wo.status == "pending_approval":
@@ -537,8 +653,10 @@ async def update_status(
     work_order_id: str,
     payload: StatusUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     allowed = _VALID_TRANSITIONS.get(wo.status, [])
     if payload.new_status not in allowed:
         log.warning(
@@ -590,9 +708,11 @@ async def update_status(
 async def approve_work_order(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info("work_order.approve.start", work_order_id=work_order_id)
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     if wo.status != "pending_approval":
         log.warning(
             "work_order.approve.not_pending",
@@ -626,9 +746,11 @@ async def approve_work_order(
 async def close_work_order(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info("work_order.close.start", work_order_id=work_order_id)
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     if wo.status == "closed":
         log.warning("work_order.close.already_closed", work_order_id=work_order_id)
         raise WorkOrderAlreadyClosed(work_order_id)
@@ -655,9 +777,11 @@ async def prepare_work_order(
     work_order_id: str,
     payload: WorkOrderUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info("work_order.prepare.start", work_order_id=work_order_id)
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     allowed = _VALID_TRANSITIONS.get(wo.status, [])
     if "prepared" not in allowed:
         log.warning(

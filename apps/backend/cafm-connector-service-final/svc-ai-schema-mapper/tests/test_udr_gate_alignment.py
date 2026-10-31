@@ -120,6 +120,29 @@ _eq = {"source_field": "tagnum", "target_field": "tagnum"}
 check("no-op when B21 canonical equals the current target (tagnum→tagnum)",
       align_mapping_to_b21("works", _eq, {("works", "tagnum"): "tagnum"}) is False)
 
+# ── a building named after its site keeps its own name column ───────────────────────
+# Migration 13463965 (24 Sep 2026): Buildings.name == Sites.site_name == 'Harbour Point', so B21
+# grouped the two and called Buildings.name a new column 'site_name'. buildings already HAS
+# site_name, so the retarget was not a demotion — it wrote the name into buildings.site_name and
+# left buildings.name empty.
+_bidx = {("buildings", "name"): "site_name", ("vendors", "id"): "asset_id"}
+_bcols = {"buildings": {"building_id", "name", "site_name", "building_code"},
+          "vendors": {"id", "phone", "vendor_name"}}
+_bt1 = {"Buildings": [{"source_field": "name", "target_field": "name"}],
+        "Vendors": [{"source_field": "id", "target_field": "id"}]}
+_bdm = [{"source": "buildings.name", "outcome": "new column", "canonical_name": "site_name"},
+        {"source": "vendors.id", "outcome": "new column", "canonical_name": "asset_id"}]
+_bchanged = align_buckets_to_b21(_bdm, _bt1, dest_columns_by_table=_bcols,
+                                 dest_table_by_source=lambda s: s.lower())
+check("Buildings.name stays on buildings.name when site_name is another existing column",
+      _bt1["Buildings"][0]["target_field"] == "name"
+      and not _bt1["Buildings"][0].get("b21_new_column"))
+check("vendors.id is still demoted (asset_id is not a vendors column)",
+      _bt1["Vendors"][0]["target_field"] == "asset_id" and _bchanged == 1)
+check("without destination columns the old behaviour is unchanged",
+      align_mapping_to_b21("Buildings", {"source_field": "name", "target_field": "name"}, _bidx)
+      is True)
+
 print()
 if _fails:
     print(f"{_fails} TEST(S) FAILED")

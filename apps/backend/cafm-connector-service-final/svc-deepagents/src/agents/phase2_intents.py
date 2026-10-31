@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-Phase2AgentId = Literal["compliance", "contract_performance", "energy_intelligence"]
+Phase2AgentId = Literal["compliance", "contract_performance", "energy_intelligence", "wo_engine"]
 
 # PRD names ↔ code agent ids
 PHASE2_AGENT_REGISTRY: dict[str, Phase2AgentId] = {
@@ -64,6 +64,40 @@ CONTRACT_PERFORMANCE_INTENT_KEYWORDS: tuple[str, ...] = (
     "invoice",
     "overrun",
     "contract breach",
+    # Added beyond the PRD table: the words a property manager actually types. Measured on
+    # 16 Sep 2026, eight of ten realistic vendor questions matched nothing above — "performing"
+    # is not "performance", and a bare "score" or "overcharge" was absent — so on the fallback
+    # path (LLM routing unavailable) they reached the general orchestrator with every tool
+    # bound, and came back answered from the certificate register.
+    #
+    # Each is deliberately the LONGER form: "capped" not "cap", which fires on "capacity";
+    # "overcharge" not "charge", which is in every invoice sentence. A keyword table that
+    # widens carelessly starts taking another engine's questions.
+    "performing",
+    "scorecard",
+    "overcharge",
+    "overbilling",
+    "overpay",
+    "capped",
+    "day rate",
+    "hourly rate",
+    "labour rate",
+    "cost variance",
+    "contract terms",
+    "commit them to",
+    # Added 16 Sep 2026 from a second live run. "PPM compliance" scored for COMPLIANCE — the
+    # word is in it — and "compare Gough and Kelly's PPM compliance to Apex's" was answered
+    # from the certificate register: Gas Safe, EPA 608, public liability. None of those is PPM
+    # compliance. `ppm_compliance_pct` lives on vendor_monthly_scorecards and nowhere else, so
+    # the two-word phrase must outweigh the one-word "compliance"; bare "ppm" carries the
+    # single-word cases and still loses to a real certificate question, where "certificate"
+    # and "lapsed" score alongside "compliance".
+    "PPM compliance",
+    "ppm",
+    # "Does trend_delta agree with the scores?" matched nothing at all and fell through to the
+    # generic agent, which answered in prose with no card. trend_delta is a scorecard column.
+    "trend_delta",
+    "trend",
 )
 
 ENERGY_INTELLIGENCE_INTENT_KEYWORDS: tuple[str, ...] = (
@@ -83,10 +117,23 @@ ENERGY_INTELLIGENCE_INTENT_KEYWORDS: tuple[str, ...] = (
     "benchmark",
 )
 
+#: Work orders and who maintains what. Until 5 Oct 2026 the fallback had no list for wo_engine,
+#: so when the model router was unavailable "who maintains the boiler" or "how many work orders
+#: are open" reached no engine. It loses every tie to the three above: a question that names a
+#: certificate, an SLA or energy belongs to that engine even when it also says maintenance.
+WO_ENGINE_INTENT_KEYWORDS: tuple[str, ...] = (
+    "work order", "work orders", "ppm", "planned maintenance", "preventive maintenance",
+    "maintenance", "maintains", "maintained by", "who maintains", "who services", "services the",
+    "serviced", "servicing", "service history", "last serviced", "looks after", "breakdown",
+    "repair", "repairs", "technician", "backlog", "decisions owed", "needs my decision",
+    "repair or replace", "end of life", "repurchase",
+)
+
 PHASE2_INTENT_BY_AGENT: dict[Phase2AgentId, tuple[str, ...]] = {
     "compliance": COMPLIANCE_INTENT_KEYWORDS,
     "contract_performance": CONTRACT_PERFORMANCE_INTENT_KEYWORDS,
     "energy_intelligence": ENERGY_INTELLIGENCE_INTENT_KEYWORDS,
+    "wo_engine": WO_ENGINE_INTENT_KEYWORDS,
 }
 
 
@@ -145,6 +192,7 @@ def match_phase2_agent(message: str) -> Phase2AgentId | None:
         "compliance": 0.0,
         "contract_performance": 0.0,
         "energy_intelligence": 0.0,
+        "wo_engine": 0.0,
     }
     for agent, keywords in PHASE2_INTENT_BY_AGENT.items():
         for kw in keywords:
@@ -157,7 +205,8 @@ def match_phase2_agent(message: str) -> Phase2AgentId | None:
     best_score = 0.0
     # Prefer more specific agents on ties: energy > contract > compliance
     # when scores equal (EPC/energy vs compliance certificate ambiguity).
-    for agent in ("energy_intelligence", "contract_performance", "compliance"):
+    # wo_engine last: it wins only with a strictly higher score.
+    for agent in ("energy_intelligence", "contract_performance", "compliance", "wo_engine"):
         if scores[agent] > best_score:  # type: ignore[index]
             best_score = scores[agent]  # type: ignore[index]
             best_agent = agent  # type: ignore[assignment]
@@ -197,6 +246,9 @@ _ENERGY_TOOL_HINTS = frozenset(
         "ingest_meter_readings",
         "compute_site_eui",
         "scan_energy_anomalies",
+        "compute_building_rating",
+        "get_ratings_position",
+        "scan_chiller_efficiency",
         "generate_monthly_energy_report",
         "list_energy_approvals",
         "decide_energy_approval",

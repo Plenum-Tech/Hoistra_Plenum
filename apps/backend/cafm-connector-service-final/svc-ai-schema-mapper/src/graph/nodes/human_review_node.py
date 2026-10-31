@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from ...db import get_async_session_factory
 from ...matchers.registry import registry_append
+from ...sql_identifiers import repair, safe_identifier
 from ...udr.mapping_view import build_combined_mapping_view
 from ..state import ExtraFieldConfig, FieldMapping, MigrationState
 
@@ -193,7 +194,7 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                 # 7.7 AC4 — system AUTO-PROPOSES a new column for the unmapped field,
                 # flagged 'Auto-created' and shown for confirmation (the user can override
                 # to raw_metadata / skip / a different target). The UI defaults to this.
-                _col = re.sub(r"[^a-z0-9]+", "_", str(field_name).lower()).strip("_") or "extra_field"
+                _col = repair(re.sub(r"[^a-z0-9]+", "_", str(field_name).lower()).strip("_")) or "extra_field"
                 table_unmappable.append({
                     "source_table": table_name,
                     "source_field": field_name,
@@ -412,7 +413,10 @@ async def human_review_node(state: MigrationState) -> MigrationState:
 
                 if action == "custom":
                     target_table = decision.get("target_table")
-                    custom_column_name = decision.get("custom_column_name")
+                    # A typed or proposed name PostgreSQL would refuse ("end", "2024") is
+                    # repaired here, not sent back to the person (29 Oct 2026).
+                    custom_column_name = (safe_identifier(decision.get("custom_column_name"))
+                                          or safe_identifier(source_field))
                     data_type = decision.get("data_type")
 
                     if not target_table or not custom_column_name or not data_type:
@@ -555,6 +559,8 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                 elif action == "override":
                     # Customer provided override
                     override_target = decision.get("target_field")
+                    if override_target and decision.get("is_new_column"):
+                        override_target = safe_identifier(override_target) or override_target
                     if not override_target:
                         logger.error(f"[Node 4] EL-M.4 FAILED: Override without target: {source_field}")
                         state["el_m4_passed"] = False
@@ -568,6 +574,8 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                         reviewer_id=decision.get("reviewer_id"),
                         review_timestamp=datetime.utcnow(),
                         langsmith_run_id=(original_mapping.get("langsmith_run_id") if original_mapping else None),
+                        # The person named this column, after the B14.1 gate: it keeps the name.
+                        user_renamed=True,
                     )
                     human_decisions.append(mapping)
                     accepted_count += 1
@@ -580,7 +588,13 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                     # on a core table — otherwise the user's decision (and the data) is silently lost.
                     if decision.get("is_new_column"):
                         _routing_now = state.get("table_routing") or {}
-                        _dest_tbl = (_routing_now.get(table_name) or table_name)
+                        # Where the column goes. A decision may name a table of its own — a
+                        # field that belongs nowhere on the routed destination needs somewhere
+                        # to live, and "reject it" throws the data away. Default stays the
+                        # routed destination, so an override that says nothing behaves as before.
+                        _dest_tbl = (decision.get("target_table")
+                                     or _routing_now.get(table_name) or table_name)
+                        _is_new_tbl = bool(decision.get("is_new_table"))
                         _already = any(
                             (getattr(e, "target_table", None) or (e.get("target_table") if isinstance(e, dict) else None)) == _dest_tbl
                             and (getattr(e, "custom_column_name", None) or (e.get("custom_column_name") if isinstance(e, dict) else None)) == override_target
@@ -594,14 +608,14 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                                 target_table=_dest_tbl,
                                 custom_column_name=override_target,
                                 data_type=(decision.get("data_type") or "VARCHAR(255)"),
-                                is_new_table=False,
-                                new_table_pk="id",
+                                is_new_table=_is_new_tbl,
+                                new_table_pk=(decision.get("new_table_pk") or "id"),
                                 nullable=bool(decision.get("nullable", True)),
                                 user_approved=True,
                             ))
                             logger.info(
-                                f"[Node 4]   + New column (DDL) from override: "
-                                f"plenum_cafm.{_dest_tbl}.{override_target} "
+                                f"[Node 4]   + New {'table and ' if _is_new_tbl else ''}column "
+                                f"(DDL) from override: plenum_cafm.{_dest_tbl}.{override_target} "
                                 f"({decision.get('data_type') or 'VARCHAR(255)'})"
                             )
 
@@ -631,10 +645,22 @@ async def human_review_node(state: MigrationState) -> MigrationState:
         table_routing: dict[str, str] = dict(state.get("table_routing") or {})
         new_tables_list: list[str] = list(state.get("new_tables") or [])
 
+        # A new table is created under its safe identifier, never a view's name (the DDL already
+        # sanitised it while routing, artifacts and the writer used the name as typed).
+        _views: set[str] = set()
+        if any(e.get("storage_strategy") == "custom" and e.get("is_new_table", False)
+               for e in extra_fields_config):
+            from ...db import get_plenum_cafm_view_names
+            _views = await get_plenum_cafm_view_names()
+        from .write_node import new_table_name
+
         for entry in extra_fields_config:
             if entry.get("storage_strategy") == "custom" and entry.get("is_new_table", False):
                 source_table = entry.get("source_table", "")
                 target_table = entry.get("target_table", "")
+                if target_table:
+                    target_table = new_table_name(target_table, _views)
+                    entry["target_table"] = target_table
                 if source_table and target_table:
                     table_routing[source_table] = target_table
                     if target_table not in new_tables_list:

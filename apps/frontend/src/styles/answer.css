@@ -1,0 +1,296 @@
+/* The answer being built, before its first block arrives: the shape of an answer (a headline,
+   a row of figures, a line) in the page's own neutrals, with a slow sheen across it so the wait
+   reads as work in progress rather than a stall. Static for a reader who asked for less motion.
+   (28 Oct 2026: sized and rounded like the answer that replaces it: 15px heads for the brief's
+   headline, 8px-radius tiles for its figures, 4px lines, 10px apart.) */
+.ans-skeleton { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.ans-skeleton-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ans-skeleton span {
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--color-neutral-900) 0%, var(--color-divider) 50%, var(--color-neutral-900) 100%);
+  background-size: 220% 100%;
+  animation: ansSheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.ans-skeleton .is-head { height: 15px; width: 88%; }
+.ans-skeleton .is-head2 { height: 15px; width: 61%; }
+.ans-skeleton .is-tile { height: 44px; border-radius: 8px; }
+.ans-skeleton .is-line { width: 74%; }
+@keyframes ansSheen { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .ans-skeleton span { animation: none; } }
+
+/* A finished answer the server is still laying out (logic/complianceLive.js ccStreamTurn, the
+   `answer_view` that follows workflow_completed): a small, quiet note, never a spinner over the
+   words. It is the bubble's last line, under everything else in it, where a reader who followed
+   the answer down is looking: nothing above it moves when it comes or goes, so the answer's text
+   never shifts. (Floated on the bubble's edge it took no room, but the dock's scroll area clipped
+   it below the last answer.) A slow pulse on its dot says work is going on; still for a reader
+   who asked for less motion. */
+.ans-laying {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ans-laying::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: ansLayPulse 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.ans-laying.is-line { display: flex; margin-top: 8px; }
+@keyframes ansLayPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ans-laying::before { animation: none; opacity: 0.7; } }
+
+/* "How this answer was produced" (components/shell/ComplianceAnswer.jsx), 28 Oct 2026: one
+   provenance line above the answer, not a box. Closed, it is a single row: the title, then the
+   steps, model calls, time and total cost on the right. Opened, the steps hang on a hairline, then
+   the check, the total and the cost by role. Everything here is read, not acted on, so it stays in
+   the page's neutrals: grey icons and grey spend bars. Only a step that reported an issue, and its
+   flags, take the deep risk ink (small text needs #C23A05, not the hi-vis orange, to stay legible).
+   The line is its own container: at 360px or less (the dock) the figures drop under the title and
+   the body loses its indent. */
+.ans-prov { --ans-risk-ink: #C23A05; container-type: inline-size; border-bottom: 1px solid var(--color-divider); padding-bottom: 6px; }
+:root[data-theme="dark"] .ans-prov { --ans-risk-ink: #FFB08A; }
+.ans-prov-head {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 2px;
+  width: calc(100% + 12px);
+  margin: 0 -6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color .12s ease;
+}
+.ans-prov-head:hover { background: var(--color-neutral-900); }
+.ans-prov-head:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.ans-prov-chev { font-size: 11px; color: var(--color-neutral-500); transition: transform .16s cubic-bezier(.16, 1, .3, 1); }
+.ans-prov.is-open .ans-prov-chev { transform: rotate(90deg); }
+.ans-prov-title { font-size: 11.5px; font-weight: 500; color: var(--color-neutral-300); }
+.ans-prov-meta { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-neutral-500); white-space: nowrap; }
+.ans-prov-fig { white-space: nowrap; }
+.ans-prov-body { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 6px 19px; }
+@container (max-width: 360px) {
+  .ans-prov-meta { margin-left: 19px; flex-basis: 100%; white-space: normal; }
+  .ans-prov-body { padding-left: 0; }
+}
+.ans-prov-steps { list-style: none; margin: 0; padding: 0; }
+.ans-prov-step { position: relative; display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 10px; padding-bottom: 12px; }
+.ans-prov-step:last-child { padding-bottom: 0; }
+.ans-prov-step:not(:last-child)::before { content: ''; position: absolute; left: 6.5px; top: 19px; bottom: 3px; width: 1px; background: var(--color-divider); }
+.ans-prov-step > i { font-size: 13px; line-height: 1.35; color: var(--color-neutral-500); }
+.ans-prov-step.has-issues > i { color: var(--ans-risk-ink); }
+.ans-prov-label { font-size: 12px; line-height: 1.4; font-weight: 500; color: var(--color-text); }
+.ans-prov-cost, .ans-prov-rows, .ans-prov-check, .ans-prov-total { font-size: 10.5px; line-height: 1.45; font-variant-numeric: tabular-nums; color: var(--color-neutral-500); }
+.ans-prov-cost { margin-top: 2px; }
+.ans-prov-rows { margin-top: 4px; }
+.ans-prov-detail { font-size: 11px; line-height: 1.45; color: var(--color-neutral-300); margin-top: 3px; }
+.ans-prov-parts { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; font-size: 10.5px; color: var(--color-neutral-300); }
+.ans-prov-scope { color: var(--color-neutral-500); }
+.ans-prov-flag { font-size: 10.5px; line-height: 1.4; color: var(--ans-risk-ink); margin-top: 4px; }
+/* (28 Oct 2026: "Cost by role" was the only all-caps label inside the strip, an eyebrow under the
+   sentence-case strip title. It now reads as a plain sentence-case sub-heading; the hairline plus a
+   little extra space above it is what separates the cost block from the "Total" line. Its sum
+   repeats the "Total" line's figure, so it is set at the size and weight of the role figures under
+   it rather than as the boldest number in the strip.) */
+.ans-prov-spend { margin-top: 4px; border-top: 1px solid var(--color-divider); padding-top: 10px; }
+.ans-prov-spend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ans-prov-spend-title { font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--color-neutral-300); }
+.ans-prov-spend-total { font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--color-text); }
+/* The roles share one set of columns (subgrid), so every bar starts and ends at the same x
+   whatever the length of its role name or figure. */
+.ans-prov-roles { display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) max-content; column-gap: 10px; row-gap: 7px; margin-top: 9px; }
+.ans-prov-role { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(56px, 76px) minmax(0, 1fr) max-content; grid-template-columns: subgrid; column-gap: 10px; align-items: center; }
+.ans-prov-role-name { font-size: 11px; color: var(--color-neutral-300); text-transform: capitalize; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ans-prov-role-track { display: block; height: 4px; background: var(--color-neutral-900); border-radius: 0 2px 2px 0; overflow: hidden; }
+.ans-prov-role-fill { display: block; height: 100%; background: var(--color-neutral-500); border-radius: 0 2px 2px 0; }
+.ans-prov-role-usd { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-text); text-align: right; }
+.ans-prov-spend-foot { font-size: 10.5px; line-height: 1.45; color: var(--color-neutral-500); margin-top: 9px; }
+@media (prefers-reduced-motion: reduce) { .ans-prov-chev, .ans-prov-head { transition: none; } }
+
+/* "Paused for approval before finishing." under a chat answer (screens/Chat.jsx): small text in
+   the deep risk ink, which reads at 4.5:1 where the hi-vis orange does not (28 Oct 2026). */
+.ans-paused { color: #C23A05; }
+:root[data-theme="dark"] .ans-paused { color: #FFB08A; }
+
+/* The chat page's composer (screens/Chat.jsx #chat-composer), 28 Oct 2026: the caret and the
+   focus ring in the action colour, so where typing goes is plain. !important because the field's
+   border and shadow are inline styles (hover.css sets the same precedent). */
+#chat-composer { caret-color: var(--color-accent); }
+#chat-composer:focus-visible, #chat-composer:focus { border-color: var(--color-accent) !important; box-shadow: 0 0 0 3px var(--color-accent-900), var(--shadow-sm) !important; }
+
+/* Offers under a compliance answer (components/shell/ComplianceAnswer.jsx OfferButton), 28 Oct
+   2026: "Draft renewal email", "Verify with the issuer" and the rest as real buttons, styled as
+   the answer's own secondary buttons (.oui-btn): a hairline of the action colour, small text in
+   the deep accent ink (#C23A05 reads at 4.5:1 where the hi-vis orange does not). Each wraps
+   rather than overflowing the dock's narrow column, and says which certificate it is for on a
+   second, quieter line. Busy spins its icon; open (its draft on screen) is filled; done (already
+   drafted or checked) steps back to the page's neutrals with a green tick, and stays pressable
+   where pressing it again does something (reopens the draft, checks again). */
+.ans-offers { display: flex; flex-wrap: wrap; gap: 6px; }
+.ans-offer {
+  --ans-offer-ink: #C23A05;
+  font: inherit;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 6px 11px 6px 9px;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ans-offer-ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+}
+:root[data-theme="dark"] .ans-offer { --ans-offer-ink: #FFB08A; }
+.ans-offer > i { flex-shrink: 0; font-size: 13px; line-height: 1.3; color: var(--color-accent); }
+.ans-offer-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ans-offer-for { font-size: 11px; font-weight: 400; line-height: 1.35; color: var(--color-neutral-400); }
+.ans-offer:hover:not(:disabled) { background: var(--color-accent-900); }
+.ans-offer:active:not(:disabled) { transform: translateY(0.5px); }
+.ans-offer:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.ans-offer:disabled { opacity: 0.45; cursor: default; }
+.ans-offer.is-busy { opacity: 1; cursor: progress; }
+.ans-offer.is-busy > i { animation: emcSpin .8s linear infinite; }
+.ans-offer.is-open { background: var(--color-accent-900); }
+.ans-offer.is-done { border-color: var(--color-divider); color: var(--color-neutral-300); }
+.ans-offer.is-done > i { color: var(--st-ok); }
+.ans-offer.is-done:hover:not(:disabled) { border-color: var(--color-rule-strong); background: var(--color-neutral-900); color: var(--color-text); }
+/* Status beside the label (28 Oct 2026): "Drafting…" while it runs, "Open below" while its draft is
+   on screen, "Failed — press to retry" after a failure. Quiet type after a thin rule, so the label
+   still reads first; a failure takes the risk tone, a ring in place of the accent border. */
+.ans-offer-state { font-size: 11px; font-weight: 400; color: var(--color-neutral-400); white-space: nowrap; }
+.ans-offer-state::before { content: ""; display: inline-block; width: 1px; height: 0.9em; margin: 0 7px 0 8px; vertical-align: -0.1em; background: currentColor; opacity: 0.45; }
+.ans-offer.is-open .ans-offer-state { color: var(--ans-offer-ink); }
+.ans-offer.is-error { border-color: color-mix(in oklab, var(--st-risk) 55%, transparent); }
+.ans-offer.is-error > i, .ans-offer.is-error .ans-offer-state { color: var(--st-risk); }
+@media (prefers-reduced-motion: reduce) { .ans-offer.is-busy > i { animation: none; } }
+
+/* The email card (components/shell/EmailComposer.jsx), 28 Oct 2026: one card for the dock and for
+   the chat page, where it opens under the answer that asked for it. A letter on the page: title,
+   the address lines ruled like a form, the message, then Cancel and Approve & send. Orange only on
+   the send, the field being typed in and the focus ring. Its own container: at 380px or less (the
+   dock's ~224px column) each label sits over its field and the send takes the row. */
+.emc {
+  container-type: inline-size;
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: emcIn .26s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.emc-page { margin-top: 2px; scroll-margin: 96px 0 168px; }
+.emc-dock { margin-top: 16px; flex-shrink: 0; }
+.emc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; padding: 12px 16px; border-bottom: 1px solid var(--color-divider); }
+.emc-head > i { font-size: 16px; color: var(--color-accent); }
+.emc-title { margin: 0; flex: 1; min-width: 0; font-size: 14px; font-weight: 500; line-height: 1.3; letter-spacing: -0.005em; color: var(--color-text); }
+.emc-hint { font-size: 11px; line-height: 1.4; color: var(--color-neutral-500); }
+.emc-line { display: flex; align-items: flex-start; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--color-divider); background: var(--color-neutral-900); font-size: 11.5px; line-height: 1.45; color: var(--color-neutral-300); }
+.emc-line > i, .emc-prev > i { flex-shrink: 0; font-size: 13px; margin-top: 1px; }
+.emc-line > i { color: var(--color-neutral-500); }
+.emc-line.is-warn { background: var(--st-warn-bg); color: var(--color-text); }
+.emc-line.is-warn > i { color: var(--st-warn); }
+.emc-prev { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 8px; padding: 9px 16px; border-bottom: 1px solid var(--color-divider); background: var(--st-warn-bg); font-size: 11.5px; line-height: 1.45; color: var(--color-text); }
+.emc-prev > i { color: var(--st-warn); }
+.emc-prev-text { flex: 1; min-width: 0; }
+.emc-prev-sub { color: var(--color-neutral-300); }
+.emc-link { font: inherit; font-size: 11.5px; padding: 0; margin-left: 21px; border: none; background: none; color: #C23A05; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+:root[data-theme="dark"] .emc-link { color: #FFB08A; }
+.emc-link:disabled { opacity: 0.55; cursor: default; }
+.emc-fields { display: grid; grid-template-columns: 72px minmax(0, 1fr); }
+.emc-fields > label { display: flex; align-items: center; padding: 0 0 0 16px; border-bottom: 1px solid var(--color-divider); font-size: 11.5px; color: var(--color-neutral-500); }
+.emc-fields > input {
+  min-width: 0; padding: 10px 16px 10px 0; border: none; border-bottom: 1px solid var(--color-divider); border-radius: 0;
+  background: transparent; font: inherit; font-size: 13px; color: var(--color-text); caret-color: var(--color-accent); outline: none;
+  transition: box-shadow .12s ease;
+}
+.emc-fields > input::placeholder { color: var(--color-neutral-500); }
+.emc-fields > input:focus { box-shadow: inset 0 -2px 0 var(--color-accent); }
+.emc-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.emc-body {
+  display: block; width: 100%; box-sizing: border-box; min-height: 210px; margin: 0; padding: 13px 16px; border: none; resize: vertical;
+  background: transparent; font: inherit; font-size: 13px; line-height: 1.6; color: var(--color-text); caret-color: var(--color-accent); outline: none;
+}
+.emc-body:focus { background: var(--color-bg); }
+.emc-body:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.emc-attach { padding: 0 16px 10px; }
+.emc-pack {
+  font: inherit; display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; padding: 7px 10px;
+  border: 1px solid var(--color-divider); border-radius: 7px; background: var(--color-bg); color: var(--color-text);
+  font-size: 11.5px; text-align: left; cursor: pointer;
+}
+.emc-pack > i { flex-shrink: 0; font-size: 14px; color: var(--color-accent); }
+.emc-pack:hover { border-color: var(--color-rule-strong); }
+.emc-pack-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.emc-pack-size { flex-shrink: 0; font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--color-neutral-500); }
+.emc-status, .emc-receipt { display: flex; align-items: flex-start; gap: 8px; border-radius: 8px; color: var(--color-text); line-height: 1.5; }
+.emc-status { margin: 0 16px 10px; padding: 9px 12px; font-size: 12px; }
+.emc-status > i, .emc-receipt > i { flex-shrink: 0; font-size: 15px; margin-top: 1px; }
+.emc-status.is-ok, .emc-receipt.is-ok { background: var(--st-ok-bg); }
+.emc-status.is-ok > i, .emc-receipt.is-ok > i { color: var(--st-ok); }
+.emc-status.is-warn, .emc-receipt.is-warn { background: var(--st-warn-bg); }
+.emc-status.is-warn > i, .emc-receipt.is-warn > i { color: var(--st-warn); }
+.emc-status.is-risk, .emc-receipt.is-risk { background: var(--st-risk-bg); }
+.emc-status.is-risk > i, .emc-receipt.is-risk > i { color: var(--st-risk); }
+.emc-receipt { padding: 10px 14px; font-size: 12.5px; animation: emcIn .26s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.emc-foot { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--color-divider); }
+.emc-btn {
+  font: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px;
+  border: 1px solid transparent; border-radius: 7px; font-size: 12.5px; font-weight: 500; line-height: 1.2; cursor: pointer;
+  transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+}
+.emc-btn > i { font-size: 14px; }
+.emc-btn.is-primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--accent-ink); }
+.emc-btn.is-primary:hover:not(:disabled) { border-color: var(--color-accent-600); background: var(--color-accent-600); }
+.emc-btn.is-primary.is-sample { border-color: var(--color-divider); background: var(--color-neutral-900); color: var(--color-neutral-300); }
+.emc-btn.is-quiet { background: transparent; color: var(--color-neutral-400); }
+.emc-btn.is-quiet:hover:not(:disabled) { background: var(--color-neutral-900); color: var(--color-text); }
+.emc-btn:active:not(:disabled) { transform: translateY(0.5px); }
+.emc-btn:disabled { opacity: 0.55; cursor: default; }
+.emc-btn.is-primary[aria-busy="true"] { opacity: 0.8; cursor: progress; }
+.emc-btn:focus-visible, .emc-pack:focus-visible, .emc-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.emc-spin { animation: emcSpin .8s linear infinite; }
+@container (max-width: 380px) {
+  .emc-head { padding: 10px 12px; }
+  .emc-title { font-size: 13px; }
+  .emc-hint { flex-basis: 100%; padding-left: 26px; font-size: 10.5px; }
+  .emc-line, .emc-prev { padding: 8px 12px; font-size: 11px; }
+  .emc-link { margin-left: 21px; font-size: 11px; }
+  .emc-fields { grid-template-columns: minmax(0, 1fr); }
+  .emc-fields > label { padding: 8px 12px 0; border-bottom: none; font-size: 10.5px; }
+  .emc-fields > input { padding: 2px 12px 8px; font-size: 12px; }
+  .emc-body { min-height: 160px; padding: 10px 12px; font-size: 12px; line-height: 1.55; }
+  .emc-attach { padding: 0 12px 8px; }
+  .emc-status { margin: 0 12px 8px; font-size: 11.5px; }
+  .emc-foot { gap: 6px; padding: 8px 12px 10px; }
+  .emc-btn { padding: 7px 10px; font-size: 12px; }
+  .emc-btn.is-quiet { padding: 7px 8px; }
+  .emc-btn.is-primary { flex: 1; }
+}
+@keyframes emcIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes emcSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .emc, .emc-receipt { animation: none; }
+  .emc-spin, .ans-offer.is-busy > i { animation: none; }
+  .ans-offer, .emc-btn, .emc-fields > input { transition: none; }
+}

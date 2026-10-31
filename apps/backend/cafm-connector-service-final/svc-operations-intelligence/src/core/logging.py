@@ -12,6 +12,11 @@ def configure_logging() -> None:
     debug = os.getenv("DEBUG", "false").lower() == "true"
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
+    # httpx logs every request's full URL at INFO, query string included — and a provider key
+    # travels there (Open-Meteo's customer endpoints, 28 Sep 2026). Warnings and errors still
+    # come through; the per-request lines do not.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     shared: list = [
         structlog.contextvars.merge_contextvars,

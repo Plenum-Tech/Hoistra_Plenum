@@ -142,7 +142,11 @@ Frontend ←  { "type": "tool_started",   "tool": "generate_compliance_report","
 Frontend ←  { "type": "tool_completed", "tool": "generate_compliance_report","domain": "compliance",  "output": { ... } }
 Frontend ←  { "type": "workflow_completed", "answer": "Morning briefing:\n- 4 critical WOs...\n- 0 parts at zero stock\n- Compliance rate: 82%", "session_id": "session-abc" }
 
-Step 4 — Server closes the WebSocket after workflow_completed, gate_interrupt, or error.
+Frontend ←  { "type": "reasoning",      "label": "Layout", "text": "Laying the answer out for the chat.", "session_id": "session-abc" }
+Frontend ←  { "type": "answer_view",    "session_id": "session-abc", "view": { "v": 1, "lang": "root = Answer([...])" }, "cost": { ... } }
+
+Step 4 — Server closes the WebSocket after workflow_completed (or, when the answer is laid out, after
+answer_view), gate_interrupt, or error. Keep the socket open after workflow_completed to receive the layout.
 ```
 
 **All event types:**
@@ -154,6 +158,7 @@ Step 4 — Server closes the WebSocket after workflow_completed, gate_interrupt,
 | `agent_switch` | Active domain changes between consecutive tools | `from_domain`, `to_domain` |
 | `gate_interrupt` | A HITL `interrupt()` fired inside a tool | `payload`, `session_id` |
 | `workflow_completed` | Agent returned its final answer | `answer`, `session_id` |
+| `answer_view` | After workflow_completed, when the answer was laid out as an OpenUI view (agents/answer_presenter.py). `view` is null when the layout was not sent; the answer stands as sent. `cost` (when not null) replaces the `compliance_pipeline` panel's `output.cost`, now counting the layout call | `view` (`{v, lang, tail?}` or null), `cost`, `session_id` |
 | `error` | Unexpected exception | `error`, `session_id` |
 
 > **Note:** `gate_interrupt` events from the WebSocket stream cannot be resumed via the same

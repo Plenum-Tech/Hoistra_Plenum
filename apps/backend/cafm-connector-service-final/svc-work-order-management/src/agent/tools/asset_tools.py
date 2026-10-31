@@ -2,13 +2,14 @@
 from typing import Any, Dict
 import uuid as _uuid
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models.asset import Asset
 from ...models.location import Location
 from ...models.ppm_schedule import PPMSchedule
 from ...intelligence.asset_intelligence import AssetIntelligence
+from ...shared import record_lookup
 from ...config import settings
 from ...core.logging import get_logger
 
@@ -22,23 +23,32 @@ class AssetTools:
         self.session = session
 
     async def search_assets(self, query: str) -> Dict[str, Any]:
-        result = await self.session.execute(
-            select(Asset)
-            .where(or_(Asset.asset_name.ilike(f"%{query}%"), Asset.asset_code.ilike(f"%{query}%")))
-            .order_by(Asset.asset_name)
-            .limit(10)
+        # The shared ladder (exact, compact, phrase, every word) over name and code, and no
+        # close-spelling rung: the asset picked here is the one a new work order is raised on.
+        # Every asset at the best rung comes back — never a silent LIMIT cut.
+        found = await record_lookup.lookup(
+            self.session, Asset, (Asset.asset_name, Asset.asset_code), query,
+            lambda a: (a.asset_name, a.asset_code, f"{a.asset_name or ''} {a.asset_code or ''}"),
+            order_by=(Asset.asset_name, Asset.asset_id),
         )
-        assets = result.scalars().all()
+        assets = found["matches"]
         if not assets:
-            return {
+            out = {
                 "found": False,
                 "count": 0,
                 "results": [],
                 "message": f"No assets found matching '{query}'. Try a different keyword or asset code.",
             }
-        return {
+            if found["truncated"]:
+                out["message"] += " " + record_lookup.describe(found, query, "asset", 0)
+            return out
+        shown = assets[:record_lookup.SHOW_LIMIT]
+        out = {
             "found": True,
-            "count": len(assets),
+            "count": len(shown),
+            "total": len(assets),
+            "match": found["match"],
+            "ambiguous": len(assets) > 1,
             "results": [
                 {
                     "asset_id": str(a.asset_id),
@@ -49,9 +59,13 @@ class AssetTools:
                     "serial_number": a.serial_number or "",
                     "status": a.status or "active",
                 }
-                for a in assets
+                for a in shown
             ],
         }
+        note = record_lookup.describe(found, query, "asset", len(shown))
+        if note:
+            out["message"] = note
+        return out
 
     async def get_asset_details(self, asset_id: str) -> Dict[str, Any]:
         # Accept UUID or asset_code
@@ -100,28 +114,39 @@ class AssetTools:
         }
 
     async def search_locations(self, query: str) -> Dict[str, Any]:
-        result = await self.session.execute(
-            select(Location)
-            .where(Location.name.ilike(f"%{query}%"))
-            .order_by(Location.name)
-            .limit(10)
+        # Same ladder as search_assets, over plenum_cafm.locations only. Buildings are not read
+        # here: this tool runs with no caller, so a buildings read would cross every company.
+        found = await record_lookup.lookup(
+            self.session, Location, (Location.name,), query, lambda l: (l.name,),
+            order_by=(Location.name, Location.location_id),
         )
-        locations = result.scalars().all()
+        locations = found["matches"]
         if not locations:
-            return {
+            out = {
                 "found": False,
                 "count": 0,
                 "results": [],
                 "message": f"No locations found matching '{query}'.",
             }
-        return {
+            if found["truncated"]:
+                out["message"] += " " + record_lookup.describe(found, query, "location", 0)
+            return out
+        shown = locations[:record_lookup.SHOW_LIMIT]
+        out = {
             "found": True,
-            "count": len(locations),
+            "count": len(shown),
+            "total": len(locations),
+            "match": found["match"],
+            "ambiguous": len(locations) > 1,
             "results": [
                 {"location_id": str(l.location_id), "name": l.name, "type": l.type or ""}
-                for l in locations
+                for l in shown
             ],
         }
+        note = record_lookup.describe(found, query, "location", len(shown))
+        if note:
+            out["message"] = note
+        return out
 
     async def find_ppm_schedules(self, asset_id: str) -> Dict[str, Any]:
         try:

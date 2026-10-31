@@ -51,6 +51,9 @@ class FieldMapping(TypedDict, total=False):
     reviewer_id: Optional[str]  # user who approved/rejected
     review_timestamp: Optional[datetime]
     langsmith_run_id: Optional[str]  # LangSmith trace ID for this field's mapping (Strategy 4 or Node 3)
+    # A person named this destination column at the column-matching or field-mapping gate: the
+    # earlier B14.1 answer and the type guard leave it alone, and the writer may create it.
+    user_renamed: bool
 
 
 class HierarchyRelationship(TypedDict, total=False):
@@ -80,6 +83,11 @@ class MigrationState(TypedDict, total=False):
     # ── Session & Metadata ────────────────────────────────────────────────
     migration_id: str
     organization_id: str
+    #: The building the uploader had selected when they attached the file. A CMMS export
+    #: names its site in a column; a half-hourly meter export names an MPAN and nothing else,
+    #: so without this there is nothing to place its meter against and every reading is
+    #: skipped. Used only where a row names no site of its own — a Sites sheet always wins.
+    building_id: Optional[str]
     cmms_name: str  # "Maximo", "Fiix", "SAP PM", "Archibus", "Custom"
     source_filename: str  # original uploaded filename (for #10 document inventory)
     source_system: str  # source CMMS identifier from customer
@@ -88,6 +96,10 @@ class MigrationState(TypedDict, total=False):
 
     # ── Node 1: Ingest ────────────────────────────────────────────────────
     source_blob_url: str  # Azure Blob URL (NOT file bytes)
+    #: The upload's path inside the container ("migrations/<id>/source/<file>"), which Node 1
+    #: re-pulls with the connection string. Undeclared, LangGraph drops it from the input and
+    #: Node 1 reads the relative path in source_blob_url as a URL whose host is "migrations".
+    source_blob_path: Optional[str]
     source_file_bytes: Optional[bytes]  # Transient; cleared before checkpoint
     source_encoding: str  # e.g., "utf-8", "iso-8859-1"
     source_delimiter: str  # "," or "\t" or ";"
@@ -160,6 +172,8 @@ class MigrationState(TypedDict, total=False):
     # Cached B7.1→B12.1 table-resolution report from pass 1, reused on the pass-2 / resume
     # re-entry so the dedup + resolution scan don't run twice. Cleared with pre_semantic_ci_built.
     table_resolution_report: dict
+    #: The PK answers the cached report above was built from; a change rebuilds it.
+    table_resolution_pk_signature: str
     pending_table_overrides: dict[str, Any]
     # True once the pre-semantic gate has been ANSWERED in this run. The node checks it at the top
     # and skips a second interrupt(), so an already-decided gate can't re-open (e.g. a table-routing
@@ -247,11 +261,13 @@ class MigrationState(TypedDict, total=False):
     output_csv_url: str  # Azure Blob URL
     output_sql_url: str  # Azure Blob URL
     output_sql_script: str  # Generated SQL statements (used by Node 9 direct DB apply)
+    output_sql_script_ref: Optional[str]  # Blob-offload ref for output_sql_script (bulk_tables)
     migration_report_url: str  # PDF report
     mapping_flow_url: str  # Optional flow diagram
 
     # IntermediateSchema Pydantic object (serialized as dict for checkpoint)
     intermediate_schema: Optional[dict[str, Any]]
+    intermediate_schema_ref: Optional[str]  # Blob-offload ref for intermediate_schema (bulk_tables)
 
     # ── Node 9: Write to Platform ─────────────────────────────────────────
     write_review_payload: Optional[dict[str, Any]]  # Interrupt payload for GATE 3
@@ -293,3 +309,52 @@ class MigrationState(TypedDict, total=False):
     udr_blocked: bool
     udr_status: Optional[str]  # completed | pending_human_input | failed | skipped
     udr_activity_id: Optional[str]
+
+    # ── hoist-engine (src/engine/) ───────────────────────────────────────
+    #: "go" | "python": decided once at run start (engine/selection.py) and kept for the whole run,
+    #: so every resume takes the same path. Must be declared: undeclared keys are dropped on checkpoint.
+    engine: str
+    #: Where each engine data set lives, per kind ("full", "cleaned", "outputs", "write"):
+    #: {"dir": local path, "version": str, "blobs": {relative file: blob path}} (engine/store.py).
+    engine_refs: dict[str, Any]
+    #: Small per-step summaries the engine returned (counts, rename maps, link stats, timings).
+    engine_reports: dict[str, Any]
+    #: The write the engine planned before the write gate (EL-4.0 + what is already on file).
+    write_plan: Optional[dict[str, Any]]
+
+    # ── Keys that were written and then dropped (29 Oct 2026) ────────────────
+    #: The graph is compiled with interrupt_after on every step node, so a checkpoint is
+    #: written after EVERY step and LangGraph keeps only the keys declared here. These
+    #: eighteen were written by a node and read back by a later one, which meant the value
+    #: never survived the boundary between them: step 7 built the hierarchy and step 8 read
+    #: nothing, step 9 wrote the artefact URLs and step 10 stored None. The same fault was
+    #: found once before, in the column-mapping answers (preprocess_node, 1 Oct). Anything
+    #: a node writes for a later node to read belongs in this file, always.
+
+    # Hierarchy detection (step 7, hierarchy_node) — read by the confirmation gate after it
+    containment_hierarchy: list[dict[str, Any]]
+    hierarchy_levels: dict[str, Any]
+    hierarchy_duplicate_groups: list[dict[str, Any]]
+    single_table_hierarchy_mode: bool
+    import_table_name: Optional[str]
+    import_table_plenum_role: Optional[str]
+    plenum_default_structure: Optional[dict[str, Any]]
+
+    # Hierarchy confirmation (step 8, verify_hierarchy_node) — the person's own corrections
+    hierarchy_confirmed: bool
+    hierarchy_corrections: list[dict[str, Any]]
+    plenum_default_hierarchy_accepted: bool
+    el_m7_error: Optional[str]
+
+    # Outputs (step 9, output_generator_node) — read by the write step to store on the record
+    output_structure_md_url: Optional[str]
+    exported_artefacts: dict[str, Any]
+
+    # Ingest (step 1) and deterministic mapping (step 2)
+    overall_summary: Optional[dict[str, Any]]
+    json_mapper: Optional[dict[str, Any]]
+    mapping_source: Optional[str]      # "stored" | "generated" | ...
+    tier1_mappings: list[dict[str, Any]]
+
+    #: Appended to as the run goes; without it each step started from an empty list.
+    execution_logs: list[dict[str, Any]]

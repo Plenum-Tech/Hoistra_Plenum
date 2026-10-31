@@ -4,10 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hoistra</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
 </head>
 <body>
 <div id="root"></div>
+<!-- OpenUI, the renderer the orchestrator's answers are drawn with, mounts a devtools panel in
+     development by running JavaScript fetched from a CDN. Switched off before the app's first
+     import (test/openuiSafety.test.mjs). -->
+<script>globalThis[Symbol.for("openui.devtools.autoMount")] = true;</script>
 <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

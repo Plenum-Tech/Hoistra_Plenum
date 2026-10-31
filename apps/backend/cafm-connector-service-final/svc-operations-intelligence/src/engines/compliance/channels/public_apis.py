@@ -99,7 +99,9 @@ async def run_public_api_check(
         "CONTRACTOR_EL_INSURANCE",
         "CONTRACTOR_PL_INSURANCE",
     ):
-        return await _fca_register(insurer_name=insurer_name or certificate_number)
+        # The insurer's NAME, never the policy number: the FCA register lists firms, not
+        # policies, and a policy number searched as a name finds nothing or a stranger.
+        return await _fca_register(insurer_name=insurer_name)
     if code == "ESOS":
         return await _companies_house(company_number=company_number or certificate_number)
     # US vendor entity verification via the federal SAM.gov register. There is no national
@@ -226,6 +228,15 @@ def _fca_authorised(status: str | None) -> bool:
 
 
 _FCA_NAME_MATCH_MIN = 0.60
+#: What an FCA result can and cannot say, on every answer it gives.
+_FCA_SCOPE = ("Confirms the insurer is authorised by the FCA. The register lists firms, not "
+              "policies - it cannot confirm this policy exists or is in force.")
+#: A run of five or more digits is a policy, reference or firm number, not an insurer's name.
+_REFERENCE_LIKE = re.compile(r"\d{5,}")
+
+
+def _looks_like_reference(value: str) -> bool:
+    return bool(_REFERENCE_LIKE.search(value or ""))
 
 
 async def _fca_register(*, insurer_name: str | None) -> dict[str, Any]:
@@ -246,15 +257,25 @@ async def _fca_register(*, insurer_name: str | None) -> dict[str, Any]:
                 "query": insurer_name,
             },
         }
-    if not insurer_name:
+    if not insurer_name or _looks_like_reference(insurer_name):
+        # No name to search, or a policy/reference number where the name should be. Searching
+        # the register with it once marked two insurance certificates "verified" on the
+        # strength of a policy number (plenum_agent, B190325042112 and UC CMK 3976335).
         return {
             "ok": True,
             "verified": None,
             "needs_config": False,
             "channel": "public_api",
             "evidence": {
-                "message": "insurer_name or certificate_number required",
                 "register": "FCA",
+                "reason": "insurer_name_required" if not insurer_name else "query_is_a_reference",
+                "message": (
+                    "The insurer's name is needed - the FCA register is searched by firm, not by policy number"
+                    if not insurer_name else
+                    f"{insurer_name!r} looks like a policy or reference number, not an insurer's name - "
+                    "the FCA register is searched by firm"
+                ),
+                "scope": _FCA_SCOPE,
             },
         }
     url = "https://register.fca.org.uk/services/V0.1/Search"
@@ -325,6 +346,7 @@ async def _fca_register(*, insurer_name: str | None) -> dict[str, Any]:
                     "authorised": authorised,
                     "name_match_score": round(name_ratio, 3),
                     "frn": best.get("Reference Number") or best.get("FRN"),
+                    "scope": _FCA_SCOPE,
                     "reason": (
                         None
                         if verified

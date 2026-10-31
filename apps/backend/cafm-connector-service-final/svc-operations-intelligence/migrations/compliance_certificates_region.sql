@@ -24,5 +24,5 @@ COMMENT ON COLUMN plenum_cafm.compliance_certificates.region
        'below state in the reporting hierarchy. NULL where the location is unknown.';
 
 -- Reporting reads the hierarchy top-down, so index it in that order.
-CREATE INDEX IF NOT EXISTS ix_compliance_certificates_country_state_region
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_compliance_certificates_country_state_region
     ON plenum_cafm.compliance_certificates (country_code, state, region);

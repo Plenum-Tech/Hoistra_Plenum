@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
+from cafm_connector.api.routes.plenum_cafm.maintenance_vendors import refuse_retired_vendor
 from cafm_connector.api.schemas.plenum_cafm import (
     MaintenanceHistoryCreate, MaintenanceHistoryResponse, MaintenanceHistoryUpdate,
     WorkOrderAttachmentCreate, WorkOrderAttachmentResponse,
@@ -69,6 +70,9 @@ async def get_work_order(wo_id: str, db: AsyncSession = Depends(get_plenum_db)):
 
 @router.post("/work-orders", response_model=WorkOrderResponse, status_code=201, tags=["Work Orders"])
 async def create_work_order(body: WorkOrderCreate, db: AsyncSession = Depends(get_plenum_db)):
+    # New work is never assigned to a deleted vendor (Hussain, 12 Oct 2026).
+    if body.assigned_vendor is not None:
+        await refuse_retired_vendor(db, body.assigned_vendor)
     obj = WorkOrder(id=uuid4(), **body.model_dump())
     db.add(obj)
     await db.commit()
@@ -81,7 +85,13 @@ async def update_work_order(wo_id: str, body: WorkOrderUpdate, db: AsyncSession 
     obj = await db.get(WorkOrder, wo_id)
     if not obj:
         raise HTTPException(404, "Work order not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    # Only a CHANGE of vendor is checked. Closed work keeps the vendor who did it, deleted or
+    # not, and a client saving the whole record back is not assigning anything new.
+    new_vendor = changes.get("assigned_vendor")
+    if new_vendor is not None and new_vendor != obj.assigned_vendor:
+        await refuse_retired_vendor(db, new_vendor)
+    for k, v in changes.items():
         setattr(obj, k, v)
     await db.commit()
     await db.refresh(obj)

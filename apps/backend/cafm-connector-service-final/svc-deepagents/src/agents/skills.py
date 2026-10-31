@@ -48,6 +48,15 @@ class Skill:
     shared: bool = False
     body: str = ""
     path: str = ""
+    #: Sibling .md files in this skill's directory, appended after the body in this order.
+    #: Opt-in per skill: a SKILL.md with no `references:` key loads exactly as before, which is
+    #: why adding this does not change compliance — it routes its own documents separately.
+    references: tuple[str, ...] = ()
+    #: Words that only NAME something the skill holds (equipment, "assets"). They rank the skill
+    #: like any trigger, so "list the assets" or "show me the chillers" lands here, but a match made
+    #: of these alone never adds the skill under `also`: "is the lift LOLER certificate current"
+    #: names a lift, and that is no reason to spend a second agent run on the asset register.
+    naming_triggers: tuple[str, ...] = ()
 
     @property
     def is_routable(self) -> bool:
@@ -137,6 +146,12 @@ def _load_one(path: Path) -> Skill | None:
     triggers = meta.get("triggers") or []
     if isinstance(triggers, str):
         triggers = [t.strip() for t in triggers.split(",") if t.strip()]
+    naming = meta.get("naming_triggers") or []
+    if isinstance(naming, str):
+        naming = [t.strip() for t in naming.split(",") if t.strip()]
+    references = meta.get("references") or []
+    if isinstance(references, str):
+        references = [r.strip() for r in references.split(",") if r.strip()]
     return Skill(
         slug=path.parent.name,
         name=name,
@@ -146,6 +161,8 @@ def _load_one(path: Path) -> Skill | None:
         shared=_as_bool(meta.get("shared")) or agent == "shared",
         body=body.strip(),
         path=str(path),
+        references=tuple(str(r).strip() for r in references if str(r).strip()),
+        naming_triggers=tuple(t.lower() for t in naming if t),
     )
 
 
@@ -225,7 +242,7 @@ def select_skills(question: str) -> list[SkillMatch]:
     haystack = _normalise(question or "")
     matches: list[SkillMatch] = []
     for skill in routable_skills():
-        hits = [t for t in skill.triggers if _trigger_hit(haystack, t)]
+        hits = [t for t in skill.triggers + skill.naming_triggers if _trigger_hit(haystack, t)]
         if not hits:
             continue
         score = sum(len(_WORD_RE.findall(t)) for t in hits)
@@ -261,7 +278,9 @@ def route(question: str) -> dict:
         }
 
     primary = matches[0]
-    others = [m for m in matches[1:] if m.score >= 1]
+    # A skill matched only on words that name things it holds is not a second domain.
+    others = [m for m in matches[1:] if m.score >= 1
+              and not set(m.matched) <= set(m.skill.naming_triggers)]
     confidence = "high" if primary.score >= 3 else "medium" if primary.score >= 2 else "low"
     return {
         "primary_agent": primary.skill.agent,
@@ -293,14 +312,62 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
     shared = shared_skill()
     if shared:
         parts.append(shared.body)
+    if agent not in NO_LENS_AGENTS:
+        lens = fm_lens()
+        if lens:
+            parts.append(lens)
     if extra:
         parts.append(extra.strip())
     own = skill_for_agent(agent)
     if own:
         parts.append(own.body)
+        # Reference documents named in the skill's front matter, in the order given. SKILL.md
+        # is the contract — what to do and what never to do — and stays short enough to be
+        # read. These carry the detail one kind of question needs: the anomaly rules and what
+        # each one means, the asset-level readings, how excess becomes money. Splitting them
+        # is what keeps the contract readable while the detail stays available.
+        #
+        # A named file that is missing is a warning, not a failure. A reference is depth; the
+        # agent answers less well without it but still correctly, and refusing to start over a
+        # renamed file would take the whole domain down to lose a paragraph. That is the
+        # opposite trade from prompt_doc(), where the missing file IS the contract.
+        # Addressed by SLUG, not by agent id — the directory is the skill's folder name.
+        # Compliance is the one place those two strings are identical ("compliance"), which is
+        # exactly why passing the agent id looked correct until a skill whose folder is
+        # `energy-intelligence` and whose agent is `energy_intelligence` tried to load a file.
+        for name in own.references:
+            try:
+                parts.append(prompt_doc(own.slug, name))
+            except RuntimeError as exc:
+                log.warning("skills.reference_missing", skill=own.slug, doc=name, error=str(exc))
     if not parts:
         return None
     return "\n\n---\n\n".join(parts)
+
+
+#: Agents that weigh nothing for a reader: migration imports data and reports what it did.
+NO_LENS_AGENTS = frozenset({"migration"})
+
+
+@lru_cache(maxsize=1)
+def fm_lens() -> str:
+    """skills/query-builder/fm-lens.md - how every answer weighs what it found, as the facilities
+    manager accountable for the buildings and their budget would: risk to life, then statutory
+    exposure, then service to occupants, with what each finding costs or saves carried on every one,
+    sized to the question.
+
+    Every answer writer loads this one file - the sub-agents (through agent_system_prompt), the
+    orchestrator, the planner's writer, the compliance and vendor analysts, the record engine - so
+    the order of what matters is stated once. Before 5 Oct 2026 it lived in the record engine's
+    rules and the compliance tiers only, and a question routed anywhere else got facts with no
+    weighing. Missing is a warning and an empty string, not a failure: the lens is judgement on top
+    of a grounded answer, and losing it must not take answers down with it.
+    """
+    try:
+        return prompt_doc("query-builder", "fm-lens")
+    except RuntimeError as exc:
+        log.warning("skills.fm_lens_missing", error=str(exc))
+        return ""
 
 
 @lru_cache(maxsize=64)

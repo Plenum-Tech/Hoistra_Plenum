@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import String, cast, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.journey_log import JourneyLog
 from ..models.status_history import StatusHistory
 from ..models.work_order import WorkOrder
 from ..services.dynamic_approval_engine import DynamicApprovalEngine
+from ..services import work_order_lookup
 from ..core.logging import get_logger
 
 log = get_logger(__name__)
@@ -308,13 +309,37 @@ async def build_work_order_status_track(
     session: AsyncSession,
     work_order_id: str,
 ) -> Dict[str, Any]:
-    """Full status snapshot for chat and APIs."""
+    """Full status snapshot for chat and APIs.
+
+    ``work_order_id`` is the key or the human code, however the code is typed ("wo-1042" for
+    WO-1042). Compared as text on both sides, as routes/work_orders._get_wo_or_404 does: the key
+    is a uuid on one database and an integer on the other. Several work orders sharing a code
+    are reported, never one picked. No caller scope is applied here — the route resolves and
+    checks the work order before it calls this, with the key."""
     wo_result = await session.execute(
-        select(WorkOrder).where(WorkOrder.work_order_id == work_order_id)
+        select(WorkOrder).where(
+            or_(cast(WorkOrder.work_order_id, String) == str(work_order_id),
+                cast(WorkOrder.wo_code, String) == str(work_order_id))
+        )
     )
-    wo = wo_result.scalar_one_or_none()
+    rows = list(wo_result.scalars().all())
+    by_key = [w for w in rows if str(w.work_order_id) == str(work_order_id)]
+    matches = by_key or (rows if len(rows) == 1 else None)
+    if matches is None:
+        matches = await work_order_lookup.by_code(session, work_order_id)
+    if len(matches) > 1:
+        return {
+            "found": False, "ambiguous": True, "work_order_id": work_order_id,
+            "error": (f"'{work_order_id}' matches {len(matches)} work orders: "
+                      f"{work_order_lookup.describe_candidates(matches)}. Ask which one."),
+            "candidates": [{"work_order_id": str(w.work_order_id), "wo_code": w.wo_code,
+                            "title": w.title, "status": w.status} for w in matches],
+        }
+    wo = matches[0] if matches else None
     if not wo:
         return {"found": False, "work_order_id": work_order_id, "error": "Work order not found"}
+    # Every read below is keyed by id, not by the text the caller typed.
+    work_order_id = str(wo.work_order_id)
 
     jlog_result = await session.execute(
         select(JourneyLog).where(JourneyLog.work_order_id == work_order_id)

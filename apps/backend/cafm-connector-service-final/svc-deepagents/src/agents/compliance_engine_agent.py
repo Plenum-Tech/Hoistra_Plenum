@@ -20,8 +20,11 @@ Phase 2 Feature A (A1–A5):
 """
 from __future__ import annotations
 
+import asyncio
 import difflib
+import itertools
 import re
+import uuid
 from typing import Any
 
 import httpx
@@ -30,6 +33,7 @@ from langchain_core.tools import tool
 
 from ..config import settings
 from ..http_client import request as _request
+from . import name_match
 from .document_forensics import run_document_forensics
 
 log = structlog.get_logger(__name__)
@@ -123,36 +127,143 @@ def _word_matches(qw: str, cw: str) -> bool:
     return difflib.SequenceMatcher(None, qw, cw).ratio() >= 0.8
 
 
-def _tokens_match(q: list[str], c: list[str], joined_ratio: float = 0.85) -> bool:
-    if not q:
+# ── names ranked by the shared ladder (29 Oct 2026) ───────────────────────────────────────────
+# "HOW MANY FLOORS IN JASMEET BUILDING" found nothing because every comparison of a typed name
+# with a stored one worked its own way. These tools kept EVERY row a name touched, by substring or
+# one-letter closeness, so "JASMEET" also returned "Jasmeet Heights", "Acme" returned "Pacme
+# Systems Ltd" and "the building" returned "The Building Centre". Register values are now ranked
+# by name_match's ladder: exact, same letters and digits, phrase, every word in any order, close
+# spelling. Exact beats partial; every value at the best rung is kept, never one picked; a phrase
+# of kind words and fillers alone names nothing. All of it serves reads: nothing here creates,
+# links or upserts a record.
+
+#: Words that name the KIND of record beside a name, never the name itself.
+BUILDING_KIND_WORDS = frozenset({"building", "buildings", "bldg", "site", "sites", "property",
+                                 "properties", "premises"})
+VENDOR_KIND_WORDS = frozenset({"vendor", "vendors", "contractor", "contractors", "supplier",
+                               "suppliers"})
+_KIND_WORDS = {
+    "building_name": BUILDING_KIND_WORDS,
+    "vendor_name": VENDOR_KIND_WORDS,
+    "inspector_name": frozenset({"inspector", "inspectors", "engineer", "engineers"}),
+    "issuer": frozenset({"issuer", "issuers"}),
+}
+#: Fields holding a company's name, ranked a second time without the legal form (Ltd = Limited).
+_COMPANY_FIELDS = frozenset({"vendor_name", "issuer"})
+#: How a value was matched, by rung.
+MATCHED_BY = ("exact", "same letters and digits", "phrase", "every word", "close spelling")
+
+
+def _legal_free(text) -> str:
+    """A company name without its legal form, initials joined: "R.D.M. Electrical Services
+    Limited" and "RDM Electrical Services Ltd" are both "rdm electrical services"."""
+    return " ".join(_tokens(name_match.clean(text), _LEGAL_FORM_WORDS))
+
+
+def _code_inside(query, stored, kind) -> bool:
+    """A code typed without its separators inside a longer text: "B090765" in "B-090765_FRA.pdf".
+    Word-aligned, so "Building 7" is never inside "Building 70"."""
+    key = name_match.compact(" ".join(name_match.meaningful(query, kind)))
+    if not key or not any(ch.isdigit() for ch in key):
         return False
-    # A number is never "nearly" another number: "Building 9" must not find "Building 5".
-    if any(t.isdigit() and t not in c for t in q):
-        return False
-    if all(any(_word_matches(qw, cw) for cw in c) for qw in q):
-        return True
-    jq, jc = "".join(q), "".join(c)  # "Bright Spark" ~ "BrightSpark", "building5" ~ "Building 5"
-    if len(jq) < 4 or not jc:  # "ch" or "5" alone would be inside half the register
-        return False
-    return jq in jc or difflib.SequenceMatcher(None, jq, jc).ratio() >= joined_ratio
+    sw = name_match.words(stored)
+    for i in range(len(sw)):
+        joined = ""
+        for w in sw[i:]:
+            joined += w
+            if joined == key:
+                return True
+            if not key.startswith(joined):
+                break
+    return False
+
+
+def _close_words(query, stored, kind) -> float:
+    """Every word of the name somewhere in the stored text, each by its start or one letter out
+    (codes, numbers and one-/two-letter words exactly), scored 0-1; 0 when any word is missing.
+    name_match.similarity compares whole names, so "R.D.M. Electrcal" (a word short AND a letter
+    out) is not close to "RDM Electrical Services"; word by word it is."""
+    core = name_match.meaningful(query, kind)
+    sw = name_match.words(stored)
+    if not core or not sw:
+        return 0.0
+    scores = []
+    for w in core:
+        if name_match.exact_token(w):
+            best = 1.0 if w in sw else 0.0
+        else:
+            best = max(1.0 if s.startswith(w) else difflib.SequenceMatcher(None, w, s).ratio()
+                       for s in sw)
+        if best < name_match.FUZZY_MIN:
+            return 0.0
+        scores.append(best)
+    return sum(scores) / len(scores)
+
+
+def _rank(query, rows, kind) -> tuple[int | None, list[tuple]]:
+    """``rows`` of (key, text) at the best rung any reaches, and that rung (None: nothing).
+    name_match.best_matches, plus a code typed without its separators inside a longer text,
+    which counts as a phrase."""
+    if not name_match.meaningful(query, kind):
+        return None, []                           # "the building" names nothing
+    hits = name_match.best_matches(query, rows, kind)
+    top = name_match.rung(query, hits[0][1], kind) if hits else None
+    if top is None or top >= 2:
+        inside = [r for r in rows if r not in hits and _code_inside(query, r[1], kind)]
+        if inside:
+            return 2, (hits if top == 2 else []) + inside
+    return top, hits
+
+
+def _closest_words(query, rows, kind) -> list[tuple]:
+    """The rows clearly closest word by word (_close_words): the best, and every one tied
+    with it."""
+    scored = [(_close_words(query, text, kind), key, text) for key, text in rows]
+    scored = [x for x in scored if x[0] >= name_match.FUZZY_MIN]
+    if not scored:
+        return []
+    best = max(x[0] for x in scored)
+    return [(key, text) for sc, key, text in scored if sc >= best - name_match.FUZZY_TIE]
+
+
+def match_names(field: str, query, values) -> tuple[int | None, list[str]]:
+    """The register ``values`` that ``query`` names at the best rung, and that rung
+    (MATCHED_BY[rung]; None when nothing matched). A company field is ranked twice, as written
+    and without its legal form, and the better rung wins. Close spelling (rung 4) is for reads:
+    never call this to choose the record a write creates or links."""
+    kind = _KIND_WORDS.get(field, frozenset())
+    vals = list(dict.fromkeys(str(v) for v in values if str(v or "").strip()))
+    passes = [(str(query or ""), [(v, v) for v in vals])]
+    if field in _COMPANY_FIELDS:
+        passes.append((_legal_free(query), [(v, _legal_free(v)) for v in vals]))
+    best_rung: int | None = None
+    best: list[str] = []
+    for q, rows in passes:
+        r, hits = _rank(q, rows, kind)
+        if r is None:
+            continue
+        keys = [k for k, _ in hits]
+        if best_rung is None or r < best_rung:
+            best_rung, best = r, keys
+        elif r == best_rung:
+            best += [k for k in keys if k not in best]
+    if best_rung is None:
+        for q, rows in passes:
+            best += [k for k, _ in _closest_words(q, rows, kind) if k not in best]
+        best_rung = 4 if best else None
+    return best_rung, best
 
 
 def _name_matches(query: str, candidate: str) -> bool:
-    """Company name: case, punctuation, spacing and legal suffixes ignored; typos tolerated."""
-    q = _tokens(query, _LEGAL_FORM_WORDS)
-    if not q:  # someone asked for "Ltd"
-        return (query or "").strip().lower() in (candidate or "").lower()
-    return _tokens_match(q, _tokens(candidate, _LEGAL_FORM_WORDS))
+    """Company name: whether ``query`` names ``candidate`` at any rung of the ladder. One row at
+    a time; _filter_by_field ranks every candidate instead, so an exact name beats a partial one."""
+    return bool(match_names("vendor_name", query, [candidate])[1])
 
 
 def _building_matches(query: str, candidate: str) -> bool:
-    """Building name: "building 5", "Bldg5", "bishopsgate", "the town hall" all find their row."""
-    q = _tokens(query, _BUILDING_FILLER_WORDS)
-    c = _tokens(candidate, _BUILDING_FILLER_WORDS)
-    if q and _tokens_match(q, c):
-        return True
-    # With filler kept, so "building5" (one token) meets "Building 5" joined as "building5".
-    return _tokens_match(_tokens(query), _tokens(candidate))
+    """Building name: whether ``query`` names ``candidate`` at any rung ("JASMEET BUILDING" ->
+    "JASMEET", "B090765" -> "B-090765", "tower hussain" -> "Hussain Tower")."""
+    return bool(match_names("building_name", query, [candidate])[1])
 
 
 def _trade_matches(query: str, candidate: str) -> bool:
@@ -173,38 +284,62 @@ def _trade_matches(query: str, candidate: str) -> bool:
     return False
 
 
+#: Fields compared word by word rather than as a name: a trade is a category, not a record.
 _FIELD_MATCHERS = {
-    "vendor_name": _name_matches,
-    "building_name": _building_matches,
     "trade_category": _trade_matches,
 }
 
 
 def _filter_by_field(payload: dict[str, Any], field: str, query: str) -> dict[str, Any]:
-    """Keep the rows whose `field` matches `query` tolerantly, and say what matched.
+    """Keep the rows whose `field` the query names, and say what matched.
 
-    `<field>_match` tells the model which register values were matched so it can report them,
-    or notice that several did. When NOTHING matches, every row is returned together with the
-    register's distinct values for that field and `no_match: true`, so the model can decide
-    whether one of them is what the user meant, or answer that it is not on record.
+    A name (building_name, vendor_name) is ranked by the shared ladder (match_names): the
+    register values at the best rung are kept, every one of them when several share it.
+    `<field>_match` tells the model which register values were matched and how, so it can
+    report them, or notice that several did. When NOTHING matches, every row is returned
+    together with the register's distinct values for that field and `no_match: true`, so the
+    model can decide whether one of them is what the user meant, or answer that it is not on record.
     """
     if not isinstance(payload, dict):
         return payload
     rows = payload.get("certificates")
     if not isinstance(rows, list):
         return payload
-    matcher = _FIELD_MATCHERS[field]
-    kept = [r for r in rows if isinstance(r, dict) and matcher(query, str(r.get(field) or ""))]
     all_values = sorted({str(r.get(field)) for r in rows if isinstance(r, dict) and r.get(field)})
+    rung: int | None = None
+    if field in _FIELD_MATCHERS:
+        matcher = _FIELD_MATCHERS[field]
+        kept = [r for r in rows if isinstance(r, dict) and matcher(query, str(r.get(field) or ""))]
+    else:
+        rung, chosen = match_names(field, query, all_values)
+        named = set(chosen)
+        kept = [r for r in rows
+                if isinstance(r, dict) and r.get(field) and str(r.get(field)) in named]
     out = dict(payload)
+    matched = sorted({str(r.get(field)) for r in kept})
     match: dict[str, Any] = {
         "query": query,
-        "matched_values": sorted({str(r.get(field)) for r in kept}),
+        "matched_values": matched,
         "rows": len(kept),
-        "how": ("case-insensitive; punctuation, spacing and filler words (Ltd, Limited, LLC, Inc, plc, "
-                "'building', 'the') ignored; one-letter typos and missing letters tolerated; trade words "
-                "mapped onto the register's categories (fire safety->Fire, lifts->LOLER, air conditioning->HVAC)"),
+        "how": ("names ranked by one ladder, best rung wins: exact (case, accents, quotes "
+                "ignored), the same letters and digits (B090765 = B-090765), the phrase from the "
+                "start of a word, every word in any order, one wrong or missing letter - codes "
+                "and numbers always exact; 'building', 'site', 'vendor', 'the' are not part "
+                "of a name; Ltd/Limited and initials ignored for companies; trade words mapped "
+                "onto the register's categories (fire safety->Fire, lifts->LOLER, air "
+                "conditioning->HVAC)"),
     }
+    if rung is not None:
+        match["matched_by"] = MATCHED_BY[rung]
+    notes = []
+    if rung == 4:
+        notes.append(f"'{query}' is not on the register as written; the closest {field} is "
+                     + ", ".join(f"'{v}'" for v in matched[:5]) + " - say so.")
+    if len(matched) > 1 and field not in _FIELD_MATCHERS:
+        notes.append(f"'{query}' names {len(matched)} {field} values - answer for each and "
+                     "name them all; never pick one.")
+    if notes:
+        match["note"] = " ".join(notes)
     if kept:
         out["certificates"] = kept
         if "count" in out:
@@ -491,6 +626,146 @@ async def list_vendors_by_certificate_count(
         return _err(exc, "list_vendors_by_certificate_count")
 
 
+#: count_compliance_certificates' name filters: the field each is ranked as, and the register
+#: columns its values are read from (the columns the service's own substring test reads).
+_COUNT_NAME_FILTERS = {
+    "vendor_name_contains": ("vendor_name", ("vendor_name",)),
+    "inspector_name": ("inspector_name", ("inspector_name",)),
+    "issuer_contains": ("issuer", ("issuer", "issuing_body", "inspector_accreditation_number")),
+}
+#: More combinations of matched names than this is a name too loose to count by: say so instead.
+_MAX_COUNT_READS = 10
+
+
+def _int(v: Any) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _exactly(row: dict[str, Any], combo: dict[str, str]) -> bool:
+    """Whether a counted row carries exactly the matched names. The service counts every name that
+    CONTAINS one ("Acme Facilities Ltd" also counts "Acme Facilities Ltd North"). An issuer is read
+    across three columns the count's preview does not all carry, so its containment stands."""
+    for param, value in combo.items():
+        col = _COUNT_NAME_FILTERS[param][0]
+        got = str(row.get(col) or "").strip().casefold()
+        if col != "issuer" and got != value.strip().casefold():
+            return False
+    return True
+
+
+async def _count_by_register_names(params: dict[str, Any], names: dict[str, str]) -> dict:
+    """count_compliance_certificates for a question naming a vendor, inspector or issuer
+    (29 Oct 2026).
+
+    The service counts rows whose column CONTAINS the typed text, so "ACME Facilities Limited"
+    counted 0 certificates of "Acme Facilities Ltd", "Okafor James" 0 of "James Okafor", and
+    "Acme" counted "Pacme Systems Ltd" too. Each name is first resolved against the register's own
+    values, read through the same scoped service with the same scope filters (match_names: the best
+    rung, every value sharing it); each matched value is then counted by the service, every other
+    filter staying the service's, and rows of a longer namesake are left out. Several matched
+    values are all counted and all named, never one picked.
+    """
+    base = {k: v for k, v in params.items() if k not in _COUNT_NAME_FILTERS}
+    listing = {k: base[k] for k in ("cert_scope", "status", "draft", "risk_filter") if k in base}
+    listing["limit"] = 1000
+    try:
+        resp = await _request("GET", _base(), "/api/compliance/certificates", service=_SERVICE,
+                              timeout=_TIMEOUT, params=listing)
+        body = resp.json() or {}
+        register = [r for r in (body.get("certificates") or []) if isinstance(r, dict)]
+    except Exception as exc:  # noqa: BLE001
+        # The register could not be read to resolve the names: the service's own count, said so.
+        log.warning("compliance_engine.count_names_unresolved", error=str(exc)[:300])
+        resp = await _request("GET", _base(), "/api/compliance/certificates/count",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        out = resp.json()
+        if isinstance(out, dict):
+            out["name_match"] = {"resolved": False, "note": (
+                "The register could not be read to resolve the name; this count compares the text "
+                "exactly as typed, as a substring - say so.")}
+        return out
+
+    def values_of(cols) -> list[str]:
+        return sorted({str(r.get(c)).strip()
+                       for r in register for c in cols if str(r.get(c) or "").strip()})
+
+    resolved: dict[str, list[str]] = {}
+    info: dict[str, Any] = {}
+    for param, typed in names.items():
+        field, cols = _COUNT_NAME_FILTERS[param]
+        values = values_of(cols)
+        rung, hits = match_names(field, typed, values)
+        entry: dict[str, Any] = {"query": typed, "matched_values": hits}
+        if rung is None:
+            entry.update(no_match=True, all_values=values, note=(
+                f"No {field} on the register matched '{typed}', so nothing was counted for it; "
+                "decide whether one of all_values is what the user meant, or answer that it is "
+                "not on record."))
+        else:
+            entry["matched_by"] = MATCHED_BY[rung]
+            notes = []
+            if rung == 4:
+                notes.append(f"'{typed}' is not on the register as written; the closest is "
+                             + ", ".join(f"'{v}'" for v in hits[:5]) + " - say so.")
+            if len(hits) > 1:
+                notes.append(f"'{typed}' names {len(hits)} {field} values; all were counted - "
+                             "name them all.")
+            if notes:
+                entry["note"] = " ".join(notes)
+        resolved[param] = hits
+        info[field + "_match"] = entry
+    if any(not hits for hits in resolved.values()):
+        return {"ok": True, "count": 0, "matches": [], **info}
+    combos = [dict(zip(resolved, vals)) for vals in itertools.product(*resolved.values())]
+    if len(combos) > _MAX_COUNT_READS:
+        # No "count": a number here would be read as the answer.
+        return {"ok": True, "ambiguous": True, "matches": [], **info, "note": (
+            f"The name matches {len(combos)} register values - too many to count as one; ask which "
+            "is meant, naming matched_values.")}
+    outs = await asyncio.gather(*(
+        _request("GET", _base(), "/api/compliance/certificates/count", service=_SERVICE,
+                 timeout=_TIMEOUT, params={**base, **combo})
+        for combo in combos))
+    counted: dict[str, dict[str, Any]] = {}
+    beyond: list[dict[str, Any]] = []
+    beyond_count = 0
+    by_value: list[dict[str, Any]] = []
+    notes: list[str] = []
+    for combo, resp in zip(combos, outs):
+        body = resp.json() or {}
+        n = _int(body.get("count"))
+        preview = [m for m in (body.get("matches") or []) if isinstance(m, dict)]
+        if n <= len(preview):
+            # Every counted row is listed: keep exactly the rows of the matched names.
+            own = [m for m in preview if _exactly(m, combo)]
+            for m in own:
+                counted.setdefault(str(m.get("id") or id(m)), m)
+            by_value.append({**combo, "count": len(own)})
+            continue
+        # More rows than the service lists: its count stands, and says what else it includes.
+        beyond_count += n
+        beyond += preview
+        by_value.append({**combo, "count": n})
+        for param, value in combo.items():
+            field, cols = _COUNT_NAME_FILTERS[param]
+            longer = [v for v in values_of(cols)
+                      if value.casefold() in v.casefold() and v.casefold() != value.casefold()]
+            if longer:
+                notes.append(f"the count for '{value}' also includes {field} values containing it: "
+                             + ", ".join(f"'{v}'" for v in longer[:5]))
+    result: dict[str, Any] = {"ok": True, "count": len(counted) + beyond_count,
+                              "matches": (list(counted.values()) + beyond)[:50], **info}
+    if len(combos) > 1:
+        result["by_value"] = by_value
+    if notes:
+        result["approximate"] = True
+        result["note"] = "; ".join(notes) + " - say the count may include them."
+    return result
+
+
 @tool
 async def count_compliance_certificates(
     cert_scope: str | None = None,
@@ -513,6 +788,9 @@ async def count_compliance_certificates(
     Use for "how many have …". The `count` field IS the answer — never guess.
     status synonyms: expired == lapsed. Compliant/Blocked are NOT status values.
     Brand synonyms work for cert_type (Gas Safe → GAS_SAFE). issuer_contains for SIA/BAFE.
+    vendor_name_contains / inspector_name / issuer_contains: pass the name as the user wrote it;
+    it is resolved against the register first (Ltd/Limited, word order, a missing hyphen or
+    letter do not matter) and `<field>_match` says which register values were counted.
     """
     try:
         params: dict[str, Any] = {}
@@ -544,6 +822,10 @@ async def count_compliance_certificates(
             params["certificate_name_contains"] = certificate_name_contains
         if risk_filter:
             params["risk_filter"] = risk_filter
+        names = {p: str(params[p]).strip()
+                 for p in _COUNT_NAME_FILTERS if str(params.get(p) or "").strip()}
+        if names:
+            return await _count_by_register_names(params, names)
         resp = await _request(
             "GET",
             _base(),
@@ -557,6 +839,32 @@ async def count_compliance_certificates(
         return _err(exc, "count_compliance_certificates")
 
 
+def _split_vendor_ref(
+    vendor_id: str | None, vendor_name: str | None
+) -> tuple[str | None, str | None]:
+    """Sort a vendor reference into the field that can hold it.
+
+    A certificate prints its contractor's NAME. It does not print a UUID. So a model filling
+    this tool in knows "Meridian Mechanical Ltd" and nothing else — and until vendor_name
+    existed here, the only vendor-shaped parameter on offer was `vendor_id`. It put the name
+    there, CertificateUpsertRequest types that column as a UUID, and Pydantic returned 422.
+    The write was lost and the agent reported the certificate as unstored when the
+    single-door pass had already stored it.
+
+    A name arriving in the id field is therefore read as what it is rather than refused. An
+    explicit vendor_name always wins; ops-intelligence resolves it to the vendor either way.
+    """
+    vid = (vendor_id or "").strip()
+    name = (vendor_name or "").strip() or None
+    if not vid:
+        return None, name
+    try:
+        uuid.UUID(vid)
+    except (ValueError, AttributeError, TypeError):
+        return None, name or vid
+    return vid, name
+
+
 @tool
 async def upsert_compliance_certificate(
     cert_scope: str,
@@ -568,6 +876,7 @@ async def upsert_compliance_certificate(
     asset_id: str | None = None,
     site_id: str | None = None,
     vendor_id: str | None = None,
+    vendor_name: str | None = None,
     inspector_name: str | None = None,
     inspector_accreditation_number: str | None = None,
     result: str | None = None,
@@ -578,10 +887,15 @@ async def upsert_compliance_certificate(
 ) -> dict:
     """Upsert a building or vendor certificate (A2/A3 ingest).
 
+    vendor_id must be a UUID. When you know the contractor only by the name printed on the
+    certificate — which is the usual case — pass vendor_name instead and leave vendor_id
+    unset; it is resolved to the vendor on the server.
+
     confirmed_by_pm=False still persists a draft (appears in lists / Saved Space).
     Set confirmed_by_pm=True after the PM reviews extracted fields to finalise.
     Fail/Advisory opens remedial_status only after confirm (no WO auto-created).
     """
+    vendor_id, vendor_name = _split_vendor_ref(vendor_id, vendor_name)
     try:
         resp = await _request(
             "POST",
@@ -599,6 +913,7 @@ async def upsert_compliance_certificate(
                 "asset_id": asset_id,
                 "site_id": site_id,
                 "vendor_id": vendor_id,
+                "vendor_name": vendor_name,
                 "inspector_name": inspector_name,
                 "inspector_accreditation_number": inspector_accreditation_number,
                 "result": result,
@@ -1041,15 +1356,12 @@ _MEMBERSHIP_ALIASES = {
 }
 
 
-def _match_membership_query(q: str, cert: dict[str, Any]) -> bool:
-    """True when the free-text query matches this certificate's type / vendor / filename.
-
-    Empty query matches everything (manage all). Otherwise: whole-phrase match, a known
-    alias (e.g. 'air conditioning' → TM44), or every significant query word present.
-    """
-    meta = cert.get("raw_metadata") or {}
-    hay = " ".join(
-        str(x or "").lower()
+def _membership_texts(cert: dict[str, Any]) -> list[str]:
+    """What a certificate can be named by: its type, type code, vendor, filename, company."""
+    meta = cert.get("raw_metadata")
+    meta = meta if isinstance(meta, dict) else {}
+    return [
+        str(x)
         for x in (
             cert.get("certificate_type_name"),
             cert.get("certificate_type_code"),
@@ -1057,21 +1369,51 @@ def _match_membership_query(q: str, cert: dict[str, Any]) -> bool:
             meta.get("source_filename"),
             meta.get("company_name"),
         )
-    )
-    ql = (q or "").strip().lower()
-    if not ql:
-        return True
-    if ql in hay:
-        return True
+        if str(x or "").strip()
+    ]
+
+
+def _membership_near(q: str, cert: dict[str, Any]) -> bool:
+    """Whether the query names this certificate nearer than close spelling: a known alias
+    ('air conditioning' → TM44), or any rung but the last over its texts one by one, or over
+    all of them together (every word in any order across type, vendor and filename)."""
+    texts = _membership_texts(cert)
+    hay = " ".join(texts).lower()
+    ql = q.strip().lower()
     for phrase, code in _MEMBERSHIP_ALIASES.items():
         if phrase in ql and code in hay:
             return True
-    words = [
-        w
-        for w in re.findall(r"[a-z0-9]+", ql)
-        if w not in _MEMBERSHIP_STOPWORDS and len(w) > 2
-    ]
-    return bool(words) and all(w in hay for w in words)
+    rows = [(i, t) for i, t in enumerate(texts)] + [("all", " ".join(texts))]
+    rung, _ = _rank(q, rows, _MEMBERSHIP_STOPWORDS)
+    return rung is not None and rung < 4
+
+
+def _membership_matches(q: str, certs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The certificates the query names (29 Oct 2026).
+
+    Every word of one or two letters was dropped and the rest compared by substring, so
+    "Building 7" matched every "Building ..." document (Building 70 too), "Acme" matched "Pacme",
+    "report" matched every report and "B090765" never met "B-090765_FRA.pdf". Now: empty matches
+    everything (manage all); otherwise every certificate the shared ladder names nearer than
+    close spelling, and only when none is, the clearly closest spellings. A query of command and
+    kind words alone ("remove the report") names nothing.
+    """
+    if not (q or "").strip():
+        return list(certs)
+    near = [c for c in certs if _membership_near(q, c)]
+    if near:
+        return near
+    core = " ".join(name_match.meaningful(q, _MEMBERSHIP_STOPWORDS))
+    if not core:
+        return []
+    rows = [(i, t) for i, c in enumerate(certs) for t in _membership_texts(c)]
+    picked = name_match.pick_closest(core, rows) or _closest_words(q, rows, _MEMBERSHIP_STOPWORDS)
+    return [certs[i] for i in dict.fromkeys(k for k, _ in picked)]
+
+
+def _match_membership_query(q: str, cert: dict[str, Any]) -> bool:
+    """True when the free-text query names this certificate by its type / vendor / filename."""
+    return bool(_membership_matches(q, [cert]))
 
 
 @tool
@@ -1106,6 +1448,10 @@ async def manage_vector_membership(query: str = "") -> dict:
             body = resp.json()
             certs.extend(body.get("certificates") or body.get("items") or [])
 
+        # Ranked over every indexed certificate at once: the closest spelling is only taken
+        # when nothing names a document more nearly.
+        indexed = [c for c in certs if c.get("document_id")]
+        named = {id(c) for c in _membership_matches(query, indexed)}
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for c in certs:
@@ -1113,7 +1459,7 @@ async def manage_vector_membership(query: str = "") -> dict:
             if not did:
                 continue  # not indexed → no vector membership to manage
             did = str(did)
-            if did in seen or not _match_membership_query(query, c):
+            if did in seen or id(c) not in named:
                 continue
             seen.add(did)
             meta = c.get("raw_metadata") or {}
@@ -1192,7 +1538,74 @@ async def get_pack_facts(country_code: str = "UK") -> dict:
         return _err(exc, "get_pack_facts")
 
 
+@tool
+async def get_mees_summary(building_id: str | None = None) -> dict:
+    """A — MEES from the EPC register: per building the EPC band (A–G) and score, how many sit
+    below E (unlettable now) and below B over 1,000 m² (proposed 2030), EPCs current / expiring
+    within 12 months. UK only; an unknown band is reported as unknown, never as compliant."""
+    try:
+        params = {"building_id": building_id} if building_id else {}
+        resp = await _request("GET", _base(), "/api/compliance/mees", service=_SERVICE, timeout=_TIMEOUT,
+                              params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_mees_summary")
+
+
+@tool
+async def record_regulatory_filing(
+    building_id: str,
+    scheme: str,
+    period_year: int,
+    status: str = "filed",
+    filed_at: str | None = None,
+    reference: str | None = None,
+    certification_level: str | None = None,
+    valid_until: str | None = None,
+    submitted_by: str | None = None,
+) -> dict:
+    """A — Record that a filing was made for a building and compliance year. scheme: LL84 (NYC
+    benchmarking, due 1 May of the following year), BCA_BENCHMARKING (Singapore annual return),
+    GREEN_MARK (certification: level Certified | Gold | GoldPlus | Platinum, valid 3 years).
+    Idempotent on (building, scheme, year)."""
+    try:
+        resp = await _request("POST", _base(), "/api/compliance/filings", service=_SERVICE, timeout=_TIMEOUT,
+                              json={"building_id": building_id, "scheme": scheme, "period_year": period_year,
+                                    "status": status, "filed_at": filed_at, "reference": reference,
+                                    "certification_level": certification_level, "valid_until": valid_until,
+                                    "submitted_by": submitted_by})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "record_regulatory_filing")
+
+
+@tool
+async def list_regulatory_filings(building_id: str | None = None, scheme: str | None = None,
+                                  country_code: str | None = None) -> dict:
+    """A — Filings on record (LL84 / BCA / Green Mark) for the caller's buildings; with
+    country_code (US | SG) also the position per scheme: filed / due / overdue, certified / lapsed."""
+    try:
+        params = {k: v for k, v in {"building_id": building_id, "scheme": scheme}.items() if v}
+        out = (await _request("GET", _base(), "/api/compliance/filings", service=_SERVICE, timeout=_TIMEOUT,
+                              params=params)).json()
+        if country_code:
+            pos = await _request("GET", _base(), "/api/compliance/filings/position", service=_SERVICE,
+                                 timeout=_TIMEOUT, params={**params, "country_code": country_code})
+            out["position"] = pos.json()
+        return out
+    except Exception as exc:
+        return _err(exc, "list_regulatory_filings")
+
+
+from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
+from .thread_scope import work_order_blockers  # noqa: E402 - blocked by the vendor, one read
+
 COMPLIANCE_ENGINE_TOOLS = [
+    search_documents,
+    work_order_blockers,
+    get_mees_summary,
+    record_regulatory_filing,
+    list_regulatory_filings,
     run_compliance_scan,
     get_pack_facts,
     manage_vector_membership,

@@ -16,5 +16,5 @@ Energy answer metrics: Portfolio EUI 194 vs 180 · Excess cost £312k · Anomali
 ---
 
 ## Custom reports
-Saved from a session with a refresh cadence. Page: kicker *Custom report · dynamic*, title, source query, last refresh and cadence, summary, ranked table. First run shows a *scheduled* state until the orchestrator's next cycle. Carries the ask bar.
+Saved from a session with a refresh cadence. Page: kicker *Custom report · dynamic*, title, the source question, last refresh and next run with the cadence, then the orchestrator's answer to the pinned question (structured compliance answer or markdown) with the tools behind it; the last three refreshes are selectable. States: first refresh scheduled, refreshing, ready, failed (the last good refresh stays). Run now, Export (markdown), Delete. Carries the ask bar.
 

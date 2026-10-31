@@ -5,6 +5,7 @@ from openai import OpenAI
 import json
 
 from ..core.logging import get_logger
+from ..llm_params import completion_kwargs
 
 log = get_logger(__name__)
 
@@ -38,7 +39,7 @@ class CriticalityAssessor:
                     {"role": "system", "content": "Return valid JSON only."},
                     {"role": "user", "content": f"{prompt}\n{json.dumps(context)}"},
                 ],
-                max_tokens=600,
+                **completion_kwargs(self.model, 600),
             )
             parsed = json.loads(response.choices[0].message.content)
             parsed["assessed_at"] = datetime.now(timezone.utc).isoformat()

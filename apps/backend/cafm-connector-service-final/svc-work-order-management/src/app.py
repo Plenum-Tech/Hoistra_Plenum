@@ -6,7 +6,7 @@ import os
 import time
 import uuid as _uuid_mod
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError, ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,7 +16,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .core.logging import configure_logging, get_logger
 from .db import init_db
-from .api.routes import work_orders, approvals, approval_admin, email_processor, ppm_scheduler, journeys, assets, dashboard, chat
+from .services.principal import current_principal
+from .api.routes import maintenance, work_orders, approvals, approval_admin, email_processor, ppm_scheduler, journeys, assets, dashboard, chat
 from .api.schemas.work_order import ErrorDetail, ErrorResponse
 
 log = get_logger(__name__)
@@ -233,10 +234,20 @@ app.include_router(work_orders.router,     prefix="/api/work-orders",          t
 app.include_router(approvals.router,       prefix="/api/work-orders/approvals", tags=["Approvals"])
 # Backward-compatible alias used by older clients/tests.
 app.include_router(approvals.router,       prefix="/api/approvals",             tags=["Approvals"])
-app.include_router(approval_admin.router,  prefix="/api/admin",                 tags=["Approval Admin"])
-app.include_router(email_processor.router, prefix="/api/email",                 tags=["Email Intake"])
-app.include_router(ppm_scheduler.router,   prefix="/api/ppm",                   tags=["PPM Scheduler"])
-app.include_router(journeys.router,        prefix="/api/journeys",              tags=["Journeys"])
+# Who may approve what is an administrative setting, and it answered anybody who asked.
+app.include_router(approval_admin.router,  prefix="/api/admin",                 tags=["Approval Admin"],
+                   dependencies=[Depends(current_principal)])
+# This one was serving a real mailbox — its contents, and the address it is connected to —
+# to anybody on the internet with no token at all.
+app.include_router(email_processor.router, prefix="/api/email",                 tags=["Email Intake"],
+                   dependencies=[Depends(current_principal)])
+# The PPM scheduler creates work orders from an external system and had no caller at all.
+app.include_router(ppm_scheduler.router,   prefix="/api/ppm",                   tags=["PPM Scheduler"],
+                   dependencies=[Depends(current_principal)])
+app.include_router(maintenance.router,     prefix="/api/maintenance",           tags=["Maintenance"])
+# A journey is the history of a work order, so it carries whatever that order carries.
+app.include_router(journeys.router,        prefix="/api/journeys",              tags=["Journeys"],
+                   dependencies=[Depends(current_principal)])
 app.include_router(assets.router,          prefix="/api",                       tags=["Assets", "Locations"])
 app.include_router(dashboard.router,       prefix="/api/dashboard",             tags=["Dashboard"])
 app.include_router(chat.router,            prefix="/api/chat",                  tags=["Chat Interface"])

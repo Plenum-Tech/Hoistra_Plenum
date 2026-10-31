@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.compliance_verification_register_rows
     CONSTRAINT compliance_verification_register_rows_pkey PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_cvrr_code_key
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cvrr_code_key
     ON plenum_cafm.compliance_verification_register_rows (certificate_type_code, upper(lookup_key));
 
-CREATE INDEX IF NOT EXISTS ix_cvrr_ingested_at
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cvrr_ingested_at
     ON plenum_cafm.compliance_verification_register_rows (ingested_at DESC);

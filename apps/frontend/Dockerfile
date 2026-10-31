@@ -7,6 +7,8 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
+# @openuidev/lang-core's postinstall reports each install to its vendor; off for every build.
+ENV OPENUI_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY . .
 
@@ -22,6 +24,8 @@ ENV VITE_OPS_INTELLIGENCE_BASE_URL=$VITE_OPS_INTELLIGENCE_BASE_URL \
     VITE_SCHEMA_MAPPER_BASE_URL=$VITE_SCHEMA_MAPPER_BASE_URL \
     VITE_DEEP_AGENTS_BASE_URL=$VITE_DEEP_AGENTS_BASE_URL \
     VITE_ORGANIZATION_ID=$VITE_ORGANIZATION_ID
+ARG VITE_TRACE_LAB=0
+ENV VITE_TRACE_LAB=$VITE_TRACE_LAB
 RUN npm run build
 
 FROM nginx:1.27-alpine AS runner

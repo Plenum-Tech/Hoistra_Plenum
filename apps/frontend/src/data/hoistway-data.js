@@ -34,7 +34,7 @@ export const HOISTWAY = {
         { l: "Escalation deadline", v: "07 Sep 2026", editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Nightly cron 02:00 → intent: compliance-engine, scope: all buildings" },
+        { a: "Orchestrator", t: "Nightly cron 02:00 → Compliance, scope: all buildings" },
         { a: "Planner", t: "5 sub-tasks: fetch certs <90d → compute alert ladder → fetch approved contractors for AssetType Lift → draft booking → write Activity Log" },
         { a: "Worker", t: "Read 118 ComplianceCertificate records. 14 inside 90d window, 1 inside 30d. Matched 3 LEIA contractors on Contract entity." },
         { a: "Quality", t: "Validated Apex Lifts LEIA accreditation currency against issuing register. Confidence 97%. Approved → human queue." }
@@ -56,7 +56,7 @@ export const HOISTWAY = {
         { l: "Reassign to", v: "Northgate Mechanical · Gas Safe current", editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Nightly accreditation scan → intent: compliance-engine (A2)" },
+        { a: "Orchestrator", t: "Nightly accreditation scan → Compliance" },
         { a: "Planner", t: "Cross-check every Vendor accreditation expiry against open WO AssetTypes" },
         { a: "Worker", t: "1 lapse found. 2 open WOs matched to blocked AssetType. Allocation lock written." },
         { a: "Quality", t: "Irreversible consequence (vendor block) — validated lapse against Gas Safe Register. Confidence 100%. Approved." }
@@ -79,7 +79,7 @@ export const HOISTWAY = {
         { l: "Action", v: "Create inspection WO — AHU-3 controls", editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Daily energy scan 03:00 → intent: energy-intelligence-engine" },
+        { a: "Orchestrator", t: "Daily energy scan 03:00 → Energy" },
         { a: "Planner", t: "Fetch MeterReading (half-hourly, MPAN) → compute EUI → run anomaly rules → translate to £ → check WO threshold" },
         { a: "Worker", t: "Rule (a) non-occupancy spike triggered: 847 kWh vs 210 kWh baseline. Sub-meter attribution: AHU-3 68% of delta." },
         { a: "Quality", t: "Display-only output — no Quality gate. Gate applies only if WO auto-dispatches." }
@@ -101,7 +101,7 @@ export const HOISTWAY = {
         { l: "Contract rate", v: "£65/hr labour · parts mark-up cap 12%" }
       ],
       chain: [
-        { a: "Orchestrator", t: "Invoice ingested via Orchestrator upload → intent: contract-performance-engine (B3)" },
+        { a: "Orchestrator", t: "Invoice ingested via Orchestrator upload → Vendor performance" },
         { a: "Planner", t: "Parse invoice → match line to WO ref → verify completion, hours vs attendance, parts vs approvals, rate vs contract" },
         { a: "Worker", t: "12 lines parsed. 10 matched inside 10% tolerance. 2 discrepancies with plain-language description." },
         { a: "Quality", t: "Flagged amount £1,450 exceeds £500 gate → mandatory validation. Re-checked attendance timestamps. Approved." }
@@ -124,7 +124,7 @@ export const HOISTWAY = {
         { l: "Proposed priority", v: "P2 · 8hr response / 48hr completion", editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "IoT threshold breach from monitoring layer → intent: work-order-engine (D3)" },
+        { a: "Orchestrator", t: "IoT threshold breach from monitoring layer → Work orders" },
         { a: "Planner", t: "Classify WO type (predictive) → fetch asset → priority from criticality × severity → select contractor → estimate cost → draft WO" },
         { a: "Worker", t: "Vibration + current time series matched to bearing wear rule. Cost comparison built from Contract entity rates." },
         { a: "Quality", t: "Draft shown to PM — PM is the quality gate. No auto-dispatch." }
@@ -202,12 +202,12 @@ export const HOISTWAY = {
   ],
 
   activity: [
-    { t: "09:15", agent: "compliance-engine", text: "Gas Safe registration for Meridian Heating Ltd expired 3 days ago → allocation blocked for all gas work orders → 2 pending WOs held → PM action required", tone: "risk" },
-    { t: "09:14", agent: "compliance-engine", text: "Nightly compliance scan → LOLER certificate for Lift Asset-4471 expires in 23 days → contractor recommendation: Apex Lifts → booking request drafted → awaiting PM approval", tone: "warn" },
-    { t: "08:00", agent: "work-order-engine", text: "Monthly PPM run: 14 assets due this month → 14 WO drafts created → 12 auto-approved within authority → 2 require PM approval (above cost threshold)", tone: "ok" },
-    { t: "03:22", agent: "energy-intelligence-engine", text: "Weekend non-occupancy spike: Bishopsgate Tower Saturday 02:00–06:00 = 847 kWh vs weekend baseline 210 kWh → annualised impact £38,400 → create inspection WO?", tone: "warn" },
-    { t: "11:05", agent: "work-order-engine", text: "AHU-3 supply fan current draw 19% above 30-day baseline for 72 hrs → ASHRAE Rule 12 bearing degradation → planned £1,800 vs emergency £38,000 → WO draft created", tone: "warn" },
-    { t: "16:42", agent: "contract-performance-engine", text: "Invoice INV-2847 (£8,340) matched against 12 WOs → 10 lines matched (£6,890) → 2 lines flagged (£1,450) → PM decision required", tone: "risk" }
+    { t: "09:15", agent: "Compliance", text: "Gas Safe registration for Meridian Heating Ltd expired 3 days ago → allocation blocked for all gas work orders → 2 pending WOs held → PM action required", tone: "risk" },
+    { t: "09:14", agent: "Compliance", text: "Nightly compliance scan → LOLER certificate for Lift Asset-4471 expires in 23 days → contractor recommendation: Apex Lifts → booking request drafted → awaiting PM approval", tone: "warn" },
+    { t: "08:00", agent: "Work orders", text: "Monthly PPM run: 14 assets due this month → 14 WO drafts created → 12 auto-approved within authority → 2 require PM approval (above cost threshold)", tone: "ok" },
+    { t: "03:22", agent: "Energy", text: "Weekend non-occupancy spike: Bishopsgate Tower Saturday 02:00–06:00 = 847 kWh vs weekend baseline 210 kWh → annualised impact £38,400 → create inspection WO?", tone: "warn" },
+    { t: "11:05", agent: "Work orders", text: "AHU-3 supply fan current draw 19% above 30-day baseline for 72 hrs → ASHRAE Rule 12 bearing degradation → planned £1,800 vs emergency £38,000 → WO draft created", tone: "warn" },
+    { t: "16:42", agent: "Vendor performance", text: "Invoice INV-2847 (£8,340) matched against 12 WOs → 10 lines matched (£6,890) → 2 lines flagged (£1,450) → PM decision required", tone: "risk" }
   ],
 
   answers: {
@@ -232,9 +232,9 @@ export const HOISTWAY = {
       ],
       rowHead: ["Building", "Obligation", "Status", "Next action"],
       chain: [
-        { a: "Orchestrator", t: "Intent classified: compliance-engine. Scope resolved: all buildings, all categories." },
+        { a: "Orchestrator", t: "Routed to Compliance. Scope resolved: all buildings, all categories." },
         { a: "Planner", t: "4 sub-tasks: fetch ComplianceCertificate where expiry < 90d → compute alert ladder → join blocked vendors → rank by liability" },
-        { a: "Worker", t: "118 obligations read from UDR. 3 Lapsed, 1 Overdue, 11 inside 30d. Joined 2 vendor accreditation lapses." },
+        { a: "Worker", t: "118 obligations read from the Hoist Graph. 3 Lapsed, 1 Overdue, 11 inside 30d. Joined 2 vendor accreditation lapses." },
         { a: "Quality", t: "Lapsed flags validated against issuing registers before insurance risk flag raised. Confidence 98%." }
       ],
       actions: ["Approve all 8 drafted bookings", "Open Compliance module", "Export owner report"]
@@ -261,7 +261,7 @@ export const HOISTWAY = {
       ],
       rowHead: ["Building", "Anomaly", "Annualised £", "Next action"],
       chain: [
-        { a: "Orchestrator", t: "Intent: energy-intelligence-engine. Daily scan 03:00 results reused, no re-fetch needed." },
+        { a: "Orchestrator", t: "Routed to Energy. Daily scan 03:00 results reused, no re-fetch needed." },
         { a: "Planner", t: "6 sub-tasks: fetch MeterReading → compute EUI per building → benchmark vs TM46 → run 13 anomaly rules → translate to £ → rank" },
         { a: "Worker", t: "1.2m half-hourly readings aggregated. 6 anomalies scored. Sub-meter attribution available on 18 of 24 buildings." },
         { a: "Quality", t: "Not fired — display-only output. Gate would apply only on automatic WO dispatch." }
@@ -289,7 +289,7 @@ export const HOISTWAY = {
       ],
       rowHead: ["Vendor", "Score", "Annual spend", "Next action"],
       chain: [
-        { a: "Orchestrator", t: "Intent: contract-performance-engine. Monthly scorecard period resolved to Aug 2026." },
+        { a: "Orchestrator", t: "Routed to Vendor performance. Monthly scorecard period resolved to Aug 2026." },
         { a: "Planner", t: "4 sub-tasks: fetch completed WOs this period per vendor → score against extracted SLA → aggregate → flag variances" },
         { a: "Worker", t: "312 completed WOs scored against contract baseline. PPM compliance computed separately. Cost variance run on 6 vendors." },
         { a: "Quality", t: "Fired on Meridian Heating: 20-point month-on-month drop checked for data anomaly before presenting. Confirmed genuine." }
@@ -317,7 +317,7 @@ export const HOISTWAY = {
       ],
       rowHead: ["Decision", "Module", "Consequence", "Recommendation"],
       chain: [
-        { a: "Orchestrator", t: "Intent: cross-module human queue. Fan-out to all four Phase 2 tool agents." },
+        { a: "Orchestrator", t: "Cross-module human queue. Asked all four engines." },
         { a: "Planner", t: "Collect open human-queue items → rank by consequence class (statutory > irreversible financial > recoverable) → attach recommendation" },
         { a: "Worker", t: "5 open items, 12 auto-approved inside authority. Consequence values pulled from Contract and Meter entities." },
         { a: "Quality", t: "Each actionable item already carried its own gate at creation. No second gate applied here." }

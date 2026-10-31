@@ -29,12 +29,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..schema_state import SchemaMappingState, ExtraFieldConfig
 from ...matchers.registry import registry_append
 from ...db import get_async_session_factory
+from ...sql_identifiers import safe_data_type, safe_identifier
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
 
 # Source schema that gets cloned
 _SOURCE_SCHEMA = "plenum_cafm"
+
+def _safe_identifier(raw_name) -> str | None:
+    """A table or column name fit to interpolate, or None when nothing usable is left.
+
+    Normalised rather than rejected for spaces and hyphens, because a source column called
+    "Asset Ref" is an ordinary thing to want and asset_ref is unambiguously what it means. A
+    reserved word, a leading digit or an over-long name is repaired (sql_identifiers, 29 Oct
+    2026): a person should not have to rename "end" for the write to parse.
+    """
+    return safe_identifier(raw_name)
+
+
+_safe_data_type = safe_data_type
 
 
 def _make_new_schema_name(external_cmms_name: str) -> str:
@@ -83,14 +97,30 @@ def _build_ddl_statements(
         if not target_table:
             continue
 
-        if entry.get("is_new_table", False):
+        # "New table" is a claim about the destination, and a reviewer typing a name can be
+        # wrong about it. CREATE TABLE IF NOT EXISTS on a table that already exists succeeds
+        # and does nothing, and the column then never arrives — the decision and the data are
+        # silently lost. existing_canonical_tables has always been passed here and never
+        # consulted; a name already on the schema takes the ALTER path whatever the flag says.
+        _is_new = entry.get("is_new_table", False)
+        if _is_new and (_safe_identifier(target_table) or target_table) in existing_canonical_tables:
+            logger.info("[DDL] %s already exists — adding the column to it rather than "
+                        "creating it again", target_table)
+            _is_new = False
+
+        if _is_new:
             new_tables.setdefault(target_table, []).append(entry)
         else:
             existing_table_cols.setdefault(target_table, []).append(entry)
 
     # ── 1. CREATE TABLE for brand-new tables ─────────────────────────
     for table_name, columns in new_tables.items():
-        pk_col = columns[0].get("new_table_pk", "id") or "id"
+        safe_table = _safe_identifier(table_name)
+        if safe_table is None:
+            logger.error("[DDL] refusing CREATE TABLE for unusable table name %r", table_name)
+            continue
+        table_name = safe_table
+        pk_col = _safe_identifier(columns[0].get("new_table_pk", "id") or "id") or "id"
         pk_lower = pk_col.lower()
         # created_at / updated_at are always appended below — reserve them so a
         # source column of the same name can't be emitted twice.
@@ -106,20 +136,27 @@ def _build_ddl_statements(
         col_defs: list[str] = []
         emitted: set[str] = {pk_lower}
         if pk_source_col is not None:
-            col_defs.append(f"    {pk_col} {pk_source_col.get('data_type', 'TEXT')} PRIMARY KEY")
+            _pk_type = _safe_data_type(pk_source_col.get("data_type")) or "TEXT"
+            col_defs.append(f"    {pk_col} {_pk_type} PRIMARY KEY")
         else:
             col_defs.append(f"    {pk_col} UUID PRIMARY KEY DEFAULT gen_random_uuid()")
 
         for col in columns:
-            col_name = col.get("custom_column_name")
+            col_name = _safe_identifier(col.get("custom_column_name"))
             if not col_name:
+                logger.error("[DDL] dropping column with unusable name %r on new table %s",
+                             col.get("custom_column_name"), table_name)
+                continue
+            data_type = _safe_data_type(col.get("data_type"))
+            if data_type is None:
+                logger.error("[DDL] dropping column %s.%s: %r is not a column type",
+                             table_name, col_name, col.get("data_type"))
                 continue
             name_lower = col_name.lower()
             # Skip the PK column (already emitted), reserved timestamps, and duplicates.
             if name_lower in emitted or name_lower in reserved:
                 continue
             emitted.add(name_lower)
-            data_type = col.get("data_type", "TEXT")
             nullable_clause = "" if col.get("nullable", True) else " NOT NULL"
             col_defs.append(f"    {col_name} {data_type}{nullable_clause}")
 
@@ -143,15 +180,26 @@ def _build_ddl_statements(
     # ── 2. ALTER TABLE ADD COLUMN for existing tables ─────────────────
     _seen_cols: set[tuple[str, str]] = set()
     for table_name, columns in existing_table_cols.items():
+        safe_table = _safe_identifier(table_name)
+        if safe_table is None:
+            logger.error("[DDL] refusing ALTER TABLE for unusable table name %r", table_name)
+            continue
+        table_name = safe_table
         for col in columns:
-            col_name = col.get("custom_column_name")
+            col_name = _safe_identifier(col.get("custom_column_name"))
             if not col_name:
+                logger.error("[DDL] dropping column with unusable name %r on %s",
+                             col.get("custom_column_name"), table_name)
+                continue
+            data_type = _safe_data_type(col.get("data_type"))
+            if data_type is None:
+                logger.error("[DDL] dropping column %s.%s: %r is not a column type",
+                             table_name, col_name, col.get("data_type"))
                 continue
             _dedup_key = (table_name, col_name)
             if _dedup_key in _seen_cols:
                 continue
             _seen_cols.add(_dedup_key)
-            data_type = col.get("data_type", "TEXT")
             nullable_clause = "" if col.get("nullable", True) else " NOT NULL"
             sql = (
                 f"ALTER TABLE {target_schema}.{table_name} "
@@ -170,20 +218,25 @@ def _build_ddl_statements(
         if not fk.get("user_confirmed", False):
             continue
 
-        source_table = fk.get("source_table")
-        source_column = fk.get("source_column")
-        target_table = fk.get("target_table")
-        target_column = fk.get("target_column", "id")
+        source_table = safe_identifier(fk.get("source_table"))
+        source_column = safe_identifier(fk.get("source_column"))
+        target_table = safe_identifier(fk.get("target_table"))
+        target_column = safe_identifier(fk.get("target_column", "id"))
 
-        if not source_table or not source_column or not target_table:
+        if not source_table or not source_column or not target_table or not target_column:
+            logger.error("[DDL] refusing FK with an unusable name: %r", fk)
             continue
 
-        constraint_name = f"fk_{source_table}_{source_column}_{target_table}"
+        constraint_name = safe_identifier(f"fk_{source_table}_{source_column}_{target_table}")
+        # PostgreSQL has no ADD CONSTRAINT IF NOT EXISTS (a syntax error, 29 Oct 2026), and a
+        # re-run must not fail on the constraint the first run added: look it up first.
         sql = (
-            f"ALTER TABLE {target_schema}.{source_table} "
-            f"ADD CONSTRAINT IF NOT EXISTS {constraint_name} "
+            f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
+            f"WHERE conname = '{constraint_name}' "
+            f"AND conrelid = '{target_schema}.{source_table}'::regclass) THEN "
+            f"ALTER TABLE {target_schema}.{source_table} ADD CONSTRAINT {constraint_name} "
             f"FOREIGN KEY ({source_column}) "
-            f"REFERENCES {target_schema}.{target_table}({target_column});"
+            f"REFERENCES {target_schema}.{target_table}({target_column}); END IF; END $$;"
         )
         ddl.append({
             "sql": sql,

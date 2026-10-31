@@ -29,20 +29,88 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..state import ExtraFieldConfig, MigrationState
+from ..progress_beat import ProgressBeat
 from ..event_enrich import append_event
+from .building_link import (
+    ASSET_BUILDING_SQL, ASSET_LOOKUP_SQL, BuildingResolver, asset_match_code,
+    build_asset_merge_update, building_hint, looks_like_uuid, site_names_from_run,
+)
+from .meter_link import (
+    CREATE_METER_SQL, FLOOR_LOOKUP_SQL, SECTION_LOOKUP_SQL, MeterResolver, floor_hint,
+    is_sub_meter_for, meter_hint, pick_section,
+    meter_type_for, section_hint, supply_numbers,
+)
+from .reference_link import LIVE_ROW, REFERENCES, ReferenceResolver, hint_for
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
+from ...engine.selection import uses_go
+from ...sql_identifiers import RESERVED_WORDS, clean, repair, safe_data_type, safe_identifier
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
 
 # plenum_cafm schema prefix used in all DDL
 _SCHEMA = "plenum_cafm"
+
+#: Tables whose rows carry a building_id that can be resolved from a site reference.
+#:
+#: energy_meters joined this list on 22 Sep 2026. It went through the same writer and came out
+#: unlinked, and unlike a missing asset link that failure is silent: energy_meters.building_id
+#: is a plain uuid with no constraint behind it, so the row inserts, the anomaly scan sweeps
+#: the meter, and every finding it raises is written with a null building. Those findings are
+#: invisible on a building-scoped page and no EUI snapshot is produced at all, so the scan
+#: reports success over an empty screen.
+_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters", "building_sections",
+                           "compliance_certificates")
+
+#: Company-wide master data: never filed under one building, even when the uploader selected one.
+#: The chat's building filter checks building_id first, so a vendor tagged with one building would
+#: vanish for every colleague allocated to another; a building or a user is not "in" a building.
+_COMPANY_WIDE_TABLES = frozenset({
+    "organizations", "buildings", "sites", "locations", "users", "roles", "permissions",
+    "user_roles", "role_permissions", "technicians", "vendors", "vendor_contacts",
+    "asset_categories",
+})
+
+
+def files_under_building(table: str, default_building: str | None) -> bool:
+    """Whether rows written to ``table`` carry a building_id. The five tables that always did,
+    and - when the uploader selected a building (6 Oct 2026) - every other table that is not
+    company-wide master data, a brand-new one included: a petty-cash sheet uploaded for
+    Bishopsgate is Bishopsgate's petty cash."""
+    t = str(table or "").lower()
+    if t in _BUILDING_LINKED_TABLES:
+        return True
+    return bool(default_building) and t not in _COMPANY_WIDE_TABLES
+
+#: Tables whose rows are READ for a building reference. meter_readings does not carry a
+#: building column of its own, but a reading sheet often names the site, and that is what
+#: decides whether a meter can be created for it.
+_BUILDING_HINT_TABLES = ("assets", "work_orders", "energy_meters", "meter_readings",
+                         "building_sections", "compliance_certificates")
+
+#: Tables that can take their building from the asset they name, when they name no site.
+_BUILDING_VIA_ASSET_TABLES = ("work_orders", "energy_meters")
+
+#: Tables whose rows carry references that only the schema-aligned path can resolve: a
+#: building from a site name, a meter from a supply number.
+#:
+#: The primary write path applies a generated SQL artifact of literal values with no
+#: resolution of any kind, and the aligned path was only ever reached by that one throwing
+#: first. For these tables that is the difference between rows that link and rows that do
+#: not, so the choice is made deliberately rather than left to whether an INSERT happens
+#: to fail.
+_NEEDS_RESOLUTION = frozenset({"assets", "work_orders", "energy_meters", "meter_readings",
+                               "building_sections", "compliance_certificates"})
 _SAFE_SQL_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 # Core plenum_cafm tables whose schema is managed by ORM migrations.
 # The fallback write path must NEVER ALTER TABLE these — only filter to
 # their existing columns.
+#: Columns the writer fills itself rather than reading from the file. A type mismatch on one of
+#: these is the target's shape, not bad source data, so it is never "fixed" by retyping the column.
+_SYSTEM_SUPPLIED_COLUMNS = frozenset({"organization_id", "org_id"})
+
 _KNOWN_CORE_TABLES = frozenset({
     "assets", "work_orders", "spare_parts", "locations", "organizations",
     "users", "technicians", "vendors", "asset_categories", "maintenance_plans",
@@ -69,6 +137,16 @@ def _infer_sql_type(sample_values: list) -> str:
     except (ValueError, TypeError):
         pass
     return "TEXT"
+
+
+def _ddl_type(raw_type: object, where: str) -> str:
+    """A column type PostgreSQL will take. One it would refuse ("string", "VARCHAR(255") or one
+    carrying more than a type becomes TEXT — the column and its data are kept, the write goes on."""
+    data_type = safe_data_type(raw_type)
+    if data_type is None:
+        logger.warning("[DDL] %s: %r is not a column type — created as TEXT", where, raw_type)
+        return "TEXT"
+    return data_type
 
 
 def _build_migration_ddl_statements(
@@ -109,15 +187,15 @@ def _build_migration_ddl_statements(
             # the CREATE TABLE DDL consistent with the DML sync path (which already
             # normalizes via _to_safe_identifier). Existing tables carry a real
             # canonical name, so they're left exactly as-is.
-            safe_target = _to_safe_identifier(target_table) or target_table
+            safe_target = new_table_name(target_table, set())
             new_tables.setdefault(safe_target, []).append(entry)
         else:
             existing_table_cols.setdefault(target_table, []).append(entry)
 
     # ── 1. CREATE TABLE for brand-new tables ─────────────────────────
     for table_name, columns in new_tables.items():
-        pk_col = columns[0].get("new_table_pk", "id") or "id"
-        pk_lower = pk_col.lower()
+        pk_col = _to_safe_identifier(columns[0].get("new_table_pk", "id")) or "id"
+        pk_lower = pk_col
         source_table = columns[0].get("source_table", "")  # source sheet that maps to this new table
         _source_mappings = (all_mappings_by_source_table or {}).get(source_table, [])
 
@@ -125,11 +203,11 @@ def _build_migration_ddl_statements(
         # IS the business key used for PK/FK relationships: emit it AS the primary key with
         # its real type instead of a synthetic UUID that would clash. Same for a custom PK.
         _pk_mapping = next(
-            (m for m in _source_mappings if (m.get("target_field") or "").lower() == pk_lower),
+            (m for m in _source_mappings if _to_safe_identifier(m.get("target_field")) == pk_lower),
             None,
         )
         _pk_custom = next(
-            (c for c in columns if (c.get("custom_column_name") or "").lower() == pk_lower),
+            (c for c in columns if _to_safe_identifier(c.get("custom_column_name")) == pk_lower),
             None,
         )
         if _pk_mapping is not None:
@@ -137,12 +215,18 @@ def _build_migration_ddl_statements(
                 f"    {pk_col} {_infer_sql_type(_pk_mapping.get('sample_values') or [])} PRIMARY KEY"
             ]
         elif _pk_custom is not None:
-            col_defs = [f"    {pk_col} {_pk_custom.get('data_type', 'TEXT')} PRIMARY KEY"]
+            col_defs = [f"    {pk_col} {_ddl_type(_pk_custom.get('data_type'), f'{table_name}.{pk_col}')} PRIMARY KEY"]
         else:
             col_defs = [f"    {pk_col} UUID PRIMARY KEY DEFAULT gen_random_uuid()"]
+        # Every table a migration creates says whose rows they are and where they belong
+        # (6 Oct 2026): without these a new table was readable by no company filter and
+        # placed in no building. A source column of the same name is not emitted again; the
+        # writer resolves a building name in the sheet into building_id.
+        col_defs.append("    organization_id UUID")
+        col_defs.append("    building_id UUID")
         # Case-insensitive collision guard; created_at/updated_at are appended below,
         # so reserve them too (a source column of the same name must not be re-emitted).
-        seen_lower: set[str] = {pk_lower, "created_at", "updated_at"}
+        seen_lower: set[str] = {pk_lower, "created_at", "updated_at", "organization_id", "building_id"}
         total_data_cols = 0
 
         # Include ALL T1+T2+human-mapped columns from the same source sheet.
@@ -150,28 +234,30 @@ def _build_migration_ddl_statements(
         # their target_field values as the column names in the new table.
         if _source_mappings:
             for mapping in _source_mappings:
-                target_field = mapping.get("target_field", "")
-                if not target_field or target_field.lower() in seen_lower:
+                target_field = _to_safe_identifier(mapping.get("target_field"))
+                if not target_field or target_field in seen_lower:
                     continue
                 # Prefer a user-chosen SQL type (new-table data-type dropdown);
                 # otherwise infer it from the sampled values.
-                sql_type = (mapping.get("data_type") or "").strip() or _infer_sql_type(
-                    mapping.get("sample_values") or []
+                sql_type = (
+                    _ddl_type(mapping.get("data_type"), f"{table_name}.{target_field}")
+                    if (mapping.get("data_type") or "").strip()
+                    else _infer_sql_type(mapping.get("sample_values") or [])
                 )
                 col_defs.append(f"    {target_field} {sql_type}")
-                seen_lower.add(target_field.lower())
+                seen_lower.add(target_field)
                 total_data_cols += 1
 
         # Add explicitly-declared custom columns (user-named via DDL intent)
         custom_col_count = 0
         for col in columns:
-            col_name = col.get("custom_column_name")
-            if not col_name or col_name.lower() in seen_lower:
+            col_name = _to_safe_identifier(col.get("custom_column_name"))
+            if not col_name or col_name in seen_lower:
                 continue
-            data_type = col.get("data_type", "TEXT")
+            data_type = _ddl_type(col.get("data_type"), f"{table_name}.{col_name}")
             nullable_clause = "" if col.get("nullable", True) else " NOT NULL"
             col_defs.append(f"    {col_name} {data_type}{nullable_clause}")
-            seen_lower.add(col_name.lower())
+            seen_lower.add(col_name)
             custom_col_count += 1
             total_data_cols += 1
 
@@ -195,8 +281,12 @@ def _build_migration_ddl_statements(
     # ── 2. ALTER TABLE ADD COLUMN for existing tables ─────────────────
     for table_name, columns in existing_table_cols.items():
         for col in columns:
-            col_name = col.get("custom_column_name")
-            data_type = col.get("data_type", "TEXT")
+            col_name = _to_safe_identifier(col.get("custom_column_name"))
+            if not col_name:
+                logger.error("[DDL] no usable column name in %r for %s — not created",
+                             col.get("custom_column_name"), table_name)
+                continue
+            data_type = _ddl_type(col.get("data_type"), f"{table_name}.{col_name}")
             nullable_clause = "" if col.get("nullable", True) else " NOT NULL"
             sql = (
                 f"ALTER TABLE {_SCHEMA}.{table_name} "
@@ -228,6 +318,11 @@ async def write_node(state: MigrationState) -> MigrationState:
     5. EL-M.9: Validate response from svc-ingestion
     """
 
+    if uses_go(state, "write"):
+        from ...engine.steps import go_write_node
+
+        return await go_write_node(state)
+
     migration_id = state.get("migration_id")
     intermediate_schema = state.get("intermediate_schema")
     db_session = state.get("db_session")
@@ -238,71 +333,7 @@ async def write_node(state: MigrationState) -> MigrationState:
     # ── Phase 0: DDL Execution (before GATE 3) ───────────────────────────
     # Execute DDL for any custom fields decided at Node 4 (GATE 1).
     # All statements run in a single transaction — full rollback on ANY failure.
-
-    # Build all confirmed mappings keyed by source table so CREATE TABLE DDL
-    # can include every T1+T2+human-mapped column for new tables.
-    all_mappings_by_source_table: dict[str, list[dict]] = {}
-    for tbl, mappings in state.get("tier1_mappings_by_table", {}).items():
-        all_mappings_by_source_table.setdefault(tbl, []).extend(
-            [m if isinstance(m, dict) else dict(m) for m in mappings]
-        )
-    for tbl, mappings in state.get("tier2_auto_by_table", {}).items():
-        all_mappings_by_source_table.setdefault(tbl, []).extend(
-            [m if isinstance(m, dict) else dict(m) for m in mappings]
-        )
-    for tbl, mappings in state.get("tier2_human_decisions_by_table", {}).items():
-        all_mappings_by_source_table.setdefault(tbl, []).extend(
-            [m if isinstance(m, dict) else dict(m) for m in mappings]
-        )
-
-    # ── Safety net: a custom new-column name that collides with an existing column ──────────
-    # An unmapped field offered as a "new column" can be submitted with a name that already
-    # exists on the target table (e.g. vendors.id pinned to asset_id but sent as "id", the PK).
-    # ADD COLUMN IF NOT EXISTS then no-ops and the data is silently dropped. When that happens,
-    # fall back to the field's canonical name (column_intelligence) so the column is actually
-    # created — and move the values in the cleaned records to the canonical key so they land in
-    # it. Best-effort; skipped on any error. Belt-and-suspenders on top of the gate defaulting
-    # the new-column name to the canonical.
-    try:
-        _col_canon = ((state.get("column_intelligence") or {}).get("column_canonical")) or {}
-        _custom_existing = [
-            e for e in extra_fields_config
-            if e.get("storage_strategy") == "custom" and not e.get("is_new_table")
-        ]
-        if _col_canon and _custom_existing:
-            from ...db import get_plenum_cafm_columns_by_table
-            _cols_by_tbl = await get_plenum_cafm_columns_by_table()
-            _cleaned = state.get("cleaned_tables")
-            for _e in _custom_existing:
-                _tgt = str(_e.get("target_table") or "").strip()
-                _name = str(_e.get("custom_column_name") or "").strip()
-                if not _tgt or not _name:
-                    continue
-                _existing_lower = {str(c).lower() for c in (_cols_by_tbl.get(_tgt.lower()) or set())}
-                if _name.lower() not in _existing_lower:
-                    continue  # no collision — the ADD COLUMN will create it fine
-                _src_t, _src_f = _e.get("source_table"), _e.get("source_field")
-                _canon = str(_col_canon.get(f"{_src_t}.{_src_f}") or "").strip()
-                _canon_safe = _to_safe_identifier(_canon) if _canon else ""
-                if (not _canon_safe or _canon_safe.lower() == _name.lower()
-                        or _canon_safe.lower() in _existing_lower):
-                    continue  # no usable canonical alternative
-                logger.warning(
-                    f"[Node 9] new-column '{_name}' already exists on '{_tgt}'; using canonical "
-                    f"'{_canon_safe}' for {_src_t}.{_src_f} so the column is created (not dropped)"
-                )
-                _e["custom_column_name"] = _canon_safe
-                if isinstance(_cleaned, dict) and isinstance(_cleaned.get(_src_t), list):
-                    for _row in _cleaned[_src_t]:
-                        if isinstance(_row, dict) and _name in _row and _canon_safe not in _row:
-                            _row[_canon_safe] = _row.pop(_name)
-    except Exception as _safety_exc:  # pragma: no cover — best-effort
-        logger.warning(f"[Node 9] new-column collision safety net skipped: {_safety_exc}")
-
-    ddl_statements = _build_migration_ddl_statements(
-        extra_fields_config,
-        all_mappings_by_source_table=all_mappings_by_source_table,
-    )
+    ddl_statements, _column_renames = await _ddl_statements_for(state)
 
     custom_count = sum(1 for e in extra_fields_config if e.get("storage_strategy") == "custom")
     new_table_count = sum(1 for e in extra_fields_config if e.get("is_new_table"))
@@ -374,6 +405,369 @@ async def write_node(state: MigrationState) -> MigrationState:
         return state
 
     # ── Write all confirmed field mappings to migration_field_mappings ───────
+    await _persist_field_mappings(state)
+
+    try:
+        # ── Prepare GATE 3 approval payload ──────────────────────────────
+        gate3_payload = _gate3_payload(state)
+
+        logger.info(f"[Node 9] Interrupting for GATE 3 final approval")
+        for entity_type, count in gate3_payload["summary"]["entity_counts"].items():
+            logger.info(f"[Node 9]   {entity_type}: {count}")
+
+        state["write_review_payload"] = gate3_payload
+
+        # ── Write gate payload to DB so frontend can render GATE 3 UI ──
+        if migration_id:
+            from .db_writer import write_gate_payload
+            await write_gate_payload(migration_id, "write", gate3_payload)
+
+        # ── Interrupt for customer approval ──────────────────────────
+        gate3_decision = interrupt(gate3_payload)
+
+        # ── Clear gate payload now that we have a decision ─────────────
+        if migration_id:
+            from .db_writer import clear_gate_payload
+            await clear_gate_payload(migration_id)
+
+        # ── Process GATE 3 decision ──────────────────────────────────
+        if _gate3_action(gate3_decision) != "confirm":
+            return _gate3_rejected(state)
+
+        logger.info(f"[Node 9] GATE 3 CONFIRMED - proceeding with handoff")
+
+        # ── Primary write path: apply generated SQL artifact directly ─────────
+        sql_script = (state.get("output_sql_script") or "").strip()
+        _routed = {str(v).lower() for v in (state.get("table_routing") or {}).values()}
+        _needs = _routed & _NEEDS_RESOLUTION
+        if state.get("building_id"):
+            # A building selected at upload is applied to every table the file writes to, and
+            # only the schema-aligned path applies it: the SQL artifact writes literals.
+            _needs = set(_routed)
+        # The schema-aligned path is the ONLY one that resolves a building from a site name or
+        # a meter from a supply number, so for these tables it is chosen rather than reached.
+        #
+        # It used to be reachable only from the SQL artifact's exception handler. Emptying the
+        # artifact to force it therefore did the opposite: control fell past both writes to
+        # the svc-ingestion POST below, a service this deployment does not run, and a
+        # migration that had passed every gate died with "Cannot connect to host
+        # svc-ingestion:8001" having written nothing.
+        _use_aligned = bool(_needs) and isinstance(state.get("cleaned_tables"), dict)
+        if _needs and not _use_aligned:
+            logger.warning(
+                "[Node 9] %s need reference resolution but no cleaned tables are on the state; "
+                "falling back to the SQL artifact, which writes literals",
+                ", ".join(sorted(_needs)),
+            )
+
+        if _use_aligned:
+            logger.info(
+                "[Node 9] %s need reference resolution - applying schema-aligned inserts",
+                ", ".join(sorted(_needs)),
+            )
+            try:
+                aligned_result = await _apply_records_with_schema_alignment(
+                    cleaned_tables=state.get("cleaned_tables", {}),
+                    organization_id=str(state.get("organization_id") or ""),
+                    table_routing=state.get("table_routing", {}) or {},
+                    approved_new_columns=_collect_approved_new_columns(state),
+                    confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
+                    default_building_id=state.get("building_id") or None,
+                    beat=ProgressBeat(migration_id, 90.0, 99.0),
+                )
+                state["handoff_status"] = "applied_sql_aligned"
+                state["svc_ingestion_response"] = {
+                    "status": "applied_sql_aligned",
+                    **aligned_result,
+                }
+                logger.info(
+                    "[Node 9] Schema-aligned inserts applied: "
+                    f"{aligned_result.get('rows_inserted', 0)} row(s) across "
+                    f"{aligned_result.get('tables_written', 0)} table(s), "
+                    f"{aligned_result.get('rows_skipped', 0)} skipped, "
+                    f"{aligned_result.get('buildings_linked', 0)} building link(s), "
+                    f"{aligned_result.get('meters_linked', 0)} reading(s) placed on a meter"
+                )
+            except Exception as aligned_exc:
+                # A lost connection reaches here two ways. _insert_rows raises ConnectionLost
+                # when it is the insert that died; but the first statement of the NEXT table is
+                # a read of information_schema, and if the connection went during the previous
+                # table that read is what fails, with PendingRollbackError, outside any handler
+                # that knows what it means. Both are the same event and both must say so.
+                if isinstance(aligned_exc, ConnectionLost) or _is_connection_lost(aligned_exc):
+                    logger.error(
+                        f"[Node 9] The database connection closed mid-write: {aligned_exc}"
+                    )
+                    state["error_message"] = _connection_lost_message(str(aligned_exc))
+                    state["error_node"] = 9
+                    state["el_m9_passed"] = False
+                    return state
+                logger.exception(f"[Node 9] Schema-aligned inserts failed: {aligned_exc}")
+                state["error_message"] = f"Schema-aligned write failed: {str(aligned_exc)[:300]}"
+                state["error_node"] = 9
+                state["el_m9_passed"] = False
+                return state
+        elif sql_script:
+            logger.info("[Node 9] Applying output SQL artifact directly to target DB")
+            try:
+                sql_apply_result = await _apply_sql_artifact(
+                    sql_script, beat=ProgressBeat(migration_id, 90.0, 99.0))
+                state["handoff_status"] = "applied_sql"
+                state["svc_ingestion_response"] = {
+                    "status": "applied_sql",
+                    **sql_apply_result,
+                }
+                logger.info(
+                    "[Node 9] ✓ SQL artifact applied: "
+                    f"{sql_apply_result['statement_count']} statement(s)"
+                )
+            except Exception as e:
+                # Primary SQL artifact uses schema-mapper canonical names which may
+                # not match the target DB schema. Always fall back to schema-aligned
+                # inserts from cleaned_tables when they are available.
+                logger.warning(
+                    f"[Node 9] SQL artifact failed ({type(e).__name__}: "
+                    f"{str(e)[:150]}); trying schema-aligned inserts"
+                )
+                if isinstance(state.get("cleaned_tables"), dict):
+                    try:
+                        aligned_result = await _apply_records_with_schema_alignment(
+                            cleaned_tables=state.get("cleaned_tables", {}),
+                            organization_id=str(state.get("organization_id") or ""),
+                            table_routing=state.get("table_routing", {}) or {},
+                            approved_new_columns=_collect_approved_new_columns(state),
+                            confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
+                            default_building_id=state.get("building_id") or None,
+                            beat=ProgressBeat(migration_id, 90.0, 99.0),
+                        )
+                        state["handoff_status"] = "applied_sql_aligned"
+                        state["svc_ingestion_response"] = {
+                            "status": "applied_sql_aligned",
+                            **aligned_result,
+                        }
+                        logger.info(
+                            "[Node 9] ✓ Schema-aligned inserts applied: "
+                            f"{aligned_result.get('rows_inserted', 0)} row(s) across "
+                            f"{aligned_result.get('tables_written', 0)} table(s), "
+                            f"{aligned_result.get('rows_skipped', 0)} skipped, "
+                            f"{aligned_result.get('rows_merged', 0)} merged, "
+                            f"{aligned_result.get('buildings_linked', 0)} building link(s)"
+                        )
+                    except Exception as aligned_exc:
+                        logger.exception(
+                            f"[Node 9] Schema-aligned fallback also failed: {aligned_exc}"
+                        )
+                        state["error_message"] = (
+                            f"SQL artifact failed ({type(e).__name__}): {str(e)[:200]}; "
+                            f"schema-aligned fallback failed: {str(aligned_exc)[:200]}"
+                        )
+                        state["error_node"] = 9
+                        state["el_m9_passed"] = False
+                        return state
+                else:
+                    logger.error(
+                        f"[Node 9] SQL artifact failed and no cleaned_tables for fallback: {e}"
+                    )
+                    state["error_message"] = f"SQL artifact apply failed: {str(e)[:300]}"
+                    state["error_node"] = 9
+                    state["el_m9_passed"] = False
+                    return state
+        else:
+            # ── Fallback: POST to svc-ingestion when SQL artifact is unavailable ─
+            svc_ingestion_url = await _get_svc_ingestion_url()
+            endpoint = f"{svc_ingestion_url}/api/ingest"
+
+            logger.info(f"[Node 9] SQL artifact missing; POSTing IntermediateSchema to {endpoint}")
+
+            try:
+                response_json = await _post_to_svc_ingestion(
+                    endpoint=endpoint,
+                    payload=intermediate_schema
+                )
+
+                logger.info(f"[Node 9] ✓ svc-ingestion accepted")
+                state["handoff_status"] = "sent"
+                state["svc_ingestion_response"] = response_json
+
+            except Exception as e:
+                logger.exception(f"[Node 9] Failed to POST to svc-ingestion: {e}")
+                state["error_message"] = f"svc-ingestion handoff failed: {str(e)}"
+                state["error_node"] = 9
+                state["el_m9_passed"] = False
+                return state
+
+        return await _finish_successful_write(state)
+
+    except GraphInterrupt:
+        raise
+
+    except Exception as e:
+        logger.exception(f"[Node 9] Unhandled exception: {e}")
+        state["error_message"] = str(e)
+        state["error_node"] = 9
+        state["error_timestamp"] = datetime.utcnow()
+        state["status"] = "failed"
+        state["el_m9_passed"] = False
+        return state
+
+
+def _base_table_for_view(view_name: str, base_tables: list[str]) -> str | None:
+    """The table a column meant for ``view_name`` should actually be added to, or None.
+
+    A view over one table has one answer. A view over a join does not, so the name decides:
+    ``contracts`` is a view over ``contract_sla_parameters`` and ``documents``, and only the
+    first shares a word with it. Singular and plural count as the same word, so "contracts"
+    matches "contract_sla_parameters". With no shared word there is no safe answer and the
+    caller keeps the values another way rather than guessing at a table.
+    """
+    bases = [b for b in (base_tables or []) if b]
+    if len(bases) == 1:
+        return bases[0]
+    if not bases:
+        return None
+
+    def words(name: str) -> set[str]:
+        return {w[:-1] if len(w) > 3 and w.endswith("s") else w
+                for w in re.split(r"[^a-z0-9]+", name.lower()) if w}
+
+    want = words(view_name)
+    scored = [(len(want & words(b)), b) for b in bases]
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    best, runner_up = scored[0], (scored[1] if len(scored) > 1 else (0, ""))
+    if best[0] == 0 or best[0] == runner_up[0]:
+        return None          # nothing shared, or two equally good homes: do not guess
+    return best[1]
+
+
+async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True) -> "tuple[list[dict], list[dict]]":
+    """The extra-field DDL the review gates asked for, and the new-column renames behind it.
+
+    Returns ``(ddl_statements, column_renames)``. ``column_renames`` is always empty now: the
+    collision renames are decided once in preprocess (move_new_columns_off_existing_columns), so
+    the rows already carry the final names; the pair and ``rename_rows`` stay for the engine
+    bridge's job shape.
+    """
+    extra_fields_config: list[ExtraFieldConfig] = state.get("extra_fields_config", [])
+    column_renames: list[dict] = []
+    # Build all confirmed mappings keyed by source table so CREATE TABLE DDL
+    # can include every T1+T2+human-mapped column for new tables.
+    all_mappings_by_source_table: dict[str, list[dict]] = {}
+    for tbl, mappings in state.get("tier1_mappings_by_table", {}).items():
+        all_mappings_by_source_table.setdefault(tbl, []).extend(
+            [m if isinstance(m, dict) else dict(m) for m in mappings]
+        )
+    for tbl, mappings in state.get("tier2_auto_by_table", {}).items():
+        all_mappings_by_source_table.setdefault(tbl, []).extend(
+            [m if isinstance(m, dict) else dict(m) for m in mappings]
+        )
+    for tbl, mappings in state.get("tier2_human_decisions_by_table", {}).items():
+        all_mappings_by_source_table.setdefault(tbl, []).extend(
+            [m if isinstance(m, dict) else dict(m) for m in mappings]
+        )
+
+    # The new-column collision check used to run here. It runs in preprocess now
+    # (move_new_columns_off_existing_columns): this node runs its DDL before the write gate and
+    # again from the top on resume, and on that second pass every column it had just created
+    # looked like a collision, so the data moved to the canonical name (29 Oct 2026).
+
+    # ── Safety net: a target that is a view, not a table ───────────────────────────────────
+    # ALTER TABLE ... ADD COLUMN on a view fails ("not supported for views"), and every
+    # statement here runs inside one transaction, so that single failure undoes the whole
+    # migration: a run that routed a new column to plenum_cafm.contracts — a view over
+    # contract_sla_parameters — died at statement 14 of 29 with the first 13 rolled back.
+    # A view has real tables underneath it, so the column goes to the one the field belongs
+    # to. When no base table is clearly its home the field falls back to raw_metadata, which
+    # is where this platform already puts what it cannot place: the values survive, the
+    # migration finishes, and the log says what moved where.
+    try:
+        from ...db import get_plenum_cafm_views
+        _views = await get_plenum_cafm_views()
+        _custom_on_views = [
+            e for e in extra_fields_config
+            if e.get("storage_strategy") == "custom" and not e.get("is_new_table")
+            and str(e.get("target_table") or "").strip().lower() in _views
+        ]
+        for _e in _custom_on_views:
+            _tgt = str(_e.get("target_table") or "").strip()
+            _col = str(_e.get("custom_column_name") or "")
+            _home = _base_table_for_view(_tgt, _views.get(_tgt.lower()) or [])
+            if _home:
+                logger.warning(
+                    f"[Node 9] '{_tgt}' is a view, which takes no DDL; adding column '{_col}' "
+                    f"to its base table '{_home}' instead"
+                )
+                _e["target_table"] = _home
+            else:
+                logger.warning(
+                    f"[Node 9] '{_tgt}' is a view over {_views.get(_tgt.lower()) or 'nothing named'} "
+                    f"with no single home for '{_col}'; keeping it in raw_metadata instead of DDL"
+                )
+                _e["storage_strategy"] = "raw_metadata"
+    except Exception as _view_exc:  # pragma: no cover — best-effort
+        logger.warning(f"[Node 9] view-target safety net skipped: {_view_exc}")
+
+    ddl_statements = _build_migration_ddl_statements(
+        extra_fields_config,
+        all_mappings_by_source_table=all_mappings_by_source_table,
+    )
+    return ddl_statements, column_renames
+
+
+
+async def move_new_columns_off_existing_columns(state: MigrationState) -> "list[dict]":
+    """Move a custom new-column name that collides with a column the destination ALREADY has to
+    the field's canonical name, in ``extra_fields_config``. Returns ``[{"table", "from", "to"}]``.
+
+    An unmapped field offered as a "new column" can be submitted with a name that already exists
+    on the target table (e.g. vendors.id pinned to asset_id but sent as "id", the PK). ADD COLUMN
+    IF NOT EXISTS then no-ops and the data is silently dropped, so the canonical name
+    (column_intelligence) is used instead. Called by preprocess, before the rows are renamed and
+    before any DDL of this run exists — so "already has" means the destination's own columns,
+    never one this run created. Best-effort; skipped on any error.
+    """
+    renames: list[dict] = []
+    try:
+        extra_fields_config = state.get("extra_fields_config") or []
+        _col_canon = ((state.get("column_intelligence") or {}).get("column_canonical")) or {}
+        _custom_existing = [
+            e for e in extra_fields_config
+            if isinstance(e, dict) and e.get("storage_strategy") == "custom" and not e.get("is_new_table")
+        ]
+        if not _col_canon or not _custom_existing:
+            return renames
+        from ...db import get_plenum_cafm_columns_by_table
+        _cols_by_tbl = await get_plenum_cafm_columns_by_table()
+        for _e in _custom_existing:
+            _tgt = str(_e.get("target_table") or "").strip()
+            _name = str(_e.get("custom_column_name") or "").strip()
+            if not _tgt or not _name:
+                continue
+            _existing_lower = {str(c).lower() for c in (_cols_by_tbl.get(_tgt.lower()) or set())}
+            if _name.lower() not in _existing_lower:
+                continue  # no collision — the ADD COLUMN will create it fine
+            _src_t, _src_f = _e.get("source_table"), _e.get("source_field")
+            _canon = str(_col_canon.get(f"{_src_t}.{_src_f}") or "").strip()
+            _canon_safe = _to_safe_identifier(_canon) if _canon else ""
+            if (not _canon_safe or _canon_safe.lower() == _name.lower()
+                    or _canon_safe.lower() in _existing_lower):
+                continue  # no usable canonical alternative
+            logger.warning(
+                f"[Node 5] new-column '{_name}' already exists on '{_tgt}'; using canonical "
+                f"'{_canon_safe}' for {_src_t}.{_src_f} so the column is created (not dropped)"
+            )
+            _e["custom_column_name"] = _canon_safe
+            renames.append({"table": str(_src_t), "from": _name, "to": _canon_safe})
+    except Exception as _safety_exc:  # pragma: no cover — best-effort
+        logger.warning(f"[Node 5] new-column collision check skipped: {_safety_exc}")
+    return renames
+
+
+async def _persist_field_mappings(state: MigrationState) -> None:
+    """Write every confirmed field mapping to migration_field_mappings (non-fatal on failure).
+
+    This is the ONLY place mappings are persisted. Gates 0/1/2 only update in-memory state.
+    """
+    migration_id = state.get("migration_id")
     # This is the ONLY place mappings are persisted. Gates 0/1/2 only update
     # in-memory state; the DB write happens here once, after everything is confirmed.
     if migration_id:
@@ -447,243 +841,158 @@ async def write_node(state: MigrationState) -> MigrationState:
             logger.error(f"[Node 9] Failed to write field mappings (non-fatal): {map_err}")
             # Non-fatal — handoff can still proceed
 
-    try:
-        # ── Prepare GATE 3 approval payload ──────────────────────────────
+
+
+def _gate3_payload(state: MigrationState, entity_counts: "dict | None" = None) -> dict:
+    """The write gate's payload: what the run is about to write. ``entity_counts`` overrides the
+    counts read from the intermediate schema (the engine reports its own)."""
+    intermediate_schema = state.get("intermediate_schema") or {}
+    if entity_counts is None:
         entity_counts = {}
-        for entity_type, records in intermediate_schema.get("entities", {}).items():
+        for entity_type, records in (intermediate_schema.get("entities") or {}).items():
             if records:
                 entity_counts[entity_type] = len(records)
+    return {
+        "migration_id": state.get("migration_id"),
+        "summary": {
+            "source_type": intermediate_schema.get("source_type"),
+            "source_filename": intermediate_schema.get("source_filename"),
+            "overall_confidence": (intermediate_schema.get("confidence") or {}).get("eval_score", 0),
+            "entity_counts": entity_counts,
+            "total_entities": sum(entity_counts.values()),
+        },
+        "instructions": (
+            "Review the migration summary. Click CONFIRM to send to svc-ingestion or REJECT to return for corrections."
+        ),
+    }
 
-        gate3_payload = {
-            "migration_id": migration_id,
-            "summary": {
-                "source_type": intermediate_schema.get("source_type"),
-                "source_filename": intermediate_schema.get("source_filename"),
-                "overall_confidence": intermediate_schema.get("confidence", {}).get("eval_score", 0),
-                "entity_counts": entity_counts,
-                "total_entities": sum(entity_counts.values()),
-            },
-            "instructions": (
-                "Review the migration summary. Click CONFIRM to send to svc-ingestion or REJECT to return for corrections."
-            ),
-        }
 
-        logger.info(f"[Node 9] Interrupting for GATE 3 final approval")
-        for entity_type, count in entity_counts.items():
-            logger.info(f"[Node 9]   {entity_type}: {count}")
+def _gate3_action(decision) -> str:
+    """Frontend sends { confirmed: true/false }; legacy format uses { action: "confirm" }."""
+    decision = decision or {}
+    if "confirmed" in decision:
+        return "confirm" if decision.get("confirmed") else "reject"
+    return decision.get("action", "reject")
 
-        state["write_review_payload"] = gate3_payload
 
-        # ── Write gate payload to DB so frontend can render GATE 3 UI ──
-        if migration_id:
-            from .db_writer import write_gate_payload
-            await write_gate_payload(migration_id, "write", gate3_payload)
+def _gate3_rejected(state: MigrationState) -> MigrationState:
+    logger.warning(f"[Node 9] GATE 3 REJECTED by customer")
+    state["handoff_status"] = "rejected"
+    state["error_message"] = "Customer rejected handoff at GATE 3"
+    state["current_step"] = 9
+    state.setdefault("event_log", []).append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "event": "gate3_rejected",
+        "node": 9,
+        "detail": "Customer rejected IntermediateSchema"
+    })
+    return state
 
-        # ── Interrupt for customer approval ──────────────────────────
-        gate3_decision = interrupt(gate3_payload)
 
-        # ── Clear gate payload now that we have a decision ─────────────
-        if migration_id:
-            from .db_writer import clear_gate_payload
-            await clear_gate_payload(migration_id)
+def _connection_lost_message(detail: str) -> str:
+    return (
+        "The database connection closed part way through the write, so the run "
+        "stopped. Nothing partial was kept. This is the connection, not the "
+        f"file — try the same upload again. ({str(detail)[:160]})"
+    )
 
-        # ── Process GATE 3 decision ──────────────────────────────────
-        # Frontend sends { confirmed: true/false }; legacy format uses { action: "confirm" }
-        if "confirmed" in gate3_decision:
-            action = "confirm" if gate3_decision.get("confirmed") else "reject"
-        else:
-            action = gate3_decision.get("action", "reject")
 
-        if action != "confirm":
-            logger.warning(f"[Node 9] GATE 3 REJECTED by customer")
-            state["handoff_status"] = "rejected"
-            state["error_message"] = "Customer rejected handoff at GATE 3"
-            state["current_step"] = 9
-            state["event_log"].append({
-                "timestamp": datetime.utcnow().isoformat(),
-                "event": "gate3_rejected",
-                "node": 9,
-                "detail": "Customer rejected IntermediateSchema"
-            })
-            return state
-
-        logger.info(f"[Node 9] GATE 3 CONFIRMED - proceeding with handoff")
-
-        # ── Primary write path: apply generated SQL artifact directly ─────────
-        sql_script = (state.get("output_sql_script") or "").strip()
-        if sql_script:
-            logger.info("[Node 9] Applying output SQL artifact directly to target DB")
-            try:
-                sql_apply_result = await _apply_sql_artifact(sql_script)
-                state["handoff_status"] = "applied_sql"
-                state["svc_ingestion_response"] = {
-                    "status": "applied_sql",
-                    **sql_apply_result,
-                }
-                logger.info(
-                    "[Node 9] ✓ SQL artifact applied: "
-                    f"{sql_apply_result['statement_count']} statement(s)"
-                )
-            except Exception as e:
-                # Primary SQL artifact uses schema-mapper canonical names which may
-                # not match the target DB schema. Always fall back to schema-aligned
-                # inserts from cleaned_tables when they are available.
-                logger.warning(
-                    f"[Node 9] SQL artifact failed ({type(e).__name__}: "
-                    f"{str(e)[:150]}); trying schema-aligned inserts"
-                )
-                if isinstance(state.get("cleaned_tables"), dict):
-                    try:
-                        aligned_result = await _apply_records_with_schema_alignment(
-                            cleaned_tables=state.get("cleaned_tables", {}),
-                            organization_id=str(state.get("organization_id") or ""),
-                            table_routing=state.get("table_routing", {}) or {},
-                            approved_new_columns=_collect_approved_new_columns(state),
-                            confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
-                        )
-                        state["handoff_status"] = "applied_sql_aligned"
-                        state["svc_ingestion_response"] = {
-                            "status": "applied_sql_aligned",
-                            **aligned_result,
-                        }
-                        logger.info(
-                            "[Node 9] ✓ Schema-aligned inserts applied: "
-                            f"{aligned_result.get('rows_inserted', 0)} row(s) across "
-                            f"{aligned_result.get('tables_written', 0)} table(s), "
-                            f"{aligned_result.get('rows_skipped', 0)} skipped"
-                        )
-                    except Exception as aligned_exc:
-                        logger.exception(
-                            f"[Node 9] Schema-aligned fallback also failed: {aligned_exc}"
-                        )
-                        state["error_message"] = (
-                            f"SQL artifact failed ({type(e).__name__}): {str(e)[:200]}; "
-                            f"schema-aligned fallback failed: {str(aligned_exc)[:200]}"
-                        )
-                        state["error_node"] = 9
-                        state["el_m9_passed"] = False
-                        return state
-                else:
-                    logger.error(
-                        f"[Node 9] SQL artifact failed and no cleaned_tables for fallback: {e}"
-                    )
-                    state["error_message"] = f"SQL artifact apply failed: {str(e)[:300]}"
-                    state["error_node"] = 9
-                    state["el_m9_passed"] = False
-                    return state
-        else:
-            # ── Fallback: POST to svc-ingestion when SQL artifact is unavailable ─
-            svc_ingestion_url = await _get_svc_ingestion_url()
-            endpoint = f"{svc_ingestion_url}/api/ingest"
-
-            logger.info(f"[Node 9] SQL artifact missing; POSTing IntermediateSchema to {endpoint}")
-
-            try:
-                response_json = await _post_to_svc_ingestion(
-                    endpoint=endpoint,
-                    payload=intermediate_schema
-                )
-
-                logger.info(f"[Node 9] ✓ svc-ingestion accepted")
-                state["handoff_status"] = "sent"
-                state["svc_ingestion_response"] = response_json
-
-            except Exception as e:
-                logger.exception(f"[Node 9] Failed to POST to svc-ingestion: {e}")
-                state["error_message"] = f"svc-ingestion handoff failed: {str(e)}"
-                state["error_node"] = 9
-                state["el_m9_passed"] = False
-                return state
-
-        # ── EL-M.9 Validation ────────────────────────────────────────
-        if state.get("handoff_status") not in [
-            "sent",
-            "acknowledged",
-            "applied_sql",
-            "applied_sql_aligned",
-        ]:
-            logger.error("[Node 9] EL-M.9 FAILED: svc-ingestion did not acknowledge")
-            state["el_m9_passed"] = False
-            return state
-
-        state["el_m9_passed"] = True
-        logger.info("[Node 9] EL-M.9 PASSED: IntermediateSchema sent and acknowledged")
-
-        # ── Update migration_jobs database record ──────────────────────
-        try:
-            session_factory = get_async_session_factory()
-            async with session_factory() as session:
-                db_migration = await session.get(MigrationJob, migration_id)
-                if db_migration:
-                    db_migration.status = "complete"
-                    db_migration.completed_at = datetime.utcnow()
-                    db_migration.output_json_url = state.get("output_json_url")
-                    db_migration.output_csv_url = state.get("output_csv_url")
-                    db_migration.output_sql_url = state.get("output_sql_url")
-                    db_migration.output_structure_md_url = state.get("output_structure_md_url")
-                    db_migration.migration_report_url = state.get("migration_report_url")
-                    db_migration.progress_pct = 100.0
-                    await session.commit()
-                    logger.info(f"[Node 9] Updated migration_jobs: status=complete")
-                else:
-                    logger.warning(f"[Node 9] Migration record {migration_id} not found in DB")
-
-        except Exception as e:
-            logger.exception(f"[Node 9] Failed to update migration_jobs: {e}")
-            # Continue anyway — state is already updated
-            state["error_message"] = f"DB update failed (handoff sent): {str(e)}"
-
-        # ── Mark migration complete ──────────────────────────────────
-        state["status"] = "complete"
-        state["current_step"] = 9
-        append_event(
-            state,
-            node_id=9,
-            node_name="write_node",
-            event="node_complete",
-            status="completed",
-            outcome=f"Migration written — handoff {state.get('handoff_status')}",
-            detail=f"Handoff to svc-ingestion: {state.get('handoff_status')}",
-        )
-
-        logger.info(f"[Node 9] ═══════════════════════════════════════════")
-        logger.info(f"[Node 9] ✓ MIGRATION COMPLETE")
-        logger.info(f"[Node 9] Status: {state.get('handoff_status')}")
-
-        if migration_id:
-            from .db_writer import update_node_progress
-            await update_node_progress(
-                migration_id, "9_complete",
-                status="complete",
-            )
-
-        # ── Save updated registry snapshot to DB ─────────────────────────────
-        # Persists any newly learned aliases from this migration run so that
-        # future startups load them from the DB cache instead of introspecting.
-        try:
-            from ...services.registry_cache import save_new_version, compute_schema_hash
-            from ...config import get_settings as _get_settings
-            _db_url = _get_settings().db_url
-            _mapper = state.get("mapper_config", {})
-            _hash = compute_schema_hash(_mapper.get("canonical_fields", {}))
-            _ver = await save_new_version(_db_url, _mapper, _hash)
-            logger.info(f"[Node 9] Registry snapshot saved as v{_ver}")
-        except Exception as _reg_exc:
-            logger.warning(f"[Node 9] Registry snapshot save failed (non-fatal): {_reg_exc}")
-
-        return state
-
-    except GraphInterrupt:
-        raise
-
-    except Exception as e:
-        logger.exception(f"[Node 9] Unhandled exception: {e}")
-        state["error_message"] = str(e)
-        state["error_node"] = 9
-        state["error_timestamp"] = datetime.utcnow()
-        state["status"] = "failed"
+async def _finish_successful_write(state: MigrationState) -> MigrationState:
+    """After the rows are written: EL-M.9, the migration_jobs row, status complete, the closing
+    event and progress, and the registry snapshot."""
+    migration_id = state.get("migration_id")
+    # ── EL-M.9 Validation ────────────────────────────────────────
+    if state.get("handoff_status") not in [
+        "sent",
+        "acknowledged",
+        "applied_sql",
+        "applied_sql_aligned",
+    ]:
+        logger.error("[Node 9] EL-M.9 FAILED: svc-ingestion did not acknowledge")
         state["el_m9_passed"] = False
         return state
+
+    state["el_m9_passed"] = True
+    logger.info("[Node 9] EL-M.9 PASSED: IntermediateSchema sent and acknowledged")
+
+    # The demoted FKs' lookup tables. The SQL-artifact path already ran their B22.1 block.
+    if state.get("handoff_status") == "applied_sql_aligned":
+        try:
+            _lookups = await _write_shared_attribute_lookups(state)
+            if _lookups:
+                logger.info(f"[Node 9] Shared-attribute lookup tables written: {_lookups}")
+                append_event(
+                    state, node_id=9, node_name="write_node", event="lookup_tables_written",
+                    status="completed",
+                    outcome=f"{len(_lookups)} lookup table(s) for demoted foreign keys",
+                    detail=", ".join(f"{x['table']} ({x['values']} values)" for x in _lookups),
+                )
+        except Exception as _lk_exc:  # the rows are written; a lookup must not undo the run
+            logger.warning(f"[Node 9] Shared-attribute lookup tables not written: {_lk_exc}")
+
+    # ── Update migration_jobs database record ──────────────────────
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            db_migration = await session.get(MigrationJob, migration_id)
+            if db_migration:
+                db_migration.status = "complete"
+                db_migration.completed_at = datetime.utcnow()
+                db_migration.output_json_url = state.get("output_json_url")
+                db_migration.output_csv_url = state.get("output_csv_url")
+                db_migration.output_sql_url = state.get("output_sql_url")
+                db_migration.output_structure_md_url = state.get("output_structure_md_url")
+                db_migration.migration_report_url = state.get("migration_report_url")
+                db_migration.progress_pct = 100.0
+                await session.commit()
+                logger.info(f"[Node 9] Updated migration_jobs: status=complete")
+            else:
+                logger.warning(f"[Node 9] Migration record {migration_id} not found in DB")
+
+    except Exception as e:
+        logger.exception(f"[Node 9] Failed to update migration_jobs: {e}")
+        # Continue anyway — state is already updated
+        state["error_message"] = f"DB update failed (handoff sent): {str(e)}"
+
+    # ── Mark migration complete ──────────────────────────────────
+    state["status"] = "complete"
+    state["current_step"] = 9
+    append_event(
+        state,
+        node_id=9,
+        node_name="write_node",
+        event="node_complete",
+        status="completed",
+        outcome=f"Migration written — handoff {state.get('handoff_status')}",
+        detail=f"Handoff to svc-ingestion: {state.get('handoff_status')}",
+    )
+
+    logger.info(f"[Node 9] ═══════════════════════════════════════════")
+    logger.info(f"[Node 9] ✓ MIGRATION COMPLETE")
+    logger.info(f"[Node 9] Status: {state.get('handoff_status')}")
+
+    if migration_id:
+        from .db_writer import update_node_progress
+        await update_node_progress(
+            migration_id, "9_complete",
+            status="complete",
+        )
+
+    # ── Save updated registry snapshot to DB ─────────────────────────────
+    # Persists any newly learned aliases from this migration run so that
+    # future startups load them from the DB cache instead of introspecting.
+    try:
+        from ...services.registry_cache import save_new_version, compute_schema_hash
+        from ...config import get_settings as _get_settings
+        _db_url = _get_settings().db_url
+        _mapper = state.get("mapper_config", {})
+        _hash = compute_schema_hash(_mapper.get("canonical_fields", {}))
+        _ver = await save_new_version(_db_url, _mapper, _hash)
+        logger.info(f"[Node 9] Registry snapshot saved as v{_ver}")
+    except Exception as _reg_exc:
+        logger.warning(f"[Node 9] Registry snapshot save failed (non-fatal): {_reg_exc}")
+
+    return state
 
 
 async def _get_svc_ingestion_url() -> str:
@@ -784,19 +1093,24 @@ def _split_sql_statements(sql_script: str) -> list[str]:
     return cleaned
 
 
-async def _apply_sql_artifact(sql_script: str) -> dict:
+async def _apply_sql_artifact(sql_script: str, beat=None) -> dict:
     """
-    Execute generated SQL artifact inside one transaction.
+    Execute generated SQL artifact inside one transaction. ``beat`` (a ProgressBeat) counts
+    each statement, so a script of 290k INSERTs is not minutes of silence on the run card.
     """
     statements = _split_sql_statements(sql_script)
     if not statements:
         raise Exception("output.sql is empty or contains no executable statements")
+    if beat is not None:
+        beat.total = len(statements)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
         try:
             for stmt in statements:
                 await session.execute(text(stmt))
+                if beat is not None:
+                    await beat.advance(1)
             await session.commit()
         except Exception:
             await session.rollback()
@@ -834,8 +1148,10 @@ def _normalize_row_for_table(table_name: str, row: dict, organization_id: str) -
             else:
                 normalized.pop("asset_type")
 
-        # FK columns that require UUID resolution — cannot be filled from a text
-        # value at write time, so drop them rather than creating phantom columns.
+        # FK columns that need UUID resolution are not written as text. The site / building
+        # reference is NOT lost, though: _apply_records_with_schema_alignment reads it off the
+        # raw row (building_link.building_hint) and resolves it to buildings.building_id before
+        # the insert — the ten building-less assets of 21 Sep 2026 came from dropping it here.
         for _fk_col in ("site_id", "location", "location_code", "category"):
             normalized.pop(_fk_col, None)
 
@@ -870,6 +1186,41 @@ def _normalize_row_for_table(table_name: str, row: dict, organization_id: str) -
             normalized["type"] = normalized.get("site_type")
         if not normalized.get("type"):
             normalized["type"] = "site"
+    elif t == "energy_meters":
+        # meter_type is NOT NULL with no default, so a meter sheet that does not carry one
+        # fails every row before it ever reaches the building link. Read the fuel the sheet
+        # states, or infer it from which supply number is present — the same rule the chat
+        # upload path uses, so the two agree about what a row is.
+        _mpan, _mprn = supply_numbers(row)
+        if _mpan and not normalized.get("mpan"):
+            normalized["mpan"] = _mpan
+        if _mprn and not normalized.get("mprn"):
+            normalized["mprn"] = _mprn
+        if not normalized.get("meter_type"):
+            normalized["meter_type"] = meter_type_for(row)
+        # Source spellings that have now been read into a real column. Left in place they
+        # would be proposed as new columns on the table.
+        for _k in ("fuel", "fuel_type", "supply_type", "utility", "commodity", "energy_type",
+                   "mpan_mprn", "meter_ref", "meter_reference", "supply_number",
+                   "meter_number", "msn"):
+            normalized.pop(_k, None)
+    elif t == "meter_readings":
+        # The meter itself is resolved in the writer, which has the session. Only the column
+        # names are canonicalised here.
+        for _src, _dst in (("timestamp", "reading_at"), ("read_at", "reading_at"),
+                           ("datetime", "reading_at"), ("reading_date", "reading_at"),
+                           ("kwh", "consumption_kwh"), ("consumption", "consumption_kwh"),
+                           ("usage", "consumption_kwh"), ("value", "consumption_kwh")):
+            if _src not in normalized:
+                continue
+            if not normalized.get(_dst):
+                normalized[_dst] = normalized.pop(_src)
+            else:
+                normalized.pop(_src, None)
+        # The reference the meter was named by; it is resolved to meter_id, not stored.
+        for _k in ("mpan", "mprn", "mpan_mprn", "meter_ref", "meter_reference",
+                   "supply_number", "meter_number", "msn", "meter"):
+            normalized.pop(_k, None)
     elif t == "work_orders":
         # work_order_id is NOT NULL in the actual DB schema — map from any available code.
         if not normalized.get("work_order_id"):
@@ -906,15 +1257,174 @@ def _infer_sql_type_for_value(value: object) -> str:
 
 def _to_safe_identifier(raw: str) -> str | None:
     """
-    Normalize and validate SQL identifier for dynamic column creation.
+    Normalize SQL identifier for dynamic column creation: a reserved word, a leading digit or an
+    over-long name is repaired (sql_identifiers), None only when no letter or digit is left.
     """
-    if raw is None:
-        return None
-    normalized = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
-    normalized = re.sub(r"[^a-z0-9_]", "", normalized)
-    if not _SAFE_SQL_IDENT.match(normalized):
-        return None
-    return normalized
+    return safe_identifier(raw)
+
+
+def new_table_name(raw: str, view_names: "set[str]") -> str:
+    """The name a NEW destination table is created under: the safe identifier of ``raw``, moved
+    to ``<name>_register`` when a plenum_cafm view already has that name or it is a word
+    PostgreSQL reserves ("Order" → order_register, never a person's job to rename).
+
+    CREATE TABLE IF NOT EXISTS on a view's name skips with a NOTICE and every row then fails on
+    "cannot insert into view" — an "Invoices" sheet against plenum_cafm.invoices (29 Oct 2026).
+    """
+    if clean(raw or "") in RESERVED_WORDS:
+        return repair(clean(raw), reserved_suffix="_register")
+    name = _to_safe_identifier(raw) or str(raw or "").strip()
+    if name.lower() in {str(v).lower() for v in (view_names or ())}:
+        return f"{name}_register"
+    return name
+
+
+#: Consecutive per-row failures of the same kind before a table is abandoned.
+#:
+#: The per-row fallback exists to make ONE bad row cost its own row. It is not a way to discover
+#: that every row is bad. When the fault is structural — a required column the run could not
+#: resolve — every row fails identically, and retrying is just a slow way to reach the answer
+#: the first row already gave. Measured on 23 Sep 2026: 35,040 meter readings with a null
+#: meter_id, each one inserted, rejected and rolled back at about fifteen a second, holding a
+#: transaction open for forty minutes to insert nothing.
+#:
+#: Generous enough that a genuinely dirty file still gets its rows in: a hundred consecutive
+#: failures of the SAME error is not dirt, it is the shape of the data being wrong.
+_MAX_CONSECUTIVE_ROW_FAILURES = 100
+
+#: How many rows go to the database in one statement.
+#:
+#: Row at a time is three round trips each and this path routinely carries a year of
+#: half-hourly readings. Batching is not a speed nicety here: the connection was being held
+#: open long enough for the server to close it mid-write.
+_WRITE_CHUNK = 500
+
+#: What a dead connection or a poisoned transaction looks like, whatever raised it.
+_CONNECTION_LOST_SIGNS = (
+    "connection was closed",
+    "connection is closed",
+    "server closed the connection",
+    "terminating connection",
+    "invalid transaction is rolled back",
+    "connection does not exist",
+    "cannot perform operation: another operation is in progress",
+)
+
+
+class ConnectionLost(RuntimeError):
+    """The database went away. Not a bad row, and not something to retry per row."""
+
+
+def _is_connection_lost(exc: BaseException) -> bool:
+    text_ = str(exc).lower()
+    return any(sign in text_ for sign in _CONNECTION_LOST_SIGNS)
+
+
+async def _insert_rows(
+    session: AsyncSession,
+    *,
+    schema_name: str,
+    table_name: str,
+    pending: list[tuple[dict, str, dict]],
+    unique_sets: set[frozenset] | None,
+    nullable_cols: set[str],
+    beat=None,
+) -> dict:
+    """Insert a batch in as few round trips as the data allows.
+
+    Rows that share a column set share a statement, so they go in one executemany. A batch
+    that fails is retried a row at a time, so one bad row costs its own row rather than the
+    other four hundred and ninety-nine — and only then is the orphan-foreign-key retry worth
+    doing, because it needs to know which row it was.
+
+    Raises ConnectionLost rather than reporting skipped rows when the database has gone. The
+    two are not the same thing and a run that confuses them tells the reader nothing.
+    """
+    inserted = 0
+    skipped = 0
+    errors: list[str] = []
+    orphans: dict[str, int] = {}
+    #: The run of identical failures seen so far, and what it was. Reset by any success.
+    _streak = 0
+    _streak_sig: str | None = None
+    #: Set when the streak breaks the table off, so the caller can say so rather than report a
+    #: quietly short insert.
+    abandoned: str | None = None
+
+    by_stmt: dict[str, list[tuple[dict, dict]]] = {}
+    for filtered, dml_sql, params in pending:
+        by_stmt.setdefault(dml_sql, []).append((filtered, params))
+
+    for dml_sql, group in by_stmt.items():
+        try:
+            async with session.begin_nested():
+                result = await session.execute(text(dml_sql), [p for _f, p in group])
+            _n = int(getattr(result, "rowcount", 0) or 0)
+            # executemany reports -1 on some drivers; the batch went in either way.
+            inserted += _n if _n >= 0 else len(group)
+            continue
+        except Exception as batch_exc:
+            if _is_connection_lost(batch_exc):
+                raise ConnectionLost(str(batch_exc)) from batch_exc
+            # Something in this batch is bad. Find out which, one row at a time.
+            pass
+
+        for filtered, params in group:
+            try:
+                async with session.begin_nested():
+                    res = await session.execute(text(dml_sql), params)
+                inserted += int(getattr(res, "rowcount", 0) or 0)
+                # A row that went in ends the streak: the file is dirty, not misshapen.
+                _streak, _streak_sig = 0, None
+                continue
+            except Exception as row_exc:
+                if _is_connection_lost(row_exc):
+                    raise ConnectionLost(str(row_exc)) from row_exc
+                # Orphan foreign key: the row points at a parent that is not there. Null the
+                # offending column IF it is nullable and retry once, so the row lands without
+                # the broken link rather than not at all. A NOT NULL foreign key cannot be
+                # nulled, so that row is skipped as before.
+                _fk_cols = _foreign_key_columns_from_error(row_exc)
+                _nullable_fk = [c for c in _fk_cols if c in nullable_cols and c in filtered]
+                if _nullable_fk:
+                    try:
+                        _retry = {k: v for k, v in filtered.items() if k not in _nullable_fk}
+                        _dml2, _p2 = _build_dml_for_row(
+                            schema_name, table_name, _retry, unique_sets
+                        )
+                        async with session.begin_nested():
+                            _res2 = await session.execute(text(_dml2), _p2)
+                        inserted += int(getattr(_res2, "rowcount", 0) or 0)
+                        for _c in _nullable_fk:
+                            orphans[_c] = orphans.get(_c, 0) + 1
+                        _streak, _streak_sig = 0, None
+                        continue
+                    except Exception as retry_exc:
+                        if _is_connection_lost(retry_exc):
+                            raise ConnectionLost(str(retry_exc)) from retry_exc
+                skipped += 1
+                if len(errors) < 20:
+                    errors.append(f"{table_name}: {str(row_exc)[:220]}")
+
+                # Same failure, over and over, is one fault rather than many rows.
+                _sig = f"{type(row_exc).__name__}:{str(row_exc)[:120]}"
+                _streak = _streak + 1 if _sig == _streak_sig else 1
+                _streak_sig = _sig
+                if _streak >= _MAX_CONSECUTIVE_ROW_FAILURES:
+                    _left = sum(len(g) for g in by_stmt.values()) - inserted - skipped
+                    abandoned = (
+                        f"{table_name}: stopped after {_streak} consecutive identical failures "
+                        f"— every row is failing the same way, so the remaining {max(_left, 0)} "
+                        f"were not attempted. Fix the cause and re-run: {str(row_exc)[:200]}"
+                    )
+                    logger.error(f"[Node 9] {abandoned}")
+                    return {"inserted": inserted, "skipped": skipped + max(_left, 0),
+                            "errors": errors, "orphans": orphans, "abandoned": abandoned}
+
+    if beat is not None:  # a ProgressBeat: the batch is done, however it went
+        await beat.advance(len(pending))
+    return {"inserted": inserted, "skipped": skipped, "errors": errors, "orphans": orphans,
+            "abandoned": abandoned}
 
 
 def _build_dml_for_row(
@@ -986,9 +1496,53 @@ def _foreign_key_columns_from_error(exc: object) -> list[str]:
 # so it is surfaced to the user for re-mapping — instead of asyncpg rejecting the WHOLE
 # row and silently losing every column of it.
 _COERCE_TYPE_MISMATCH = object()
+_NO_SYSTEM_DEFAULT = object()
 
 
-def _coerce_value_for_db_type(value: object, db_type: str) -> object:
+#: Where a sheet's own key goes when it will not fit the destination's uuid. The platform already
+#: keeps these columns for exactly this: a row that came from a workbook can be traced back to the
+#: line it came from, and a second import of the same sheet can find it again.
+_SOURCE_KEY_COLUMNS: dict[tuple, str] = {
+    ("buildings", "building_id"): "source_building_id",
+    ("buildings", "id"): "source_building_id",
+    ("buildings", "site_id"): "source_site_id",
+}
+
+
+def _is_uuid_like(text: str) -> bool:
+    """A value already in uuid form needs no register entry."""
+    try:
+        uuid.UUID(str(text))
+        return True
+    except Exception:
+        return False
+
+
+async def _enum_labels_for(session, udt_by_column: dict) -> dict:
+    """The allowed labels of each enum column, lowercased, keyed by column name.
+
+    A value the enum does not list used to take its whole row down — "Office" against
+    building_primary_use cost the building itself. With the vocabulary in hand the writer can
+    match case-insensitively first, and only set the field aside when it is genuinely not one of
+    them. Best-effort: an unreadable catalogue returns {} and the behaviour is as before.
+    """
+    if not udt_by_column:
+        return {}
+    try:
+        rs = await session.execute(
+            text("SELECT t.typname, e.enumlabel FROM pg_type t "
+                 "JOIN pg_enum e ON e.enumtypid = t.oid WHERE t.typname = ANY(:names)"),
+            {"names": sorted(set(udt_by_column.values()))})
+        by_type: dict[str, dict] = {}
+        for typname, label in rs.fetchall():
+            by_type.setdefault(str(typname), {})[str(label).strip().lower()] = str(label)
+        return {col: by_type[udt] for col, udt in udt_by_column.items() if udt in by_type}
+    except Exception:  # pragma: no cover — additive, never fatal
+        return {}
+
+
+def _coerce_value_for_db_type(value: object, db_type: str, *, max_len: int | None = None,
+                              enum_labels: dict | None = None) -> object:
     """
     Convert incoming values to the Python type asyncpg expects for ``db_type``.
 
@@ -1014,15 +1568,32 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
         if s == "":
             return None
 
+    # ── an enum: match the column's own vocabulary ──────────────────────────────────────
+    # Checked before the text branch, because an enum reports as USER-DEFINED and would
+    # otherwise fall through to the catch-all and be bound as a raw string.
+    if enum_labels:
+        want = (value if isinstance(value, str) else str(value)).strip().lower()
+        hit = enum_labels.get(want)
+        if hit is not None:
+            return hit
+        return _COERCE_TYPE_MISMATCH          # set the field aside; the row still goes in
+
     # ── text-ish: asyncpg requires a str ────────────────────────────────────────────────
     if "char" in t or "text" in t or t in {"name", "citext"}:
         if isinstance(value, str):
-            return value
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, (datetime, _date)):
-            return value.isoformat()
-        return str(value)
+            out = value
+        elif isinstance(value, bool):
+            out = "true" if value else "false"
+        elif isinstance(value, (datetime, _date)):
+            out = value.isoformat()
+        else:
+            out = str(value)
+        # Too long is not a type mismatch. Postgres rejects the whole row for one over-long
+        # cell — 65 certificates were lost to a cert_scope of 20 characters — so the value is
+        # trimmed to what the column holds and the row is written.
+        if max_len and len(out) > max_len:
+            return out[:max_len]
+        return out
 
     # "interval" contains "int" — keep it away from the integer branch below.
     if t.startswith("interval"):
@@ -1109,20 +1680,194 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
 
     # ── json / jsonb: asyncpg wants serialised text ─────────────────────────────────────
     if "json" in t:
+        import json as _json
         if isinstance(value, str):
-            return value
+            # A spreadsheet cell is prose until proven otherwise. Passing it through unchecked
+            # reached Postgres as "invalid input syntax for type json" and took the whole row
+            # with it — 137 assets lost to one condition_provenance column. Valid json goes in
+            # as it stands; anything else is stored as a json string, which is still valid json
+            # and keeps what the person wrote.
+            try:
+                _json.loads(value)
+                return value
+            except Exception:
+                return _json.dumps(value)
         try:
-            import json as _json
             return _json.dumps(value, default=str)
         except Exception:
-            return str(value)
+            return _json.dumps(str(value))
 
     # ── uuid: accept the string form ────────────────────────────────────────────────────
     if t == "uuid":
+        # Validate, like every other branch above. This used to return any string untouched,
+        # so a code that reached a uuid column got as far as asyncpg and raised DataError
+        # while BINDING the parameter. That happens before Postgres sees a statement, so the
+        # orphan-FK recovery in the writer (which reads a constraint name out of the error)
+        # could never match it, and the whole row was skipped. On 22 Sep 2026 that silently
+        # cost 160 of 195 rows in a migration the UI reported as complete.
+        #
+        # reference_link now resolves asset_id, vendor_id, contract_id and part_id before
+        # this runs, and drops the column when nothing matches — so those four can no longer
+        # arrive here as a code. This is the floor under every OTHER uuid column, which has
+        # no resolver of its own and would still lose its whole row to one bad field.
+        #
+        # Reported as a type mismatch instead: the caller drops this one field, keeps the
+        # rest of the row, and surfaces the column at the mapping gate so it can be re-mapped.
+        try:
+            uuid.UUID(str(value))
+        except (ValueError, AttributeError, TypeError):
+            return _COERCE_TYPE_MISMATCH
         return value if isinstance(value, str) else str(value)
 
     # Unknown destination type — hand it over untouched.
     return value
+
+
+# What identifies a row as "the same row" on a re-run, when the database has no unique index
+# to say so.
+#
+# _build_dml_for_row falls back to a bare ON CONFLICT DO NOTHING wherever no unique index
+# exists — but the writer mints a fresh uuid4() for `id` on every row, so there is never a PK
+# collision and the clause never fires. Assets escaped this because they have an explicit
+# merge-by-code path; nothing else did. Re-running the same workbook on 23 Sep 2026 therefore
+# left 23 assets and 16 work orders correct while duplicating vendors, inspections and
+# resources, and the Vendors list showed six entries for three firms.
+#
+# Candidate groups are tried in order; the first whose columns are ALL present in both the
+# table and the row wins. A table absent here is simply not deduped, which is the old
+# behaviour — never a guess at what "the same row" means.
+_NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
+    # A building is its code. Without this entry a Buildings sheet inserted a SECOND row for a
+    # building already on file every run — ON CONFLICT DO NOTHING cannot catch it, because `id`
+    # is a fresh uuid4() and never collides. The duplicate is not the worst of it: every
+    # building lookup afterwards found two rows for "B-101" and BuildingResolver refuses an
+    # ambiguous match, so nothing could be placed on that building for the rest of the run.
+    # On 23 Sep 2026 that cost all 35,040 meter readings in one ingest — no building meant no
+    # meter could be created, and meter_readings.meter_id is NOT NULL, so every row was rejected.
+    "buildings": (("building_code",),),
+    "compliance_certificates": (("certificate_number",),),
+    "vendors": (("vendor_code",), ("vendor_name",)),
+    "ppm_visits": (("ppm_ref",),),
+    "resources": (("engineer_id",), ("resource_code",)),
+    "spare_parts": (("part_code",),),
+    "sites": (("site_id",),),
+    "work_orders": (("wo_code",),),
+    # A section is its building and its name. Without this a second ingest of the same floor
+    # sheet wrote twelve more sections called "Level 1", "Level 2" … and the duplicates are
+    # worse than the clutter: pick_section refuses an ambiguous name, so every floor meter
+    # afterwards resolved to no section and the floor view emptied itself. building_id is
+    # resolved before this runs, so the pair is available by the time the key is read.
+    "building_sections": (("building_id", "name"), ("building_code", "name")),
+    # No reference column of its own, so a finding is identified by what it is a finding ABOUT.
+    "inspections": (("asset_code", "inspection_date", "finding_type"),),
+    # These four had no key, so every re-upload of a workbook added them again (3 Oct 2026: three
+    # Bishopsgate uploads, three copies of its contracts, bands, asset readings and plans).
+    # A contract is its vendor, its name and its start: a renewal starting later is its own
+    # contract. vendor_id / asset_id are resolved before the key is read.
+    "vendor_contracts": (("vendor_id", "contract_name", "contract_start"),),
+    # A band carries no reference of its own: it is the same band only when every column that
+    # says what it applies to matches, the asset or category it is scoped to included — a Boiler
+    # band with a Chiller band's limits is a different band. "?" marks a column that may be empty
+    # and then matches only an empty one (a band with no unit, or with one limit).
+    "asset_reading_bands": (("reading_type", "?unit", "?lo", "?hi", "?asset_id", "?asset_category"),),
+    # Workbooks stamp readings by the day, so one asset can carry a dozen readings of one type at
+    # one stamp: the value is part of what the reading is.
+    "asset_readings": (("asset_id", "reading_type", "recorded_at", "value"),),
+    # One schedule code covers every asset on that schedule: a plan is the code AND its asset.
+    "maintenance_plans": (("sm_code", "asset_id"),),
+}
+
+
+def _key_value_present(v: object) -> bool:
+    """A key column says something: not missing, not blank. 0 and False say something."""
+    return v is not None and str(v).strip() != ""
+
+
+def _natural_keys_for(table: str, row: dict, db_cols: set) -> list[tuple[tuple[str, ...], list]]:
+    """EVERY key that could identify this row as one already written.
+
+    All of them, not the first: the candidates are alternative names for the same row, and a
+    row already on file may have been created by another route that filled a different one.
+    Returning only the first got this wrong on 23 Sep 2026 — the certificate ingest had
+    created vendors with vendor_code NULL, the workbook carried vendor_code, so the lookup
+    asked for a code no existing row had, found nothing, and inserted a twin of a vendor it
+    was holding the name of.
+    """
+    out: list[tuple[tuple[str, ...], list]] = []
+    for group in _NATURAL_KEYS.get(table, ()):
+        cols = tuple(c.lstrip("?") for c in group)
+        if all(c in db_cols for c in cols) and all(
+            g.startswith("?") or _key_value_present(row.get(c)) for g, c in zip(group, cols)
+        ):
+            out.append((cols, [row.get(c) for c in cols]))
+    return out
+
+
+def _natural_key_sql(schema: str, table: str, cols: tuple, vals: list, has_org: bool,
+                     org_id: object, scales: dict[str, int]) -> tuple[str, dict]:
+    """The question _already_written asks of one key: is a row with it already on file?
+
+    An empty optional column matches only an empty one. A numeric(p,s) column holds the value
+    rounded to s places, so the value is rounded the same way before it is compared —
+    7.700000000000001 is on file as 7.7000.
+
+    A retired vendor is not "already written" (Hussain, 12 Oct 2026). Its row stays for its
+    history, so matched as before a supplier taken on again was skipped as a twin of the vendor
+    that was deleted, and the upload said nothing. See reference_link.LIVE_ROW.
+    """
+    conds = []
+    for i, (c, v) in enumerate(zip(cols, vals)):
+        if v is None:
+            conds.append(f"{c} IS NULL")
+        elif c in scales:
+            conds.append(f"{c} = round(CAST(:v{i} AS numeric), {scales[c]})")
+        else:
+            conds.append(f"{c} = :v{i}")
+    where = " AND ".join(conds)
+    params = {f"v{i}": v for i, v in enumerate(vals) if v is not None}
+    if has_org:
+        where += " AND organization_id::text = :org"
+        params["org"] = org_id
+    if table in LIVE_ROW:
+        where += f" AND {LIVE_ROW[table]}"
+    return f"SELECT 1 FROM {schema}.{table} t WHERE {where} LIMIT 1", params
+
+
+def _system_default_for_db_type(col: str, db_type: str, org_id: str | None) -> object:
+    """A value for a NOT NULL column the source cannot possibly supply.
+
+    Only ever called for columns that are NOT NULL, have no DDL default, and were not
+    present in the row. These are system/provenance fields — `conflict_flag`, `source`,
+    `raw_metadata`, `org_id` — never business data, because business data the source DOES
+    carry arrives in the row and never reaches here.
+
+    Returns _NO_SYSTEM_DEFAULT when there is no honest value to invent (a date, a name),
+    and the row is then skipped as before rather than filled with a fiction.
+    """
+    t = (db_type or "").lower()
+    c = (col or "").lower()
+    if c in {"org_id", "organization_id"} and org_id:
+        return org_id
+    # Bookkeeping timestamps: the row is being created now, so now is the honest answer. These
+    # are NOT business dates — a reading_at or a period_start the file did not carry is still
+    # refused below, because inventing when a meter was read would be a fiction. 11,525
+    # relationship rows and 769 alarms were rejected for the want of a created_at.
+    if c in {"created_at", "updated_at", "inserted_at", "modified_at", "last_updated"} and (
+            "timestamp" in t or t == "date"):
+        now = datetime.utcnow()
+        return now.date() if t == "date" else now
+    if "bool" in t:
+        return False
+    if "json" in t:
+        return "{}"
+    if c in {"source", "origin", "created_by", "source_system"}:
+        # True, and useful: it says where the row came from.
+        return "migration"
+    if "int" in t or "numeric" in t or "double" in t or "real" in t:
+        return 0
+    if "char" in t or "text" in t:
+        return ""
+    return _NO_SYSTEM_DEFAULT
 
 
 def _collect_approved_new_columns(state) -> dict[str, set[str]]:
@@ -1148,7 +1893,8 @@ def _collect_approved_new_columns(state) -> dict[str, set[str]]:
 
     def _add(tbl: object, col: object) -> None:
         _t = str(tbl or "").strip().lower()
-        _c = str(col or "").strip().lower()
+        # Under the name the writer creates it with, which every row key is also put through.
+        _c = _to_safe_identifier(col) or str(col or "").strip().lower()
         if _t and _c:
             out.setdefault(_t, set()).add(_c)
 
@@ -1169,30 +1915,260 @@ def _collect_approved_new_columns(state) -> dict[str, set[str]]:
         _add(_e.get("target_table") or _dest_for(_e.get("source_table")),
              _e.get("custom_column_name"))
 
+    # A field a later gate named (a custom column, a rename) lands under THAT name, so the B14.1
+    # "New column" name below is never filled for it and must not be created empty.
+    _named_later = {
+        (str(_e.get("source_table") or "").lower(), str(_e.get("source_field") or "").lower())
+        for _e in (state.get("extra_fields_config") or []) if isinstance(_e, dict)
+        and str(_e.get("storage_strategy") or "custom").lower() == "custom"
+        and _e.get("custom_column_name")
+    }
+    _buckets = ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table")
+    for _bucket in _buckets:
+        for _tbl, _maps in (state.get(_bucket) or {}).items():
+            for _m in _maps or []:
+                if isinstance(_m, dict) and _m.get("user_renamed"):
+                    _named_later.add((str(_tbl).lower(), str(_m.get("source_field") or "").lower()))
+
     # 2. B14.1 column-mapping gate — "New column" button.
     for _src, _cols in (state.get("column_dest_overrides") or {}).items():
         if not isinstance(_cols, dict):
             continue
         for _field, _choice in _cols.items():
-            if str(_choice) == "__new__":
+            if str(_choice) == "__new__" and (str(_src).lower(), str(_field).lower()) not in _named_later:
                 _add(_dest_for(_src), _snake_ident(_field))
 
-    # 3. Pre-semantic (Step 2) gate — columns the user assigned / created there.
-    for _bucket in ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table"):
+    # 3. Pre-semantic (Step 2) gate — columns the user assigned / created there, and every column
+    #    a person renamed at the column-matching or field-mapping gate (``user_renamed``).
+    for _bucket in _buckets:
         for _tbl, _maps in (state.get(_bucket) or {}).items():
             for _m in _maps or []:
                 if not isinstance(_m, dict):
                     continue
-                if str(_m.get("tier") or "") in {"T1_new_table", "T1_manual"}:
+                if str(_m.get("tier") or "") in {"T1_new_table", "T1_manual"} or _m.get("user_renamed"):
                     _add(_dest_for(_tbl), _m.get("target_field"))
 
     return out
 
 
+def _lookup_groups_to_write(ci: "dict | None") -> "list[dict]":
+    """The classification rows whose lookup table the write should create.
+
+    Every group that HAS one — not only the groups a person re-classified. The entry is the
+    decision: synthesize_shared_attribute_table returns None for anything that should not be
+    normalised (a yes/no flag, a date, contact data, an entity's alternate key), so a row with an
+    entry is one the classifier, or the person at the gate, asked for.
+
+    Detected shared attributes used to be "left to the SQL artifact" — a script the schema-aligned
+    write never applies — so shared_statuses and shared_currencies were shown at the gate, promised
+    in its DDL, and then never created. Requiring an entry also closes an older hole in the other
+    direction: a boolean group demoted by hand has no entry, and the previous condition would still
+    have built it a table whose primary key is "true" and "false".
+
+    A Shared Attribute promoted to FK keeps its reference table — it is what the members point at —
+    and has an entry for the same reason.
+    """
+    if not isinstance(ci, dict):
+        return []
+    entries = {str(t.get("from_group")) for t in (ci.get("shared_attribute_tables") or [])
+               if isinstance(t, dict)}
+    return [r for r in (ci.get("classification") or [])
+            if isinstance(r, dict) and str(r.get("group_id")) in entries]
+
+
+async def _write_shared_attribute_lookups(state) -> "list[dict]":
+    """The lookup table of every shared attribute that has one, built from the rows just
+    written. Returns ``[{"table", "values"}]``.
+
+    A Shared Attribute promoted to FK gets the same table: it is what the members reference.
+
+    The gate promises a demoted FK "gets a lookup table instead". That table only ever came from
+    the SQL artifact's B22.1 block, which the schema-aligned write — every run with a building,
+    every engine run — never applies, and the block has no company column. Here each lookup row
+    carries the writing company (``UNIQUE (organization_id, <attribute>)``), its values are read
+    back from that company's rows only, and a name already used by anything that is not such a
+    lookup moves to ``<name>_ref`` (the B22.1 no-clobber rule) or is skipped. Detected shared
+    attributes are created here too, rather than left to an artifact nothing applies. FK constraints are
+    not added: the B22.1 block names the SOURCE sheets, which are not tables.
+    """
+    org = str(state.get("organization_id") or "").strip()
+    ci = state.get("column_intelligence") or {}
+    entries = {str(t.get("from_group")): t for t in ((ci.get("shared_attribute_tables") or [])
+                                                     if isinstance(ci, dict) else [])
+               if isinstance(t, dict)}
+    demoted = _lookup_groups_to_write(ci)
+    if not org or not demoted:
+        return []
+    try:
+        _UUID(org)
+    except ValueError:
+        return []
+
+    from .hierarchy_node import _mapped_column_names
+
+    names = _mapped_column_names(state)
+    routing = {str(k).lower(): str(v) for k, v in (state.get("table_routing") or {}).items()}
+    factory = get_async_session_factory()
+    async with factory() as session:
+        cols_by_table: dict[str, set[str]] = {}
+        # Only text columns hold the attribute's values: a member mapped onto a reference column
+        # (Contracts.Vendor -> vendor_contracts.vendor_id) is written as the resolved UUID.
+        text_cols: set[tuple[str, str]] = set()
+        for t, c, dt in (await session.execute(text(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'plenum_cafm'"))).fetchall():
+            cols_by_table.setdefault(str(t).lower(), set()).add(str(c).lower())
+            if str(dt).lower() in ("text", "character varying", "character"):
+                text_cols.add((str(t).lower(), str(c).lower()))
+        relkinds = {str(n).lower(): str(k) for n, k in (await session.execute(text(
+            "SELECT c.relname, c.relkind::text FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'plenum_cafm'"
+        ))).fetchall()}
+
+    written: list[dict] = []
+    for row in demoted:
+        entry = entries.get(str(row.get("group_id"))) or {}
+        pk = _to_safe_identifier(row.get("canonical_name") or entry.get("pk_column") or "")
+        base = _to_safe_identifier(entry.get("table_name") or pk or "")
+        if not pk or not base or pk in {"id", "organization_id", "created_at"}:
+            continue
+        sources: list[tuple[str, str]] = []
+        for m in row.get("members") or []:
+            if "." not in str(m):
+                continue
+            sheet, col = str(m).split(".", 1)
+            dest = _to_safe_identifier(routing.get(sheet.lower()) or sheet)
+            mapped = _to_safe_identifier(names.get(sheet.lower(), {}).get(col.lower()) or col)
+            have = cols_by_table.get(dest or "", set())
+            if (dest and mapped and mapped in have and "organization_id" in have
+                    and (dest, mapped) in text_cols):
+                sources.append((dest, mapped))
+        if not sources:
+            logger.info(f"[Node 9] lookup for {row.get('group_id')} skipped: no written column")
+            continue
+        table = None
+        for cand in (base, f"{base}_ref"):
+            kind = relkinds.get(cand)
+            if kind is None or (kind in ("r", "p")
+                                and {"organization_id", pk} <= cols_by_table.get(cand, set())):
+                table = cand
+                break
+        if table is None:
+            logger.warning(f"[Node 9] lookup '{base}' skipped: the name is taken")
+            continue
+        union = " UNION ".join(
+            f'SELECT btrim(s."{c}"::text) AS v FROM plenum_cafm."{t}" s '
+            f"WHERE s.organization_id::text = :org AND s.\"{c}\" IS NOT NULL"
+            for t, c in sorted(set(sources))
+        )
+        async with factory() as session:
+            await session.execute(text(
+                f'CREATE TABLE IF NOT EXISTS plenum_cafm."{table}" ('
+                f"id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
+                f"organization_id UUID NOT NULL, "
+                f'"{pk}" TEXT NOT NULL, '
+                f"created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+                f'UNIQUE (organization_id, "{pk}"))'
+            ))
+            await session.execute(text(
+                f'INSERT INTO plenum_cafm."{table}" (organization_id, "{pk}") '
+                f"SELECT DISTINCT CAST(:org AS uuid), v FROM ({union}) u WHERE v <> '' "
+                f'ON CONFLICT (organization_id, "{pk}") DO NOTHING'
+            ), {"org": org})
+            n = (await session.execute(text(
+                f'SELECT count(*) FROM plenum_cafm."{table}" WHERE organization_id = CAST(:org AS uuid)'
+            ), {"org": org})).scalar()
+            await session.commit()
+        relkinds[table] = "r"
+        cols_by_table[table] = {"id", "organization_id", pk, "created_at"}
+        written.append({"table": table, "values": int(n or 0)})
+    return written
+
+
 def _snake_ident(s: object) -> str:
     """snake_case a source field the same way output_generator names a '__new__' column."""
     import re as _re
-    return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+    return repair(_re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column")
+
+
+# What the detector cannot be relied on to notice. Hierarchy detection reads the
+# FILE, so it finds what the file happens to make obvious; these are facts about
+# plenum_cafm that hold whatever the file looks like. Without them the write order
+# stayed as the sheets happened to be arranged, and a child was loaded before its
+# parent existed: work_orders before vendors, ppm_visits before vendor_contracts.
+# Every one of those references resolved to null, and the pages showed "Unassigned".
+_CORE_PARENTS: dict[str, tuple[str, ...]] = {
+    "building_sections": ("buildings",),
+    "assets": ("buildings", "building_sections"),
+    "energy_meters": ("buildings", "building_sections"),
+    "meter_readings": ("energy_meters",),
+    "asset_readings": ("assets",),
+    "vendor_contracts": ("vendors",),
+    "work_orders": ("buildings", "assets", "vendors"),
+    "ppm_visits": ("assets", "vendors", "vendor_contracts"),
+    "maintenance_plans": ("assets", "buildings"),
+    "inspections": ("assets",),
+    "spare_parts": ("vendors",),
+    "compliance_certificates": ("buildings", "assets", "vendors"),
+    "work_order_parts": ("work_orders", "spare_parts"),
+}
+
+
+def _ordered_source_tables(cleaned_tables: dict, table_routing: dict | None,
+                           confirmed_hierarchies: list | None) -> list[str]:
+    """Source tables in write order: every parent destination's sources before its children."""
+    # ── Parent-before-child write order ─────────────────────────────────────────────────
+    # A child's FK (work_orders.asset_id → assets) can only be satisfied if the parent rows
+    # were inserted first. Dict/source order doesn't guarantee that, so a work_orders sheet
+    # listed before assets fails every row with "asset_id not present in assets". Order the
+    # source tables by a topological sort of their DESTINATION tables, using the confirmed
+    # hierarchy (child.source_table references parent.target_table). Ties + unknowns keep the
+    # original order; a cycle falls back to original order. Additive + best-effort.
+    def _dest_of(_src: str) -> str:
+        return (table_routing or {}).get(_src, _src)
+
+    _parents_of_dest: dict[str, set] = {}  # dest table -> set(parent dest tables)
+    # Passed in by the caller. This read `state`, which is not in scope here,
+    # so the moment this fallback was reached it raised NameError instead of
+    # inserting anything — and it is only ever reached when the primary write
+    # has already failed. The recovery path could not recover.
+    for _h in (confirmed_hierarchies or []):
+        _hd = _h if isinstance(_h, dict) else (getattr(_h, "__dict__", {}) or {})
+        _child = _dest_of(str(_hd.get("source_table") or ""))
+        _parent = _dest_of(str(_hd.get("target_table") or ""))
+        if _child and _parent and _child != _parent:
+            _parents_of_dest.setdefault(_child, set()).add(_parent)
+    for _c, _ps in _CORE_PARENTS.items():
+        _parents_of_dest.setdefault(_c, set()).update(_ps)
+
+    _srcs = [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]
+    _orig_idx = {s: i for i, s in enumerate(_srcs)}
+    _emitted: list[str] = []
+    _seen: set[str] = set()
+
+    def _visit(_s: str, _stack: set):
+        if _s in _seen or _s in _stack:
+            return  # already placed, or a cycle → break it
+        _stack.add(_s)
+        _sd = _dest_of(_s)
+        # place every parent-destination's source table(s) first
+        for _ps in sorted(
+            (x for x in _srcs if _dest_of(x) in _parents_of_dest.get(_sd, set())),
+            key=lambda x: _orig_idx[x],
+        ):
+            _visit(_ps, _stack)
+        _stack.discard(_s)
+        if _s not in _seen:
+            _seen.add(_s); _emitted.append(_s)
+
+    for _s in _srcs:
+        _visit(_s, set())
+    return _emitted
+
+
+#: How many normalised rows the numeric → TEXT widening reads before it decides (it stops at the
+#: first non-numeric value).
+_WIDEN_SCAN_CAP = 5000
 
 
 async def _apply_records_with_schema_alignment(
@@ -1202,6 +2178,8 @@ async def _apply_records_with_schema_alignment(
     table_routing: dict | None = None,
     approved_new_columns: dict[str, set[str]] | None = None,
     confirmed_hierarchies: list | None = None,
+    default_building_id: str | None = None,
+    beat=None,
 ) -> dict:
     """
     Insert cleaned records while filtering to real DB columns.
@@ -1235,57 +2213,202 @@ async def _apply_records_with_schema_alignment(
                 requested_org_id=organization_id,
                 schema_name=schema_name,
             )
-            # ── Parent-before-child write order ─────────────────────────────────────────────────
-            # A child's FK (work_orders.asset_id → assets) can only be satisfied if the parent rows
-            # were inserted first. Dict/source order doesn't guarantee that, so a work_orders sheet
-            # listed before assets fails every row with "asset_id not present in assets". Order the
-            # source tables by a topological sort of their DESTINATION tables, using the confirmed
-            # hierarchy (child.source_table references parent.target_table). Ties + unknowns keep the
-            # original order; a cycle falls back to original order. Additive + best-effort.
-            def _dest_of(_src: str) -> str:
-                return (table_routing or {}).get(_src, _src)
+            # ── Building links ──────────────────────────────────────────────────────────────────
+            # A source row names its building by a site reference, a name or a code; the target
+            # needs buildings.building_id. Resolved here (building_link.py), once per distinct
+            # hint, inside a savepoint so a lookup that fails cannot poison the write. Assets that
+            # already exist under the same code are MERGED into their row instead of duplicated,
+            # and a work order with no building inherits its asset's.
+            async def _fetch(_sql: str, _params: dict) -> list:
+                try:
+                    async with session.begin_nested():
+                        _rs = await session.execute(text(_sql), _params)
+                        return [tuple(r) for r in _rs.fetchall()]
+                except Exception as _lookup_exc:  # a missing column, a bad cast — never fatal
+                    # A lookup that RAISED and one that matched nothing both return [], and the
+                    # caller cannot tell them apart. Say which this was, or an unresolvable
+                    # reference and a broken query look identical for the rest of the run.
+                    logger.warning(
+                        f"[Node 9] lookup failed (treated as no match): "
+                        f"{type(_lookup_exc).__name__}: {str(_lookup_exc)[:200]}"
+                    )
+                    return []
 
-            _parents_of_dest: dict[str, set] = {}  # dest table -> set(parent dest tables)
-            # Passed in by the caller. This read `state`, which is not in scope here,
-            # so the moment this fallback was reached it raised NameError instead of
-            # inserting anything — and it is only ever reached when the primary write
-            # has already failed. The recovery path could not recover.
-            for _h in (confirmed_hierarchies or []):
-                _hd = _h if isinstance(_h, dict) else (getattr(_h, "__dict__", {}) or {})
-                _child = _dest_of(str(_hd.get("source_table") or ""))
-                _parent = _dest_of(str(_hd.get("target_table") or ""))
-                if _child and _parent and _child != _parent:
-                    _parents_of_dest.setdefault(_child, set()).add(_parent)
+            _buildings = BuildingResolver(
+                _fetch, effective_org_id, schema_name,
+                site_names_from_run(cleaned_tables, table_routing),
+            )
+            # ── Meter links ─────────────────────────────────────────────────────────────
+            # A reading names its meter by a supply number, and meter_readings.meter_id is NOT
+            # NULL behind a real foreign key, so before this every reading row was rejected and
+            # counted as skipped. A meter that does not exist yet is created — but only when the
+            # row also names a building that resolves. See meter_link for why that refusal
+            # matters more than it looks.
+            _section_cache: dict[tuple[str, str], str | None] = {}
 
-            def _ordered_source_tables() -> list[str]:
-                _srcs = [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]
-                _orig_idx = {s: i for i, s in enumerate(_srcs)}
-                _emitted: list[str] = []
-                _seen: set[str] = set()
+            async def _section_for(_bid: str | None, _hint: str | None) -> str | None:
+                """This building's section by name, type, or the floor it sits on.
 
-                def _visit(_s: str, _stack: set):
-                    if _s in _seen or _s in _stack:
-                        return  # already placed, or a cycle → break it
-                    _stack.add(_s)
-                    _sd = _dest_of(_s)
-                    # place every parent-destination's source table(s) first
-                    for _ps in sorted(
-                        (x for x in _srcs if _dest_of(x) in _parents_of_dest.get(_sd, set())),
-                        key=lambda x: _orig_idx[x],
-                    ):
-                        _visit(_ps, _stack)
-                    _stack.discard(_s)
-                    if _s not in _seen:
-                        _seen.add(_s); _emitted.append(_s)
+                Scoped to the building, so "Level 3" means this building's third floor and not
+                another tower's. A hint that matches two sections resolves to neither.
+                """
+                if not _bid or not _hint:
+                    return None
+                key = (str(_bid), str(_hint).strip().lower())
+                if key in _section_cache:
+                    return _section_cache[key]
+                _hit = await _fetch(SECTION_LOOKUP_SQL.format(schema=schema_name),
+                                    {"b": key[0], "k": key[1]})
+                _sid = pick_section(_hit)
+                # Hits only. A section this run is about to write is not there when the first
+                # row names it; a cached miss would then place nothing on it for the rest of
+                # the run. Same lesson as the meter resolver.
+                if _sid:
+                    _section_cache[key] = _sid
+                return _sid
 
-                for _s in _srcs:
-                    _visit(_s, set())
-                return _emitted
+            _floor_cache: dict[tuple[str, str], str | None] = {}
 
-            _write_order = _ordered_source_tables()
+            async def _floor_for(_bid: str | None, _hint: str | None) -> str | None:
+                """This building's floor by the name the sheet gives it, or its level.
+
+                A section arrives saying "Level 3" in floor_name; the floors table already
+                holds Level 3 for this building. Without the link a meter on that section
+                cannot be placed on the floor, and the Energy page's floor view has nothing
+                to stand a sub-meter on. Two floors answering to one name resolve to neither.
+                """
+                if not _bid or not _hint:
+                    return None
+                key = (str(_bid), str(_hint).strip().lower())
+                if key in _floor_cache:
+                    return _floor_cache[key]
+                _hit = await _fetch(FLOOR_LOOKUP_SQL.format(schema=schema_name),
+                                    {"b": key[0], "k": key[1]})
+                _ids = sorted({str(r[0]) for r in _hit if r and r[0]})
+                _floor_cache[key] = _ids[0] if len(_ids) == 1 else None
+                return _floor_cache[key]
+
+            async def _create_meter(*, mpan, mprn, meter_type, building_id,
+                                    section_id=None, is_sub_meter=False) -> str | None:
+                try:
+                    async with session.begin_nested():
+                        _rs = await session.execute(
+                            text(CREATE_METER_SQL.format(schema=schema_name)),
+                            {"org": effective_org_id, "bid": building_id,
+                             "mtype": meter_type, "mpan": mpan, "mprn": mprn,
+                             "sid": section_id, "is_sub": bool(is_sub_meter)},
+                        )
+                        _row = _rs.first()
+                        return str(_row[0]) if _row and _row[0] else None
+                except Exception as _create_exc:     # a constraint, a bad cast — never fatal
+                    # Warning, not debug. This is the only account of why a meter could not be
+                    # made, and every reading that names it fails afterwards; at debug it never
+                    # reached the container log and the run looked like it simply found nothing.
+                    logger.warning(
+                        f"[Node 9] meter create failed for mpan={mpan!r} mprn={mprn!r} "
+                        f"building={building_id!r}: {type(_create_exc).__name__}: "
+                        f"{str(_create_exc)[:200]}"
+                    )
+                    return None
+
+            _meters = MeterResolver(_fetch, effective_org_id, schema_name, create=_create_meter)
+
+            # Codes and names in the file, resolved to the ids the database keys on. A CSV
+            # cannot carry a uuid anybody would type; it carries asset_code, vendor_name,
+            # contract_name. Without this every one of those columns was written as null,
+            # which for ppm_visits means the row is dropped by an inner join and never
+            # appears at all.
+            _refs = ReferenceResolver(_fetch, effective_org_id, schema_name)
+
+            # Has this row been written by an earlier run? See _NATURAL_KEYS: the bare
+            # ON CONFLICT DO NOTHING in _build_dml_for_row cannot answer it, because `id` is
+            # a fresh uuid4() every time and so never collides. Cached per key, including
+            # the misses, so re-running a workbook costs one read per distinct row, not one
+            # per row.
+            _nk_seen: dict[tuple, bool] = {}
+
+            async def _already_written(_table: str, _cols: tuple, _vals: list, _has_org: bool,
+                                       _scales: dict[str, int]) -> bool:
+                _ck = (_table, _cols, tuple(str(v) for v in _vals))
+                if _ck not in _nk_seen:
+                    _hit = await _fetch(*_natural_key_sql(
+                        schema_name, _table, _cols, _vals, _has_org, effective_org_id, _scales,
+                    ))
+                    _nk_seen[_ck] = bool(_hit)
+                return _nk_seen[_ck]
+
+            # The uploader's selection, checked once. A building_id that names no building of
+            # this organisation is dropped rather than written, because a row pointing at
+            # somebody else's building is worse than a row pointing at none.
+            _default_building: str | None = None
+            if default_building_id:
+                _hit = await _fetch(
+                    f"SELECT building_id::text FROM {schema_name}.buildings "
+                    f"WHERE building_id::text = :b AND organization_id::text = :org",
+                    {"b": str(default_building_id), "org": effective_org_id},
+                )
+                _default_building = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else None
+                if _default_building:
+                    logger.info("[Node 9] rows naming no site will be filed against building %s",
+                                _default_building)
+                else:
+                    logger.warning("[Node 9] selected building %s is not a building of org %s "
+                                   "- ignored", default_building_id, effective_org_id)
+
+            _asset_ids: dict[str, str] = {}          # asset code → existing assets.id ("" = none)
+            _asset_building_cache: dict[str, str] = {}  # asset ref → building_id ("" = none)
+            rows_merged = 0
+            buildings_linked = 0
+            meters_linked = 0
+            #: Set when a table is given up on, so the run reports it rather than a
+            #: quietly short insert. One table stopping does not stop the others.
+            _table_abandoned: str | None = None
+            #: One warning per run, not one per row: 35,040 copies of the same line is not a
+            #: better diagnosis than one, and it is a worse log.
+            _unlinked_reported = False
+            meters_matched = 0   # meter sheet rows that named a meter already on record
+
+
+            async def _existing_asset_id(_code: str) -> str:
+                if _code not in _asset_ids:
+                    _hit = await _fetch(ASSET_LOOKUP_SQL.format(schema=schema_name),
+                                        {"org": effective_org_id, "code": _code})
+                    _asset_ids[_code] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
+                return _asset_ids[_code]
+
+            async def _asset_building(_ref: str) -> str:
+                if not _ref:
+                    return ""
+                if _ref not in _asset_building_cache:
+                    _hit = await _fetch(ASSET_BUILDING_SQL.format(schema=schema_name),
+                                        {"org": effective_org_id, "ref": _ref})
+                    _asset_building_cache[_ref] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
+                return _asset_building_cache[_ref]
+
+            _write_order = _ordered_source_tables(cleaned_tables, table_routing, confirmed_hierarchies)
             if _write_order != [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]:
                 logger.info(f"[Node 9] Write order (parents first): {_write_order}")
             _ordered_tables = [(s, cleaned_tables[s]) for s in _write_order]
+            #: The sheet's own keys, as this run mints real ids for them: "BLD-CDF-0001" → uuid.
+            #: A workbook keys its rows to itself, and the parents are created by this same run,
+            #: so no lookup against rows already in the database can find them. Without this every
+            #: child lost its parent — floors, spaces, meters and work orders all written with a
+            #: null building. A key two different rows claim maps to None and resolves to nothing,
+            #: because a floor under the wrong building is worse than a floor under none.
+            _run_key_ids: dict[str, str | None] = {}
+            if beat is not None:  # a ProgressBeat, advanced by every batch _insert_rows sends
+                beat.total = sum(len(r) for _s, r in _ordered_tables if isinstance(r, list))
+
+            # A routed target that turns out to be a view cannot take rows either: the same
+            # plenum_cafm.contracts that refuses ADD COLUMN also refuses INSERT, because it
+            # joins two tables and computes columns, so Postgres cannot update it. Rows go to
+            # the base table the view reads, by the same rule the DDL uses above.
+            try:
+                from ...db import get_plenum_cafm_views
+                _write_views = await get_plenum_cafm_views()
+            except Exception as _wv_exc:  # pragma: no cover — best-effort
+                logger.warning(f"[Node 9] view check for the write skipped: {_wv_exc}")
+                _write_views = {}
 
             for source_table_name, records in _ordered_tables:
                 if not isinstance(records, list) or not records:
@@ -1296,6 +2419,19 @@ async def _apply_records_with_schema_alignment(
                 # the existing canonical tables. Falls back to the source name when unrouted; two
                 # sources routed to one target both INSERT into it (work_orders).
                 table_name = (table_routing or {}).get(source_table_name, source_table_name)
+                if str(table_name).lower() in _write_views:
+                    _home = _base_table_for_view(
+                        str(table_name), _write_views.get(str(table_name).lower()) or [])
+                    if _home:
+                        logger.warning(
+                            f"[Node 9] '{table_name}' is a view; writing {source_table_name} "
+                            f"into its base table '{_home}' instead")
+                        table_name = _home
+                    else:
+                        logger.error(
+                            f"[Node 9] '{table_name}' is a view with no single base table; "
+                            f"{len(records)} rows from {source_table_name} were not written")
+                        continue
                 safe_table = _to_safe_identifier(table_name)
                 if not safe_table:
                     logger.warning(
@@ -1310,10 +2446,12 @@ async def _apply_records_with_schema_alignment(
 
                 _tbl_started_at = datetime.utcnow()
                 logger.info(f"[Node 9] ► Table '{safe_table}': {len(records)} records")
+                _refs.begin_table(safe_table)
                 cols_rs = await session.execute(
                     text(
                         """
-                        SELECT column_name, data_type, is_nullable
+                        SELECT column_name, data_type, is_nullable, column_default, numeric_scale,
+                               character_maximum_length, udt_name
                         FROM information_schema.columns
                         WHERE table_schema = :schema_name AND table_name = :table_name
                         """
@@ -1322,10 +2460,34 @@ async def _apply_records_with_schema_alignment(
                 )
                 _col_rows = cols_rs.fetchall()
                 db_col_type_map = {str(r[0]): str(r[1]) for r in _col_rows}
+                # Width and enum vocabulary, so a value that is merely too long or spelled
+                # differently is trimmed or set aside rather than taking its whole row down:
+                # cert_scope at 20 characters cost 65 certificates, and one "Office" that the
+                # building enum does not list cost the building itself.
+                db_col_maxlen = {str(r[0]): int(r[5]) for r in _col_rows
+                                 if len(r) > 5 and r[5] is not None}
+                db_enum_labels = await _enum_labels_for(
+                    session, {str(r[0]): str(r[6]) for r in _col_rows
+                              if len(r) > 6 and str(r[1]) == "USER-DEFINED" and r[6]})
+                db_numeric_scale = {
+                    str(r[0]): int(r[4]) for r in _col_rows
+                    if len(r) > 4 and str(r[1]) == "numeric" and r[4] is not None
+                }
                 # Columns that accept NULL — used to recover a row whose FK points at a parent that
                 # isn't present (orphan reference): null the FK so the row still lands, instead of
                 # dropping it. NOT NULL FKs can't be nulled, so those rows are skipped.
                 db_nullable_cols = {str(r[0]) for r in _col_rows if str(r[2]).upper() == "YES"}
+                # Required by the database, defaulted by nobody. This writer builds raw INSERT
+                # statements, so a Python-side ORM default never runs — and the source file
+                # cannot supply a system column it has never heard of. work_orders.conflict_flag
+                # is a boolean flag the platform sets; ppm_visits.source records where the row
+                # came from. Both are NOT NULL with no DDL default, so every row arrived with
+                # NULL and Postgres rejected it: 16/16 work orders and 132/132 PPM visits lost
+                # on 22 Sep 2026, reported only as "Skipping bad row".
+                db_required_undefaulted = {
+                    str(r[0]) for r in _col_rows
+                    if str(r[2]).upper() == "NO" and r[3] is None
+                }
                 db_cols = set(db_col_type_map.keys())
                 if db_cols:
                     logger.info(f"[Node 9]   {safe_table}: {len(db_cols)} DB columns found")
@@ -1398,14 +2560,21 @@ async def _apply_records_with_schema_alignment(
                     cols_rs = await session.execute(
                         text(
                             """
-                            SELECT column_name, data_type
+                            SELECT column_name, data_type, is_nullable, column_default,
+                                   numeric_scale, character_maximum_length, udt_name
                             FROM information_schema.columns
                             WHERE table_schema = :schema_name AND table_name = :table_name
                             """
                         ),
                         {"schema_name": schema_name, "table_name": safe_table},
                     )
-                    db_col_type_map = {str(r[0]): str(r[1]) for r in cols_rs.fetchall()}
+                    _col_rows2 = cols_rs.fetchall()
+                    db_col_type_map = {str(r[0]): str(r[1]) for r in _col_rows2}
+                    db_col_maxlen = {str(r[0]): int(r[5]) for r in _col_rows2
+                                     if len(r) > 5 and r[5] is not None}
+                    db_enum_labels = await _enum_labels_for(
+                        session, {str(r[0]): str(r[6]) for r in _col_rows2
+                                  if len(r) > 6 and str(r[1]) == "USER-DEFINED" and r[6]})
                     db_cols = set(db_col_type_map.keys())
                     if not db_cols:
                         continue
@@ -1413,9 +2582,18 @@ async def _apply_records_with_schema_alignment(
                 # Collect missing columns from normalized records and add them to DB first.
                 missing_columns: dict[str, str] = {}
                 normalized_records: list[dict] = []
+                # Filed under a building: the table gets the column before any row is written,
+                # and every row its building. A company column too, where a table made by an
+                # earlier migration has none - nothing would otherwise say whose rows they are.
+                _link = files_under_building(safe_table, _default_building)
+                if _link and "building_id" not in db_cols:
+                    missing_columns["building_id"] = "UUID"
+                if _link and "organization_id" not in db_cols and effective_org_id:
+                    missing_columns["organization_id"] = "UUID"
                 for row in records:
                     if not isinstance(row, dict):
                         continue
+                    _hint = building_hint(row) if (safe_table in _BUILDING_HINT_TABLES or _link) else None
                     normalized = _normalize_row_for_table(
                         safe_table, row, effective_org_id
                     )
@@ -1428,6 +2606,128 @@ async def _apply_records_with_schema_alignment(
                         if safe_k not in db_cols and safe_k not in missing_columns:
                             if raw_v is not None and str(raw_v) != "":
                                 missing_columns[safe_k] = _infer_sql_type_for_value(raw_v)
+                    # The building link. A hint that resolves becomes building_id; one that does
+                    # not is removed rather than written into a UUID column as text. A work order
+                    # with no hint of its own takes its asset's building.
+                    if _link and ("building_id" in db_cols or "building_id" in missing_columns) \
+                            and not looks_like_uuid(safe_row.get("building_id")):
+                        _bid = await _buildings.resolve(_hint) if _hint else None
+                        if not _bid and safe_table in _BUILDING_VIA_ASSET_TABLES:
+                            _bid = await _asset_building(str(safe_row.get("asset_id") or "").strip()) or None
+                        # Last: the building the uploader had selected. A half-hourly export
+                        # names an MPAN and nothing else, so this is the only thing that can
+                        # place its meter. A site named in the file always wins over it,
+                        # because the file is evidence and the selection is context.
+                        if not _bid and _default_building:
+                            _bid = _default_building
+                        if _bid:
+                            safe_row["building_id"] = _bid
+                            buildings_linked += 1
+                        else:
+                            safe_row.pop("building_id", None)
+
+                    # A meter sheet places each meter where it sits. A tower with a meter per
+                    # floor produces rows identical but for that, and without it every one of
+                    # them is created as the building's main meter — so the building's
+                    # consumption is counted once per floor.
+                    # Anything that sits in a section names it the same way, so the lookup is
+                    # not the meter's alone. An asset carries one too, and without it the
+                    # Assets page cannot group it under the part of the building it is in.
+                    # Not for the sections table itself: there section_id is the row's own
+                    # primary key, and resolving it from the floor the row names either found
+                    # nothing (and cached the miss for every meter that came after) or found
+                    # another section on that floor and stamped its id on the new row - which
+                    # then conflicted and was silently never written.
+                    if (safe_table != "building_sections" and "section_id" in db_cols
+                            and not looks_like_uuid(safe_row.get("section_id"))):
+                        _sid = await _section_for(safe_row.get("building_id"), section_hint(row))
+                        if _sid:
+                            safe_row["section_id"] = _sid
+                        else:
+                            safe_row.pop("section_id", None)
+
+                    # A section sheet names the floor it sits on in words; floors.floor_id is
+                    # the link. Resolved here so the floor view can stand a sub-meter on the
+                    # floor its section is on.
+                    if (safe_table == "building_sections" and "floor_id" in db_cols
+                            and not looks_like_uuid(safe_row.get("floor_id"))):
+                        _fid = await _floor_for(safe_row.get("building_id"), floor_hint(row))
+                        if _fid:
+                            safe_row["floor_id"] = _fid
+                        else:
+                            safe_row.pop("floor_id", None)
+
+                    if safe_table == "energy_meters":
+                        # A meter already on record under this supply number is THE meter, not
+                        # a second one. Nothing in the schema makes an MPAN unique, so without
+                        # this a re-ingest of the same export doubles the register — and a
+                        # building with two rows for one supply counts its consumption twice.
+                        if not looks_like_uuid(safe_row.get("id")):
+                            _mh = meter_hint(row)
+                            _known = await _meters.find(_mh) if _mh else None
+                            if _known:
+                                safe_row["id"] = _known
+                                meters_matched += 1
+                        if safe_row.get("is_sub_meter") in (None, ""):
+                            safe_row["is_sub_meter"] = is_sub_meter_for(row)
+                        if not safe_row.get("meter_type"):
+                            safe_row["meter_type"] = meter_type_for(row)
+
+                    # Codes and names to ids, for whichever of these columns this table has.
+                    for _ref_col in REFERENCES:
+                        if _ref_col not in db_cols:
+                            continue
+                        if looks_like_uuid(safe_row.get(_ref_col)):
+                            # An id the file carries is written as it stands — unless it names
+                            # a retired vendor, which keeps its id after a delete. Dropped and
+                            # reported, exactly as a name that matched nothing.
+                            if not await _refs.linkable(_ref_col, safe_row.get(_ref_col)):
+                                safe_row.pop(_ref_col, None)
+                            continue
+                        _rh = hint_for(_ref_col, row)
+                        _rid = await _refs.resolve(_ref_col, _rh) if _rh else None
+                        if _rid:
+                            safe_row[_ref_col] = _rid
+                        else:
+                            # Absent rather than guessed. A name written into a uuid column
+                            # fails the row; a wrong id is worse, because it succeeds.
+                            safe_row.pop(_ref_col, None)
+
+                    # The meter link. A reading carries no building of its own; it reaches one
+                    # through its meter, so resolving the meter is what places the reading.
+                    if safe_table == "meter_readings" \
+                            and not looks_like_uuid(safe_row.get("meter_id")):
+                        _mh = meter_hint(row)
+                        _mid = None
+                        if _mh:
+                            _mpan, _mprn = supply_numbers(row)
+                            _mbid = ((await _buildings.resolve(_hint)) if _hint else None)                                 or _default_building
+                            _mid = await _meters.resolve(
+                                _mh,
+                                building_id=_mbid,
+                                meter_type=meter_type_for(row), mpan=_mpan, mprn=_mprn,
+                                section_id=await _section_for(_mbid, section_hint(row)),
+                                is_sub_meter=is_sub_meter_for(row),
+                            )
+                        if _mid:
+                            safe_row["meter_id"] = _mid
+                            meters_linked += 1
+                        else:
+                            if not _unlinked_reported:
+                                _unlinked_reported = True
+                                logger.warning(
+                                    f"[Node 9] {safe_table}: no meter for this row, so meter_id "
+                                    f"is null and the row cannot be written — "
+                                    f"meter reference {_mh!r}, building hint {_hint!r}, "
+                                    f"resolved building {_mbid!r}. "
+                                    f"{'No reference in the row' if not _mh else ''}"
+                                    f"{'No building, so a meter cannot be created' if _mh and not _mbid else ''}"
+                                    f"{'Lookup and create both returned nothing' if _mh and _mbid else ''}"
+                                )
+                            # Left absent rather than guessed. meter_id is NOT NULL, so the row
+                            # is skipped and reported, which is the honest outcome: a reading on
+                            # the wrong meter is a year of consumption on the wrong building.
+                            safe_row.pop("meter_id", None)
                     normalized_records.append(safe_row)
 
                 if missing_columns and safe_table in _KNOWN_CORE_TABLES:
@@ -1438,8 +2738,9 @@ async def _apply_records_with_schema_alignment(
                         str(c).lower()
                         for c in (approved_new_columns or {}).get(safe_table, set())
                     }
-                    _keep = {c: t for c, t in missing_columns.items() if c.lower() in _approved}
-                    _drop = {c: t for c, t in missing_columns.items() if c.lower() not in _approved}
+                    _system = {"building_id", "organization_id"}
+                    _keep = {c: t for c, t in missing_columns.items() if c.lower() in _approved or c.lower() in _system}
+                    _drop = {c: t for c, t in missing_columns.items() if c.lower() not in _approved and c.lower() not in _system}
                     if _drop:
                         logger.warning(
                             f"[Node 9] Dropping {len(_drop)} unknown column(s) "
@@ -1463,6 +2764,26 @@ async def _apply_records_with_schema_alignment(
                     logger.info(
                         f"[Node 9] Added missing column {schema_name}.{safe_table}.{col_name} "
                         f"({col_type})"
+                    )
+                if missing_columns:
+                    # Commit the DDL on its own, before a single row is loaded.
+                    #
+                    # ADD COLUMN takes ACCESS EXCLUSIVE on the table and holds it until the
+                    # transaction ends. This write used to be one transaction for the DDL and
+                    # every row of every table, so an ALTER on `buildings` kept that lock for the
+                    # length of the load — and every reader of `buildings` is every page in the
+                    # product. Measured on 23 Sep 2026: one column added to `buildings`, then
+                    # 35,040 readings loaded behind it, and the whole application queued for
+                    # eight minutes until the connection pool gave up with
+                    # "QueuePool limit of size 5 overflow 10 reached".
+                    #
+                    # The lock itself is brief — ADD COLUMN with no default rewrites nothing. It
+                    # is holding it across the data load that does the damage, so the DDL ends
+                    # its transaction here and the rows go in under their own.
+                    await session.commit()
+                    logger.info(
+                        f"[Node 9] {safe_table}: DDL committed before loading rows, so its "
+                        f"ACCESS EXCLUSIVE lock is not held across the load"
                     )
                 if missing_columns:
                     # keep local set in sync for filtering inserts below
@@ -1501,13 +2822,13 @@ async def _apply_records_with_schema_alignment(
                 # to the RECEIVED datatype: ALTER it to text so all rows land. Only ever WIDENS
                 # (int → text), never narrows. Scans a sample for a fast early-exit.
                 _num_types = ("int", "bigint", "smallint", "numeric", "decimal", "double", "real", "serial")
-                _SCAN_CAP = 5000
+                _widened = False
                 for _col, _dbt in list(db_col_type_map.items()):
                     if (_col == "id" and _id_is_serial) or not any(t in _dbt.lower() for t in _num_types):
                         continue
                     _needs_text = False
                     for _i, _rec in enumerate(normalized_records):
-                        if _i >= _SCAN_CAP:
+                        if _i >= _WIDEN_SCAN_CAP:
                             break
                         _v = _rec.get(_col)
                         if _v is None or str(_v).strip() == "":
@@ -1519,21 +2840,49 @@ async def _apply_records_with_schema_alignment(
                             break
                     if not _needs_text:
                         continue
+                    if _col in _SYSTEM_SUPPLIED_COLUMNS:
+                        # The value is this run's organisation uuid, put there by
+                        # _normalize_row_for_table, not a fact from the file. A numeric column
+                        # cannot hold it (sites.organization_id is INTEGER on hoistra_test), and
+                        # rewriting a key column's type to fit it would break every join on it.
+                        # Leave it unset; the row still goes in.
+                        db_cols.discard(_col)
+                        logger.info(
+                            f"[Node 9]   {safe_table}.{_col} is {_dbt}; the run's organisation id "
+                            "does not fit it, so it is left unset rather than retyped"
+                        )
+                        continue
                     try:
                         async with session.begin_nested():
+                            # ALTER TYPE takes ACCESS EXCLUSIVE. Behind any open reader of this
+                            # table it would queue — and every query after it would queue behind
+                            # it. On 24 Sep 2026 this ALTER on `sites` waited 45 s behind two idle
+                            # transactions, died, and took the connection with it: every table
+                            # after `sites` failed with PendingRollbackError. Wait briefly or not
+                            # at all; the rows that do not fit are dropped and reported below.
+                            await session.execute(text("SET LOCAL lock_timeout = '5s'"))
                             await session.execute(text(
                                 f'ALTER TABLE {schema_name}.{safe_table} '
                                 f'ALTER COLUMN "{_col}" TYPE TEXT USING "{_col}"::text'
                             ))
+                            await session.execute(text("SET LOCAL lock_timeout = DEFAULT"))
                         db_col_type_map[_col] = "text"
+                        _widened = True
                         logger.warning(
                             f"[Node 9] Widened {safe_table}.{_col} ({_dbt} → TEXT) — source data is "
                             "non-numeric (e.g. code values); rows kept instead of skipped"
                         )
                     except Exception as _alter_exc:
+                        if _is_connection_lost(_alter_exc):
+                            raise ConnectionLost(str(_alter_exc)) from _alter_exc
                         logger.warning(
-                            f"[Node 9] Could not widen {safe_table}.{_col} to TEXT: {_alter_exc}"
+                            f"[Node 9] Could not widen {safe_table}.{_col} to TEXT: "
+                            f"{type(_alter_exc).__name__}: {_alter_exc}"
                         )
+                if _widened:
+                    # Same rule as ADD COLUMN above: the exclusive lock ends with its
+                    # transaction, so end it before the load rather than after.
+                    await session.commit()
 
                 tbl_rows_skipped = 0
                 table_rows = 0
@@ -1545,6 +2894,13 @@ async def _apply_records_with_schema_alignment(
                 type_mismatch_by_col: dict[str, tuple[int, str, str]] = {}
                 # Per-column orphan-FK tally: {fk_column: rows nulled because the parent was absent}.
                 orphan_fk_by_col: dict[str, int] = {}
+                # {column: rows} filled with a system default because the source had none.
+                _sys_filled: dict[str, int] = {}
+                # {table: rows} already present from an earlier run, skipped instead of duplicated.
+                _dupes_skipped: dict[str, int] = {}
+                #: Rows waiting to go in one statement. Flushed every _WRITE_CHUNK and
+                #: again at the end of the table.
+                _pending_rows: list[tuple[dict, str, dict]] = []
                 for normalized in normalized_records:
                     filtered = {
                         k: v for k, v in normalized.items()
@@ -1552,16 +2908,41 @@ async def _apply_records_with_schema_alignment(
                         and not (k == "id" and _id_is_serial)
                     }
 
-                    if "id" in db_cols and "id" not in filtered and not _id_is_serial:
-                        filtered["id"] = str(uuid.uuid4())
-
                     if not filtered:
                         continue
 
+                    # Coerce BEFORE minting the id. The other order rejected whole sheets: a row
+                    # arriving with id "WO-00001" kept that value, so the mint below was skipped as
+                    # "already has an id"; coercion then dropped it, because a work-order code is
+                    # not a uuid; and the row failed as "id is required and the file has no value
+                    # for it". 2,270 work-order lines, 1,803 work orders, 350 energy reports and
+                    # every vendor, contract and asset went that way in one run — the writer
+                    # refusing rows for the absence of a value it had just removed itself.
+                    # A reference this run has already created: swap the sheet's key for the
+                    # id it was given, before the uuid branch rejects it as "does not fit".
+                    for k in list(filtered.keys()):
+                        if str(db_col_type_map.get(k, "")).lower() != "uuid":
+                            continue
+                        _hit = _run_key_ids.get(str(filtered[k]).strip())
+                        if _hit:
+                            filtered[k] = _hit
+
+                    _own_key = str(filtered.get("id", "")).strip()
+
                     for k in list(filtered.keys()):
                         _dest_type = db_col_type_map.get(k, "")
-                        _coerced = _coerce_value_for_db_type(filtered[k], _dest_type)
+                        _coerced = _coerce_value_for_db_type(
+                            filtered[k], _dest_type,
+                            max_len=db_col_maxlen.get(k),
+                            enum_labels=db_enum_labels.get(k),
+                        )
                         if _coerced is _COERCE_TYPE_MISMATCH:
+                            # The sheet's own key is the one value worth keeping when it will not
+                            # fit: parked in the table's source_* column where there is one, so the
+                            # row can still be traced back to its line in the workbook.
+                            _src_col = _SOURCE_KEY_COLUMNS.get((safe_table, k))
+                            if _src_col and _src_col in db_cols and _src_col not in filtered:
+                                filtered[_src_col] = str(filtered[k])[:200]
                             # Drop just this field (keep the row) and remember the mismatch.
                             _prev = type_mismatch_by_col.get(k)
                             type_mismatch_by_col[k] = (
@@ -1573,21 +2954,95 @@ async def _apply_records_with_schema_alignment(
                         else:
                             filtered[k] = _coerced
 
+                    if "id" in db_cols and "id" not in filtered and not _id_is_serial:
+                        filtered["id"] = str(uuid.uuid4())
+                        # Remember what the sheet called this row, so its children can find it.
+                        # Claimed twice means ambiguous: both map to None and neither resolves.
+                        if _own_key and not _is_uuid_like(_own_key):
+                            _run_key_ids[_own_key] = (
+                                None if _own_key in _run_key_ids else filtered["id"])
+
                     if not filtered:
+                        continue
+
+                    # An asset re-imported under a code the organisation already has is the SAME
+                    # asset: merge into that row (building kept, code filled in) rather than insert
+                    # a twin with a fresh id and no building. The June 2026 import stored the code
+                    # in `id` with no asset_code, so the lookup matches on either.
+                    if safe_table == "assets":
+                        _code = asset_match_code(filtered)
+                        _existing = await _existing_asset_id(_code) if _code else ""
+                        if _existing:
+                            _usql, _uparams = build_asset_merge_update(schema_name, filtered, _existing)
+                            try:
+                                async with session.begin_nested():
+                                    _ures = await session.execute(text(_usql), _uparams)
+                                    table_rows += int(getattr(_ures, "rowcount", 0) or 0)
+                                rows_merged += 1
+                                continue
+                            except Exception as _merge_exc:
+                                logger.warning(
+                                    f"[Node 9] assets: merge into existing {_existing} for code "
+                                    f"{_code!r} failed ({str(_merge_exc)[:120]}); inserting instead"
+                                )
+
+                    # Fill the columns the database requires, has no default for, and the
+                    # source could not have known about. Done last, so anything the file DID
+                    # supply always wins.
+                    for _rc in db_required_undefaulted:
+                        if _rc in filtered or _rc not in db_cols:
+                            continue
+                        _sv = _system_default_for_db_type(
+                            _rc, db_col_type_map.get(_rc, ""), str(effective_org_id or "") or None
+                        )
+                        if _sv is not _NO_SYSTEM_DEFAULT:
+                            filtered[_rc] = _sv
+                            _sys_filled[_rc] = _sys_filled.get(_rc, 0) + 1
+
+                    # Already written by an earlier run? Skip rather than insert a twin.
+                    # The bare ON CONFLICT DO NOTHING below cannot catch this: `id` is a fresh
+                    # uuid4() every time, so there is never a primary-key collision to catch.
+                    _dupe = False
+                    for _cols, _vals in _natural_keys_for(safe_table, filtered, db_cols):
+                        if await _already_written(
+                            safe_table, _cols, _vals, "organization_id" in db_cols,
+                            db_numeric_scale,
+                        ):
+                            _dupe = True
+                            break
+                    if _dupe:
+                        _dupes_skipped[safe_table] = _dupes_skipped.get(safe_table, 0) + 1
                         continue
 
                     try:
                         dml_sql, params = _build_dml_for_row(
                             schema_name, safe_table, filtered, unique_sets
                         )
-                        # SAVEPOINT per row: a failed INSERT must not abort the
-                        # outer transaction, which would poison every subsequent
-                        # session.execute() call (InFailedSQLTransactionError).
-                        _row_count = 0
-                        async with session.begin_nested():
-                            result = await session.execute(text(dml_sql), params)
-                            _row_count = int(getattr(result, "rowcount", 0) or 0)
-                        table_rows += _row_count
+                        _pending_rows.append((dict(filtered), dml_sql, params))
+                        if len(_pending_rows) >= _WRITE_CHUNK:
+                            _batch = await _insert_rows(
+                                session, schema_name=schema_name, table_name=safe_table,
+                                pending=_pending_rows, unique_sets=unique_sets,
+                                nullable_cols=db_nullable_cols, beat=beat,
+                            )
+                            _pending_rows = []
+                            table_rows += _batch["inserted"]
+                            rows_skipped += _batch["skipped"]
+                            tbl_rows_skipped += _batch["skipped"]
+                            for _c, _n in _batch["orphans"].items():
+                                orphan_fk_by_col[_c] = orphan_fk_by_col.get(_c, 0) + _n
+                            for _e in _batch["errors"]:
+                                if len(row_errors) < 20:
+                                    row_errors.append(_e)
+                            if _batch.get("abandoned"):
+                                # The whole table is wrong, not this chunk of it. Carrying on
+                                # hands the next five hundred rows to the same failure and
+                                # repeats the message once per chunk.
+                                _table_abandoned = _batch["abandoned"]
+                                break
+                        continue
+                    except ConnectionLost:
+                        raise
                     except Exception as row_exc:
                         # Orphan foreign key: the row references a parent that isn't present (e.g.
                         # work_orders.asset_id = 'A0050145' with no such asset). Rather than drop the
@@ -1622,6 +3077,28 @@ async def _apply_records_with_schema_alignment(
                             f"[Node 9] Skipping bad row in {safe_table}: {row_exc}"
                         )
                         continue
+
+                # Whatever is left over from the last partial batch.
+                if _pending_rows:
+                    _batch = await _insert_rows(
+                        session, schema_name=schema_name, table_name=safe_table,
+                        pending=_pending_rows, unique_sets=unique_sets,
+                        nullable_cols=db_nullable_cols, beat=beat,
+                    )
+                    _pending_rows = []
+                    table_rows += _batch["inserted"]
+                    rows_skipped += _batch["skipped"]
+                    tbl_rows_skipped += _batch["skipped"]
+                    for _c, _n in _batch["orphans"].items():
+                        orphan_fk_by_col[_c] = orphan_fk_by_col.get(_c, 0) + _n
+                    for _e in _batch["errors"]:
+                        if len(row_errors) < 20:
+                            row_errors.append(_e)
+                    if _batch["skipped"]:
+                        logger.warning(
+                            f"[Node 9] {safe_table}: {_batch['skipped']} row(s) skipped; "
+                            f"first: {(_batch['errors'] or ['-'])[0]}"
+                        )
 
                 # Surface any type mismatches: a column whose source values don't fit the
                 # destination column's type. These were dropped (row still inserted) — the user
@@ -1665,11 +3142,49 @@ async def _apply_records_with_schema_alignment(
                         f"[Node 9]   {safe_table}: 0 rows to insert ({_tbl_elapsed:.1f}s)"
                     )
 
+                # Outside the branches above on purpose: a table whose every row was already
+                # on file inserts nothing, and "0 inserted" on its own reads as a failure.
+                # The reason it inserted nothing is the thing worth saying.
+                if _dupes_skipped.get(safe_table):
+                    logger.info(
+                        f"[Node 9]   {safe_table}: {_dupes_skipped[safe_table]} row(s) already "
+                        f"present from an earlier run — skipped, not duplicated"
+                    )
+                if _sys_filled:
+                    logger.info(
+                        f"[Node 9]   {safe_table}: filled required column(s) the source does "
+                        f"not carry — "
+                        + ", ".join(f"{c} x{n}" for c, n in sorted(_sys_filled.items()))
+                    )
+
             logger.info(
                 f"[Node 9] Schema-aligned write done — "
                 f"{rows_inserted} row(s) across {tables_written} table(s), "
-                f"{rows_skipped} skipped"
+                f"{rows_skipped} skipped, {rows_merged} merged into existing assets, "
+                f"{buildings_linked} building link(s) resolved, "
+                f"{meters_linked} reading(s) placed on a meter "
+                f"({_meters.created} meter(s) created), "
+                f"{_refs.resolved} reference(s) resolved, "
+                f"{meters_matched} meter(s) matched to one already on record"
+                + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
+            if _buildings.ambiguous and len(row_errors) < 20:
+                row_errors.append(
+                    "building: " + ", ".join(sorted(set(_buildings.ambiguous))[:5])
+                    + " matched more than one building — the rows were written without a building link"
+                )
+            if _meters.unlinked and len(row_errors) < 20:
+                row_errors.append(
+                    "meter: " + ", ".join(sorted(set(_meters.unlinked))[:5])
+                    + " named no meter already on record, and the rows named no building to "
+                      "create one against — those readings were skipped rather than written "
+                      "to a meter that belongs to no building"
+                )
+            if _meters.ambiguous and len(row_errors) < 20:
+                row_errors.append(
+                    "meter: " + ", ".join(sorted(set(_meters.ambiguous))[:5])
+                    + " matched more than one meter — those readings were skipped"
+                )
             await session.commit()
         except Exception:
             await session.rollback()
@@ -1679,6 +3194,13 @@ async def _apply_records_with_schema_alignment(
         "rows_inserted": rows_inserted,
         "tables_written": tables_written,
         "rows_skipped": rows_skipped,
+        "rows_merged": rows_merged,
+        "buildings_linked": buildings_linked,
+        "meters_linked": meters_linked,
+        "meters_created": _meters.created,
+        "meters_matched": meters_matched,
+        "meters_unlinked": sorted(set(_meters.unlinked)),
+        "references": _refs.report(),
         "row_errors": row_errors,
     }
 

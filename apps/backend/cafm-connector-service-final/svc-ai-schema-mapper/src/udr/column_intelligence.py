@@ -29,7 +29,12 @@ from collections import Counter
 from itertools import combinations
 from typing import Callable
 
+try:
+    from ..sql_identifiers import quote_ident
+except ImportError:  # udr imported as a top-level package, src/ on sys.path (its own tests)
+    from sql_identifiers import quote_ident
 from .mapping_decision import entity_prefix_conflict, score_column_mapping
+from .memo import memo_scoped
 from .primitives import (
     THRESHOLDS,
     classify_columns,
@@ -62,6 +67,14 @@ _MAX_PAIR_ROWS = 200
 
 def _norm_col_name(name) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(name or "").lower()).strip("_")
+
+
+def _looks_numeric(value) -> bool:
+    try:
+        float(str(value).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _samples(rows, col, n=5) -> list[str]:
@@ -129,13 +142,9 @@ def _pair_gate_rows(
     return fmt_row, val_row, pair
 
 
-_SAFE_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
-
-
 def _q(name: str) -> str:
-    """Quote a SQL identifier only when it isn't a plain safe identifier (DDL emission, B22.1)."""
-    s = str(name)
-    return s if _SAFE_IDENT_RE.match(s) else '"' + s.replace('"', '""') + '"'
+    """Quote a SQL identifier when it isn't a plain safe identifier or is a keyword (B22.1)."""
+    return quote_ident(name)
 
 
 def _prefixed(table: str, col: str) -> str:
@@ -152,6 +161,55 @@ def _prefixed(table: str, col: str) -> str:
 # qualified with the table name to become a meaningful canonical (e.g.
 # Sites.id → site_id, not just 'id').
 _GENERIC_PK_NAMES = {"id", "code", "key", "no", "number", "pk"}
+
+
+def destination_entity_for(
+    canonical,
+    dest_tables=None,
+    dest_pk_by_table=None,
+):
+    """The destination table that already owns ``canonical``, as ``(table, key_column)``.
+
+    A shared attribute is normalised into a new lookup table. That is right for a vocabulary the
+    database does not model — status, currency, utility — and wrong for a reference to an entity
+    it already has. The verdict is decided from the workbook alone, so an upload with no
+    `building` sheet makes building_id look ownerless and earns a brand-new plenum_cafm.building_id
+    beside the real buildings table, with every building_id column pointed at the copy.
+
+    Resolution is by ENTITY NAME first: strip a trailing ``_id`` and look for that table, singular
+    or plural. The primary-key name is only a fallback, because on its own it misfires —
+    plenum_cafm.chiller_design_specs is keyed on asset_id, so "which table has a PK called
+    asset_id" answers chiller_design_specs rather than assets. The fallback also has to be
+    unambiguous: two tables keyed on the same name means guessing, and a foreign key onto a guess
+    is worse than none.
+
+    The name match supplies the key column from the table it found, not from the canonical:
+    vendors is keyed on ``id``, so vendor_id must reference vendors(id).
+    """
+    name = _norm_col_name(canonical)
+    if not name or name in _GENERIC_PK_NAMES:
+        return None
+    pk_by = {str(t).lower(): list(cols or []) for t, cols in (dest_pk_by_table or {}).items()}
+    by_lower = {str(t).lower(): t for t in (dest_tables or ())}
+    for t in pk_by:                      # a table known only by its key still counts as present
+        by_lower.setdefault(t, t)
+    if not by_lower:
+        return None
+
+    def _key_of(lower: str) -> str:
+        cols = pk_by.get(lower) or []
+        return str(cols[0]) if len(cols) == 1 else name
+
+    base = name[:-3] if name.endswith("_id") and len(name) > 3 else name
+    if base:
+        for cand in (base, base + "s", base + "es"):
+            if cand in by_lower:
+                return (by_lower[cand], _key_of(cand))
+
+    owners = [t for t, cols in pk_by.items() if [str(c).lower() for c in cols] == [name]]
+    if len(owners) == 1:
+        return (by_lower[owners[0]], name)
+    return None
 
 
 def _singular(table: str) -> str:
@@ -317,6 +375,26 @@ def canonical_name_for_group(
     if len(members) == 1:
         return best or _norm_col_name(members[0][1])
 
+    # Tier 4 — a shared base name under a relationship qualifier. A foreign key is normally
+    # spelled as the column it points at with something in front of it: work_orders
+    # .linked_alarm_id beside bms_alarms.alarm_id, work_orders.ppm_schedule_id beside
+    # ppm_schedules.schedule_id. Neither spelling is carried twice, so the consensus tiers above
+    # find nothing and the group used to fall straight through to a neutral `id_code_attr_G25` —
+    # a lookup table nobody could find under the name they were looking for.
+    #
+    # Strip the qualifier instead: when EVERY member's name ends in the same base, on an
+    # underscore boundary, that base names the group. Requiring *every* member is what keeps
+    # Tier 5's case out — (site_name, postcode, fault_description) share no base, and neither do
+    # (trading_name, vendor_name). A base that is itself generic ('id') names nothing, so it is
+    # left to fall through as before.
+    names = [_norm_col_name(c) for (_t, c) in members]
+    if len(names) > 1 and all(names):
+        base = min(names, key=len)
+        if base not in _GENERIC_PK_NAMES and all(
+            n == base or n.endswith(f"_{base}") for n in names
+        ):
+            return _fm_pref(base)
+
     # Tier 5 — heterogeneous multi-member group with no PK, no dest consensus,
     # no naming consensus, no FM hit. Pick a NEUTRAL synthetic name keyed by the
     # dominant format so we never mislead with an arbitrary member's name.
@@ -329,6 +407,114 @@ def canonical_name_for_group(
     return f"group_{h[:6]}"
 
 
+#: What a boolean column's distinct values look like, however the source spelled them.
+_BOOLEAN_TOKENS = frozenset({
+    "true", "false", "t", "f", "yes", "no", "y", "n", "1", "0",
+    "on", "off", "si", "oui", "non",
+})
+
+
+def _is_boolean_vocabulary(values: list) -> bool:
+    """True when these distinct values are a yes/no flag rather than a vocabulary.
+
+    The token set is the whole test: every value has to be a known boolean word. A status column
+    holding "open" and "closed" is two values and keeps its reference table; a code holding "0",
+    "1" and "2" keeps its own, because "2" is not a boolean word. Counting was tried as a second
+    condition and removed — two tables spelling the same flag differently ("yes"/"no" beside
+    "Y"/"N") give four distinct values and are still one flag. An empty list is not a flag; the
+    caller has already returned by then.
+    """
+    seen = {str(v).strip().lower() for v in values if str(v).strip()}
+    return bool(seen) and seen <= _BOOLEAN_TOKENS
+
+
+#: A value that is measured or belongs to one record, rather than chosen from a list.
+_DATE_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T].*)?$|^\d{1,2}[-/]\d{1,2}[-/]\d{4}")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_URL_RE = re.compile(r"^(https?://|www\.)", re.I)
+_PHONE_RE = re.compile(r"^\+?[\d][\d\s().-]{5,}$")
+
+#: Above this share of distinct-to-occurrences the values are an identifier, not a vocabulary.
+#: A vocabulary is re-used: status over 83 rows is 0.04, a name over 33 rows is 0.61.
+_VOCABULARY_MAX_DISTINCT_RATIO = 0.5
+
+#: …but only once there are enough rows for the ratio to mean anything. Over four rows every
+#: vocabulary looks like an identifier: two currencies in one table and two in another give
+#: three distinct values over four rows, which is the same 0.75 a serial number scores. Below
+#: this the question cannot be answered from the data, so it is not asked.
+_VOCABULARY_MIN_OCCURRENCES = 20
+
+#: How many of a lookup table's values travel on the entry, for the export to write out.
+_MAX_LOOKUP_VALUES = 10000
+
+
+def _not_a_vocabulary(values: list, occurrences: int) -> str | None:
+    """Why these values are not a vocabulary worth its own lookup table, or None if they are.
+
+    Normalising means the values are a closed, repeating set the schema does not already model.
+    Applied to anything two tables share, it produced a table of people's phone numbers, one of
+    their names, and one of 15 commissioning dates — each putting a foreign key on a per-record
+    attribute and a table of trivia into the customer's schema.
+
+    The tests are about what the values ARE, not what they look like: a multi-word vocabulary
+    ("Gas Safety Record") repeats and is kept, while a short code that barely repeats is an
+    identifier and is not. Only the automatic pass asks; a person re-classifying a group at the
+    gate has given an instruction.
+    """
+    seen = [str(v).strip() for v in values if str(v).strip()]
+    if not seen:
+        return "no values"
+    distinct = {v.lower() for v in seen}
+    if (occurrences >= _VOCABULARY_MIN_OCCURRENCES
+            and len(distinct) / occurrences > _VOCABULARY_MAX_DISTINCT_RATIO):
+        return (f"{len(distinct)} distinct values over {occurrences} rows — near one per row, "
+                f"so this identifies rows rather than classifying them")
+    if all(_DATE_RE.match(v) for v in seen):
+        return "dates are measured, not chosen from a list"
+    if all(_EMAIL_RE.match(v) for v in seen):
+        return "an email address belongs to its own record"
+    if all(_URL_RE.match(v) for v in seen):
+        return "a URL belongs to its own record"
+    if all(_PHONE_RE.match(v) for v in seen):
+        return "a phone number belongs to its own record"
+    return None
+
+
+def _pluralize(base: str) -> str:
+    """English plural of the last token — country→countries, status→statuses, asset→assets.
+
+    Mirrors schema_pluralize in graph/nodes/schema_pre_semantic_node.py; kept here rather than
+    imported so udr/ does not reach up into graph/.
+    """
+    if not base:
+        return base
+    head, _, last = base.rpartition("_")
+    prefix = f"{head}_" if head else ""
+    if last.endswith("y") and len(last) > 1 and last[-2] not in "aeiou":
+        return prefix + last[:-1] + "ies"
+    if last.endswith(("s", "x", "z", "ch", "sh")):
+        return prefix + (last if last.endswith("es") else last + "es")
+    return prefix + last + "s"
+
+
+def shared_table_name_for(canonical_name: str) -> str:
+    """What to call the lookup table synthesised from a shared attribute.
+
+    `shared_` and the plural of the thing. Naming it after the attribute — `alarm_id`, `status`,
+    `building_id` — reads as a column rather than a table, and drops a synthesised table into
+    plenum_cafm under a name nothing distinguishes from a real entity (plenum_cafm.alarm_id is
+    in the database from a run on 30 Oct). An attribute ending in _id names the entity it
+    identifies, so the suffix comes off and the entity is pluralised; a vocabulary is pluralised
+    as it stands. The PRIMARY KEY keeps the attribute's own name — that is what the foreign keys
+    reference and what the source columns are called.
+    """
+    name = _norm_col_name(canonical_name)
+    if not name:
+        return "shared_attribute"
+    base = name[:-3] if name.endswith("_id") and len(name) > 3 else name
+    return f"shared_{_pluralize(base)}"
+
+
 def synthesize_shared_attribute_table(
     tables: dict,
     *,
@@ -336,6 +522,7 @@ def synthesize_shared_attribute_table(
     group_id: str,
     member_pairs: list,
     members_display: list | None = None,
+    vocabulary_only: bool = True,
 ) -> dict | None:
     """B22.1 — synthesize the lookup table + DDL for one SHARED-ATTRIBUTE group.
 
@@ -352,7 +539,9 @@ def synthesize_shared_attribute_table(
     from .reference_tables import build_reference_table
 
     pk = canonical_name                                   # the shared attribute becomes the PK
-    tname = pk if pk not in tables else f"{pk}_ref"       # no-clobber vs an existing table
+    tname = shared_table_name_for(canonical_name)
+    if tname in tables:                                   # no-clobber vs an existing table
+        tname = f"{tname}_ref"
     ref = build_reference_table(
         tables, tname, source_table=None, value_columns=[(t, c) for (t, c) in member_pairs]
     )
@@ -360,36 +549,97 @@ def synthesize_shared_attribute_table(
         return None
     # rows carry the PK under key `tname`; normalise to the canonical value list.
     values = [str(r.get(tname)) for r in ref["rows"]]
+    # A yes/no column is not a vocabulary, and normalising one produces a table whose primary key
+    # is "true" and "false". Reported 30 Oct: ppm_schedules.statutory and bms_alarms.nuisance were
+    # grouped because both hold booleans, and the run emitted plenum_cafm.boolean_attr_G24 with
+    # both columns made foreign keys into it. The name looked wrong, but the table was the error:
+    # two unrelated flags constrained to a shared two-row table that carries no meaning. Groups
+    # with a real vocabulary — currency, status — are untouched.
+    if _is_boolean_vocabulary(values):
+        return None
+    # The rest of "is this a vocabulary" — asked only of the automatic pass. A person who
+    # re-classifies a group at the gate has given an instruction, and alarm_id (769 near-unique
+    # codes) is exactly the table that was asked for; the machine should not have proposed it
+    # unprompted, and must not refuse it when told.
+    if vocabulary_only:
+        _occurrences = 0
+        for (_t, _c) in member_pairs:
+            if _t in tables:
+                _occurrences += sum(
+                    1 for _v in column_values(tables[_t]["rows"], _c) if str(_v).strip())
+        _why = _not_a_vocabulary(values, _occurrences)
+        if _why:
+            return None
+        # A column that identifies the rows of its OWN table is that entity's alternate key, and
+        # the same values elsewhere are a reference to the entity rather than a list shared with
+        # it. vendors.trading_name is unique across 13 vendors while vendor_certificates repeats
+        # it 5 times each: the union ratio reads as a vocabulary, the parent does not. The
+        # certificates already carry vendor_id, so the name is a denormalised copy and this would
+        # have built a second table of vendor names beside `vendors`.
+        for (_t, _c) in member_pairs:
+            if _t not in tables:
+                continue
+            _vals = [str(_v).strip() for _v in column_values(tables[_t]["rows"], _c)
+                     if str(_v).strip()]
+            if len(_vals) >= 5 and len({_v.lower() for _v in _vals}) / len(_vals) >= 0.9:
+                return None
+    # Say on the table itself which columns it was made from. The gate's panel explains that,
+    # but the panel is not there when someone reads the schema a month later — and a bare
+    # lookup table whose rows came from two other tables is a puzzle without it. Asked for on
+    # 30 Oct: the lookup table should carry the names of every table sharing the column.
+    _sources = ", ".join(
+        f"{t}.{c}" for (t, c) in (
+            [tuple(str(m).split(".", 1)) for m in members_display]
+            if members_display and all("." in str(m) for m in members_display)
+            else member_pairs
+        )
+    )
+    _comment = (
+        "Shared attribute normalised into a lookup table"
+        f"{f' (group {group_id})' if group_id else ''}. "
+        f"Source columns whose values it holds: {_sources}."
+    )
+    # The shape the WRITE actually creates (write_node._write_shared_attribute_lookups): a
+    # surrogate id, the company that owns the row, the attribute, and a per-company unique. What
+    # was emitted here instead — the attribute alone as PRIMARY KEY — was never what appeared in
+    # the database, so the gate showed a CREATE that is not run beside ALTERs that are not run
+    # either (the writer says so: "FK constraints are not added"). A panel that predicts the
+    # schema has to predict the one that is built.
     create_ddl = (
         f"CREATE TABLE IF NOT EXISTS plenum_cafm.{_q(tname)} (\n"
-        f"    {_q(pk)} TEXT PRIMARY KEY\n"
-        f");"
+        f"    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n"
+        f"    organization_id UUID NOT NULL,\n"
+        f"    {_q(pk)} TEXT NOT NULL,\n"
+        f"    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n"
+        f"    UNIQUE (organization_id, {_q(pk)})\n"
+        f");\n"
+        f"COMMENT ON TABLE plenum_cafm.{_q(tname)} IS "
+        f"'{_comment.replace(chr(39), chr(39) * 2)}';"
     )
-    # FK ALTER targets the SOURCE table (assets, pm_templates) so the DDL matches the FK-rewrite
-    # display and the B8.1 (2.2) primary keys — NOT the routed destination (which would surprise
-    # the user with unrelated table names like maintenance_plans).
+    # Which source columns feed the table — shown in the panel, and the reason the COMMENT names
+    # them. No ALTER … ADD FOREIGN KEY is emitted: the unique that backs this table is
+    # (organization_id, attribute), and a composite unique cannot back a single-column foreign
+    # key. The statements that used to be emitted were never applied to anything.
     fk_rewrites = [{"src": t, "column": c} for (t, c) in member_pairs]
-    fk_ddls = [
-        f"ALTER TABLE plenum_cafm.{_q(rw['src'])} "
-        f"ADD CONSTRAINT {_q('fk_' + rw['src'] + '_' + rw['column'])} "
-        f"FOREIGN KEY ({_q(rw['column'])}) "
-        f"REFERENCES plenum_cafm.{_q(tname)} ({_q(pk)});"
-        for rw in fk_rewrites
-    ]
-    # Full block for the LIVE output SQL (applied to the DB): idempotent CREATE + INSERT, and
-    # each FK wrapped in a DO block that swallows errors so a constraint that can't apply (missing
-    # column, already exists) logs a NOTICE instead of aborting the whole migration transaction.
-    insert_ddls = [
-        f"INSERT INTO plenum_cafm.{_q(tname)} ({_q(pk)}) "
-        f"VALUES ('{str(v).replace(chr(39), chr(39) * 2)}') ON CONFLICT DO NOTHING;"
-        for v in sorted(set(values))
-    ]
-    safe_fk_ddls = [
-        "DO $$ BEGIN\n  " + d + "\nEXCEPTION WHEN others THEN "
-        "RAISE NOTICE 'skip FK (needs review): %', SQLERRM; END $$;"
-        for d in fk_ddls
-    ]
-    ddl_block = "\n".join([create_ddl, *insert_ddls, *safe_fk_ddls])
+    fk_ddls: list = []
+    # The artefact block carries the rows as well as the table, so a download holds the lookup
+    # table's data and not only its shape. The write inserts them against the company running
+    # the migration; a script run by hand cannot know that company, so the id stays a bind
+    # variable rather than a zero uuid that would quietly insert nonsense.
+    _vals = sorted(set(values))[:_MAX_LOOKUP_VALUES]
+    ddl_block = create_ddl
+    if _vals:
+        _tick = chr(39)
+        _rows = ', '.join('(:org_id, {0}{1}{0})'.format(_tick, str(v).replace(_tick, _tick * 2))
+                          for v in _vals)
+        ddl_block = chr(10).join([
+            create_ddl,
+            '-- Rows are written by the migration against the company running it. To apply this',
+            '-- script by hand, supply that organisation uuid for :org_id',
+            'INSERT INTO plenum_cafm.{0} (organization_id, {1})'.format(_q(tname), _q(pk)),
+            'VALUES {0}'.format(_rows),
+            'ON CONFLICT (organization_id, {0}) DO NOTHING;'.format(_q(pk)),
+        ])
     return {
         "table_name": tname,
         "pk_column": pk,
@@ -398,6 +648,11 @@ def synthesize_shared_attribute_table(
         else [f"{t}.{c}" for (t, c) in member_pairs],
         "distinct_count": len(values),
         "sample_values": sorted(values)[:15],
+        # Every value, so the export can carry the table's rows. Without this the lookup table
+        # appeared in the run's output only as a CREATE statement in output.sql — a table in the
+        # schema with no data anywhere in the download. Capped so a table a person asked for by
+        # hand (alarm_id, 769 codes) travels while nothing unbounded rides in the gate payload.
+        "values": sorted(values)[:_MAX_LOOKUP_VALUES],
         "fk_rewrites": [
             {"source": f"{rw['src']}.{rw['column']}", "references": f"{tname}.{pk}"}
             for rw in fk_rewrites
@@ -409,6 +664,7 @@ def synthesize_shared_attribute_table(
     }
 
 
+@memo_scoped
 def build_column_intelligence(
     tables: dict[str, dict],
     *,
@@ -419,6 +675,7 @@ def build_column_intelligence(
     canonical_overrides: dict[str, str] | None = None,
     dest_samples_by_table: dict[str, dict[str, list]] | None = None,
     dest_columns_by_table: dict[str, set] | None = None,
+    dest_pk_by_table: dict[str, list] | None = None,
     unresolved_suggest_by_source_col: dict[tuple[str, str], str] | None = None,
 ) -> dict:
     """Build the B13.1→B21.1 column-intelligence report.
@@ -435,6 +692,8 @@ def build_column_intelligence(
     map so every downstream node sees the same identifier.
     """
     tables = tables or {}
+    # Every table the destination schema has, however we came to hear of it.
+    _dest_table_names = set(dest_columns_by_table or {}) | set(dest_pk_by_table or {})
     dest_table_by_source = dest_table_by_source or {}
     dest_col_by_source_col = dest_col_by_source_col or {}
     conf_by_source_col = conf_by_source_col or {}
@@ -1134,25 +1393,50 @@ def build_column_intelligence(
             if (classification.get((t, c)) or {}).get("classification") == "FK"
         ]
         ri = max([r for r in ri_vals if isinstance(r, (int, float))], default=None)
+        _owner = None
         if pk_member and fk_member:
             verdict = "Foreign Key relationship"; fk_groups += 1
         elif pk_member:
             verdict = "Primary Key group"; pk_groups += 1
         else:
-            verdict = "Shared Attribute"; shared_groups += 1
+            # No member is a key — but the group is only ownerless as far as the WORKBOOK goes.
+            # An upload with no `building` sheet makes building_id look like a shared attribute
+            # and earns a new plenum_cafm.building_id beside the real buildings table, with every
+            # building_id column pointed at the copy. Ask the destination before deciding.
+            _owner = destination_entity_for(
+                rec["canonical_name"], _dest_table_names, dest_pk_by_table)
+            if _owner:
+                verdict = "Foreign Key relationship"; fk_groups += 1
+            else:
+                verdict = "Shared Attribute"; shared_groups += 1
+        _owner_key = f"{_owner[0]}.{_owner[1]}" if _owner else None
         classification_rows.append({
             "group_id": rec["group_id"],
             "canonical_name": rec["canonical_name"],
             "members": rec["members"],
-            "has_pk": _prefixed(*pk_member) if pk_member else None,
+            "has_pk": _prefixed(*pk_member) if pk_member else _owner_key,
             "fk_column": _prefixed(*fk_member) if fk_member else None,
             # Canonical-overridden form of has_pk / fk_column so B20.1 reads with
             # the same unified identifier as B13.1 / B14.1 / B19.1.
-            "canonical_has_pk": _canonical_key(_prefixed(*pk_member)) if pk_member else None,
+            "canonical_has_pk": (_canonical_key(_prefixed(*pk_member)) if pk_member
+                                 else _owner_key),
             "canonical_fk_column": _canonical_key(_prefixed(*fk_member)) if fk_member else None,
             "ri": ri,
             "verdict": verdict,
+            # Set only when the destination already owns the attribute, so the gate can say which
+            # table it is referencing rather than leaving "FK" unexplained on a group whose
+            # members are all source columns.
+            "owned_by_destination": _owner_key,
         })
+        if _owner:
+            for (_t, _c) in g:
+                fk_candidates.append({
+                    "src_table": _t, "src_column": _c,
+                    "dst_table": _owner[0], "dst_column": _owner[1],
+                    "ri": ri, "confirmed": True,
+                    "reason": f"{_owner[0]} already exists in the destination and owns this "
+                              f"attribute — referencing it instead of creating a lookup table",
+                })
 
     # ── B22.1 — synthesize a lookup table per SHARED-ATTRIBUTE group + DDL + FK rewrites ──
     # A shared attribute that is NOT any table's PK/FK (e.g. asset_type shared by assets +
@@ -1174,6 +1458,84 @@ def build_column_intelligence(
         )
         if entry:
             shared_attribute_tables.append(entry)
+
+    # ── B20.2 — keys the FORMAT gate cannot see ───────────────────────────────
+    # Columns reach B20.1 only by being GROUPED, and grouping is gated on format agreement. The
+    # cardinality guard in column_format re-labels a near-all-distinct column `id_code` and leaves
+    # a repeating one `categorical` — and a small parent code table is all-distinct by
+    # construction, because it is the key, while the child that references it repeats. The two
+    # sides therefore score 0 on format precisely when they are a key and a reference to it, and
+    # the value evidence is never reached. Reported 30 Oct: work_orders.priority (P1-P4 over 1,803
+    # rows) against sla_matrix.priority (the key of a 4-row table) — 100% of values resolve, and
+    # no foreign key was produced. Priority, status codes, type codes: every small lookup parent.
+    #
+    # So resolve these from the keys themselves. Coincidence is kept out two ways: the names must
+    # be related, or the key's values must be codes rather than numbers — two integer columns
+    # sharing a range is a coincidence, not a reference — and a child's distinct values must fit
+    # inside the key's.
+    _claimed = {str(m).lower() for rec in classification_rows for m in (rec.get("members") or [])}
+    _by_parent: dict[tuple, list] = {}
+    for _pt, _pk_cols in pk_by_table.items():
+        if len(_pk_cols or []) != 1 or _is_dup_copy(_pt) or _pt not in tables:
+            continue
+        _pcol = _pk_cols[0]
+        _pvals = {str(v).strip().lower() for v in column_values(tables[_pt]["rows"], _pcol)
+                  if str(v).strip()}
+        if len(_pvals) < 2:
+            continue
+        _codes = not all(_looks_numeric(v) for v in _pvals)
+        _pnorm = _norm_col_name(_pcol)
+        for (_st, _scol) in nodes:
+            if _st == _pt or _is_dup_copy(_st) or _st not in tables:
+                continue
+            if _scol in (pk_by_table.get(_st) or []):
+                continue          # a table's own key is not a reference to someone else's
+            if f"{_st}.{_scol}".lower() in _claimed:
+                continue
+            _snorm = _norm_col_name(_scol)
+            if not (_snorm == _pnorm or _snorm.endswith("_" + _pnorm) or _codes):
+                continue
+            _svals = {str(v).strip().lower() for v in column_values(tables[_st]["rows"], _scol)
+                      if str(v).strip()}
+            if not _svals or len(_svals) > len(_pvals):
+                continue
+            if len(_svals & _pvals) / len(_svals) < RI_MIN:
+                continue
+            _by_parent.setdefault((_pt, _pcol), []).append((_st, _scol))
+            _claimed.add(f"{_st}.{_scol}".lower())
+
+    for (_pt, _pcol), _kids in _by_parent.items():
+        _key = _prefixed(_rep(_pt), _pcol)
+        _ris = {(t, c): referential_integrity(tables[t]["rows"], c, tables[_pt]["rows"], _pcol)
+                for (t, c) in _kids}
+        fk_groups += 1
+        classification_rows.append({
+            "group_id": f"KEY-{_rep(_pt)}-{_norm_col_name(_pcol)}",
+            "canonical_name": _norm_col_name(_pcol),
+            "members": [_prefixed(t, c) for (t, c) in _kids] + [_key],
+            "has_pk": _key,
+            "fk_column": _prefixed(*_kids[0]),
+            "canonical_has_pk": _canonical_key(_key),
+            "canonical_fk_column": _canonical_key(_prefixed(*_kids[0])),
+            "ri": max([r for r in _ris.values() if isinstance(r, (int, float))], default=None),
+            "verdict": "Foreign Key relationship",
+            "owned_by_destination": None,
+            # Says the grouping gates did not find this one; the key did.
+            "resolved_by_key": True,
+        })
+        for (t, c) in _kids:
+            _ri = _ris[(t, c)]
+            fk_candidates.append({
+                "src_table": t, "src_column": c,
+                "dst_table": _rep(_pt), "dst_column": _pcol,
+                "ri": _ri,
+                "confirmed": isinstance(_ri, (int, float)) and _ri >= RI_MIN,
+                "reason": (
+                    f"every value resolves into the primary key {_key} "
+                    f"({round((_ri or 0) * 100)}% of rows) — the format gate scored this pair "
+                    f"below its threshold, which a key and a reference to it routinely do"
+                ),
+            })
 
     # ── B20.1 completeness — add EVERY table's primary key as its own "Primary Key group" row ──
     # The group-based classification above only surfaces a PK when another table references it (it
@@ -1552,10 +1914,11 @@ def apply_classification_decisions(
       • FK → Shared Attribute: the FK is NOT enforced; the group instead synthesises its
         B22.1 lookup table + FK-rewrite DDL (needs ``tables`` = ``{name: {"rows", "columns"}}``;
         the verdict change still applies when data is unavailable, just without a lookup).
-      • Shared Attribute → FK: the lookup table is NOT created; the group is recorded as a
-        Foreign Key relationship. Enforcement (fk_candidates) is only added when the group
-        carries a PK member to reference — otherwise the re-classification is display/audit
-        only (there is no PK to enforce against).
+      • Shared Attribute → FK: the group is recorded as a Foreign Key relationship and
+        enforced. Where a member is some table's PK the others reference it and no lookup
+        table is kept. A genuine shared attribute has no such member — a group is called
+        shared precisely because none of its columns is a primary key — so the reference
+        table is what the columns point at, built here if the demotion path has not already.
 
     The row keeps a ``human_override`` marker so every downstream view (Activity-Log Section 2,
     the post-write UDR report) can show the decision was human, not model. Group counts in
@@ -1627,9 +1990,19 @@ def apply_classification_decisions(
         if not target:
             continue
         verdict = str(row.get("verdict") or "").lower()
-        if target == "shared" and "foreign" in verdict:
+        # Any verdict but "already shared" can be demoted. This guard used to read
+        # `"foreign" in verdict`, true for only one of the three verdicts a group can carry, so
+        # marking a "Primary Key group" shared — alarm_id, schedule_id — matched no branch at
+        # all: the verdict stayed, no lookup table was built, and nothing was recorded.
+        if target == "shared" and "shared" not in verdict:
+            label = "pk_to_shared" if "primary" in verdict else "fk_to_shared"
             row["verdict"] = "Shared Attribute"
-            row["human_override"] = "fk_to_shared"
+            row["human_override"] = label
+            # The column is no longer any table's key to own, so neither the enforcement into it
+            # nor the claim on it survives. Left in place, has_pk sends a later promotion down
+            # the branch that references the old owner instead of the new lookup table.
+            row["has_pk"] = None
+            row["canonical_has_pk"] = None
             _drop_fk_candidates(_member_keys(row))
             if tables and gid not in existing_lookup_groups:
                 pairs = _member_pairs(row)
@@ -1641,18 +2014,24 @@ def apply_classification_decisions(
                         group_id=gid,
                         member_pairs=pairs,
                         members_display=row.get("members"),
+                        vocabulary_only=False,   # the person asked for this one
                     )
                     if entry:
                         shared_tables.append(entry)
                         existing_lookup_groups.add(gid)
                         result["lookup_tables_added"].append(entry["table_name"])
-            result["overrides_applied"][gid] = "fk_to_shared"
-        elif target == "fk" and "shared" in verdict:
+            result["overrides_applied"][gid] = label
+        # Likewise the other way: the gate enables "Foreign Key relationship" whenever the row
+        # has a primary-key member, which is exactly what a Primary Key group has.
+        elif target == "fk" and "foreign" not in verdict:
+            label = "pk_to_fk" if "primary" in verdict else "shared_to_fk"
             row["verdict"] = "Foreign Key relationship"
-            row["human_override"] = "shared_to_fk"
-            shared_tables[:] = [t for t in shared_tables if str(t.get("from_group")) != gid]
+            row["human_override"] = label
             pk_key = row.get("has_pk") or row.get("canonical_has_pk")
             if pk_key and "." in str(pk_key):
+                # A member of this group is some table's primary key, so the others point at it
+                # and the lookup table is not needed.
+                shared_tables[:] = [t for t in shared_tables if str(t.get("from_group")) != gid]
                 dt, dc = str(pk_key).split(".", 1)
                 for (st, sc) in _member_pairs(row):
                     if f"{st}.{sc}".lower() == str(pk_key).lower():
@@ -1664,7 +2043,49 @@ def apply_classification_decisions(
                         "reason": "human override at classification gate (B20.1)",
                     })
                     result["fk_candidates_added"] += 1
-            result["overrides_applied"][gid] = "shared_to_fk"
+            else:
+                # A shared attribute never has one: a group is called shared precisely because no
+                # member is a primary key (see the verdict above — `has_pk` is set only when a PK
+                # member exists). So this branch was unreachable for every row the gate offers the
+                # promotion on, and promoting used to delete the lookup table and add nothing: the
+                # user lost the reference table and its foreign keys, and gained a label.
+                #
+                # The reference table IS the thing to point at. Build it if the demotion path has
+                # not already, then point every member column at its key — which is what asking
+                # for a foreign key means when the column is shared rather than owned.
+                entry = next((t for t in shared_tables if str(t.get("from_group")) == gid), None)
+                if entry is None and tables:
+                    pairs = _member_pairs(row)
+                    canonical = str(row.get("canonical_name") or (pairs[0][1] if pairs else "")).strip()
+                    if pairs and canonical:
+                        entry = synthesize_shared_attribute_table(
+                            tables,
+                            canonical_name=canonical,
+                            group_id=gid,
+                            member_pairs=pairs,
+                            members_display=row.get("members"),
+                            vocabulary_only=False,   # the person asked for this one
+                        )
+                        if entry:
+                            shared_tables.append(entry)
+                            existing_lookup_groups.add(gid)
+                            result["lookup_tables_added"].append(entry["table_name"])
+                if entry:
+                    dst_t, dst_c = str(entry.get("table_name")), str(entry.get("pk_column"))
+                    known = {f"{f.get('src_table')}.{f.get('src_column')}".lower()
+                             for f in fk_candidates}
+                    for (st, sc) in _member_pairs(row):
+                        if f"{st}.{sc}".lower() in known:
+                            continue
+                        fk_candidates.append({
+                            "src_table": st, "src_column": sc,
+                            "dst_table": dst_t, "dst_column": dst_c,
+                            "ri": row.get("ri"), "confirmed": True,
+                            "reason": "human override at classification gate (B20.1): "
+                                      "shared attribute promoted to a foreign key on its reference table",
+                        })
+                        result["fk_candidates_added"] += 1
+            result["overrides_applied"][gid] = label
 
     # ── 2. De-selected groups — nothing of theirs is applied ───────────────────
     if rejected_set:
@@ -1674,6 +2095,10 @@ def apply_classification_decisions(
                 rej_keys |= _member_keys(row)
         shared_tables[:] = [
             t for t in shared_tables if str(t.get("from_group")) not in rejected_set
+        ]
+        # Kept aside, not shown: the hierarchy step needs the members to stop enforcing them.
+        ci["classification_rejected_rows"] = [
+            c for c in classification if str(c.get("group_id")) in rejected_set
         ]
         classification[:] = [
             c for c in classification if str(c.get("group_id")) not in rejected_set

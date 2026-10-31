@@ -31,10 +31,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
+from cafm_connector.api.routes.plenum_cafm.maintenance_vendors import (
+    DELETED_STATUS,
+    USE_VENDOR_DELETE,
+)
+from cafm_connector.api.security import _detail, require_admin
 
 # ── Sub-application (inner — mounted at /table-editor in the main connector app) ─
 
@@ -47,10 +52,21 @@ table_editor_inner = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# Authorization travels as a bearer header, not a cookie, so credentialed cross-site
+# requests are not needed — and "*" with allow_credentials=True is the combination browsers
+# refuse and servers should never offer. Set TABLE_EDITOR_CORS_ORIGINS to a comma-separated
+# list to name the UI's origins explicitly.
+_CORS_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "TABLE_EDITOR_CORS_ORIGINS",
+        "http://localhost:3001,http://127.0.0.1:3001",
+    ).split(",") if o.strip()
+]
+
 table_editor_inner.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -64,7 +80,13 @@ async def dbapi_error_handler(_request: Request, exc: DBAPIError) -> JSONRespons
     return JSONResponse(status_code=422, content={"detail": detail})
 
 
-router = APIRouter(prefix="/tables", tags=["Table Customizer"])
+# Every route here reads and writes arbitrary rows in a table named at runtime, and two of
+# them add or drop columns. A per-row company filter cannot be expressed over a query whose
+# table is chosen by the caller, so the boundary is the role: an administrator of the
+# company, or nobody. ``get_plenum_db`` already refuses a request with no token; this refuses
+# a signed-in user who is not an administrator.
+router = APIRouter(prefix="/tables", tags=["Table Customizer"],
+                   dependencies=[Depends(require_admin)])
 
 _SCHEMA = "plenum_cafm"
 _SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
@@ -89,6 +111,150 @@ async def _require_table(table: str, db: AsyncSession) -> None:
     valid = await _valid_tables(db)
     if table not in valid:
         raise HTTPException(404, f"Table '{table}' not found in schema '{_SCHEMA}'")
+
+
+#: Columns this editor will not write and will not return, per table.
+#:
+#: The editor is a deliberate raw hatch: any table, any column, straight into SQL. That
+#: is fine for a rate schedule and not fine for a credential, and the columns below are
+#: credentials — a generic hatch over them is a second, quieter version of the
+#: password_hash hole that POST /users used to have, reachable by anyone who can reach
+#: the table editor.
+#:
+#: Writing is refused rather than filtered, so a caller who tries is told; reading is
+#: filtered rather than refused, so the rest of the row still renders.
+_PROTECTED_COLUMNS: dict[str, frozenset[str]] = {
+    # Set only by the auth service, which applies the password policy and hashes
+    # server-side. A value written here would be a credential nobody checked.
+    "users": frozenset({"password_hash"}),
+    # A live session token and a live one-time code. Both are credentials in flight, and
+    # both are stored hashed precisely so that reading the table gives up nothing.
+    "auth_sessions": frozenset({"refresh_token_hash"}),
+    "auth_otp_codes": frozenset({"code_hash", "salt"}),
+}
+
+#: Not secrets, so they are shown — but not settable here. A role change made through
+#: this hatch is checked against nobody and leaves no audit row, and self-promotion to
+#: superadmin would be one PATCH away. It goes through POST /api/auth/users/{id}/role,
+#: which enforces who may grant what.
+_WRITE_ONLY_ELSEWHERE: dict[str, frozenset[str]] = {
+    "users": frozenset({"role"}),
+}
+
+
+def _protected(table: str) -> frozenset[str]:
+    return _PROTECTED_COLUMNS.get(table, frozenset())
+
+
+def _refuse_protected_writes(table: str, data: dict) -> None:
+    """Raise if the payload touches a column this editor must not set."""
+    blocked = sorted(set(data) & _protected(table))
+    if blocked:
+        raise HTTPException(
+            403,
+            f"{', '.join(blocked)} cannot be set here. It is a credential, and this "
+            "editor cannot apply the checks that make one safe. Use the auth service: "
+            "POST /api/auth/register, or /api/auth/password/forgot then /password/reset.",
+        )
+    audited = sorted(set(data) & _WRITE_ONLY_ELSEWHERE.get(table, frozenset()))
+    if audited:
+        raise HTTPException(
+            403,
+            f"{', '.join(audited)} cannot be set here — a change made this way is not "
+            "checked against who may make it and leaves no audit row. Use "
+            "POST /api/auth/users/{user_id}/role.",
+        )
+
+
+def _redact(table: str, row: dict) -> dict:
+    """Drop protected columns from a row on its way out."""
+    blocked = _protected(table)
+    return {k: v for k, v in row.items() if k not in blocked}
+
+
+#: A vendor's row is edited here like any other, except for its lifecycle (Hussain, 12 Oct
+#: 2026). Deleting a vendor — or reviving one — goes through the Vendors page, where the delete
+#: is checked, the vendor's assignments are cleared and the vendor audit trail is written; this
+#: editor does none of that. So it does not delete a vendor row, does not set its status to deleted,
+#: and does not edit a retired vendor at all: that row is history, kept so the work and
+#: invoices that name it still resolve.
+_VENDORS = "vendors"
+
+
+def _vendor_status(value: Any) -> str:
+    # NULL is live and case is ignored, as in operations-intelligence's live_vendor_sql.
+    return "active" if value is None else str(value).lower()
+
+
+async def _refuse_vendor_lifecycle_edit(db: AsyncSession, row_id: str, data: dict) -> None:
+    """Raise if this PATCH would edit a retired vendor, or retire one.
+
+    Read with the UPDATE's own predicate, so it sees exactly the row the UPDATE would write,
+    and locked, so the vendor delete cannot retire it between this read and that write.
+    """
+    rows = await db.execute(
+        text(f"SELECT to_jsonb(v)->>'status' FROM {_quote(_SCHEMA)}.{_quote(_VENDORS)} v "
+             "WHERE v.id = :_row_id FOR UPDATE"),
+        {"_row_id": row_id},
+    )
+    current = [_vendor_status(s) for s in rows.scalars().all()]
+    if DELETED_STATUS in current:
+        raise HTTPException(409, _detail(
+            "This vendor has been deleted. Its record is kept as history and cannot be edited.",
+            "vendor_deleted"))
+    # Only retiring is refused (reviving is the 409 above). active <-> inactive is an ordinary
+    # edit, and this editor and svc-udr are the only places it can be made (12 Oct 2026).
+    if "status" in data and _vendor_status(data["status"]).strip() == DELETED_STATUS:
+        raise HTTPException(403, _detail(
+            "A vendor cannot be marked deleted here. " + USE_VENDOR_DELETE,
+            "use_vendor_delete"))
+
+
+#: Columns that name a vendor, in whichever table carries them (12 Oct 2026). A value written
+#: into one of these links new work, a contact or a contract to that vendor, which the spec
+#: refuses for a retired vendor on every path — the editor included.
+_VENDOR_REF_COLUMNS = frozenset({"vendor_id", "assigned_vendor", "supplier_id", "contractor_id"})
+
+
+async def _refuse_retired_vendor_refs(db: AsyncSession, data: dict) -> None:
+    """Raise 409 if a vendor column in ``data`` names a retired vendor, 503 if unreadable.
+
+    One status read for every vendor named. The id is compared as lower-cased text, because
+    production vendor ids are varchar with legacy values and a uuid may arrive in any case, and
+    the rows are read FOR SHARE so a write racing the vendor delete waits for it.
+    """
+    ids = sorted({str(v).strip().lower() for k, v in data.items()
+                  if k in _VENDOR_REF_COLUMNS and v is not None and str(v).strip()})
+    if not ids:
+        return
+    try:
+        rows = await db.execute(
+            text(f"SELECT to_jsonb(v)->>'status' FROM {_quote(_SCHEMA)}.{_quote(_VENDORS)} v "
+                 "WHERE lower(v.id::text) = ANY(:_vendor_ids) FOR SHARE"),
+            {"_vendor_ids": ids},
+        )
+        statuses = [_vendor_status(s) for s in rows.scalars().all()]
+    except SQLAlchemyError as exc:
+        raise HTTPException(503, _detail(
+            "We could not confirm this vendor is still current, so nothing was saved. "
+            "Try again in a moment.", "vendor_check_failed")) from exc
+    if DELETED_STATUS in statuses:
+        raise HTTPException(409, _detail(
+            "This vendor has been deleted, so nothing new can be linked to it. "
+            "Choose a current vendor.", "vendor_deleted"))
+
+
+#: The audit trails are append-only records written by the actions they describe (12 Oct
+#: 2026). The vendor audit trail is read from ops_audit_log and trusts what a row says, so an
+#: entry inserted here would be a "deleted" record nobody made. Reading them stays open.
+_AUDIT_TABLES = frozenset({"ops_audit_log", "audit_logs"})
+
+
+def _refuse_audit_write(table: str) -> None:
+    if table in _AUDIT_TABLES:
+        raise HTTPException(403, _detail(
+            "The audit trail cannot be edited here. Its entries are written by the actions "
+            "they record.", "audit_trail_read_only"))
 
 
 async def _valid_columns(table: str, db: AsyncSession) -> set[str]:
@@ -175,12 +341,14 @@ async def list_rows(
         text(f"SELECT * FROM {schema_table} ORDER BY 1 LIMIT :lim OFFSET :off"),
         {"lim": limit, "off": offset},
     )
-    cols = list(data_rows.keys())
-    rows = [dict(zip(cols, r)) for r in data_rows]
+    cols = [c for c in data_rows.keys() if c not in _protected(table)]
+    rows = [_redact(table, dict(zip(data_rows.keys(), r))) for r in data_rows]
     # Serialise non-JSON-safe types
     rows = [{k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
              for k, v in row.items()} for row in rows]
 
+    # `columns` is filtered alongside the rows: a column named in the header with no
+    # values under it reads as data that failed to load rather than as data withheld.
     return {"total": total, "limit": limit, "offset": offset, "columns": cols, "rows": rows}
 
 
@@ -196,11 +364,14 @@ async def create_row(
     body: RowBody,
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    _refuse_audit_write(table)
     await _require_table(table, db)
     valid_cols = await _valid_columns(table, db)
     data = {k: v for k, v in body.data.items() if k in valid_cols}
     if not data:
         raise HTTPException(422, "No valid columns provided")
+    _refuse_protected_writes(table, data)
+    await _refuse_retired_vendor_refs(db, data)
 
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     col_list = ", ".join(_quote(c) for c in data)
@@ -212,8 +383,10 @@ async def create_row(
     await db.commit()
     cols = list(result.keys())
     row = result.fetchone()
-    return {k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
-            for k, v in zip(cols, row)}
+    return _redact(table, {
+        k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
+        for k, v in zip(cols, row)
+    })
 
 
 # ── update row ─────────────────────────────────────────────────────────────────
@@ -225,11 +398,16 @@ async def update_row(
     body: RowBody,
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    _refuse_audit_write(table)
     await _require_table(table, db)
     valid_cols = await _valid_columns(table, db)
     data = {k: v for k, v in body.data.items() if k in valid_cols and k != "id"}
     if not data:
         raise HTTPException(422, "No valid columns to update")
+    _refuse_protected_writes(table, data)
+    if table == _VENDORS:
+        await _refuse_vendor_lifecycle_edit(db, row_id, data)
+    await _refuse_retired_vendor_refs(db, data)
 
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     set_clause = ", ".join(f"{_quote(c)} = :{c}" for c in data)
@@ -243,8 +421,10 @@ async def update_row(
     if row is None:
         raise HTTPException(404, f"Row '{row_id}' not found in table '{table}'")
     cols = list(result.keys())
-    return {k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
-            for k, v in zip(cols, row)}
+    return _redact(table, {
+        k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
+        for k, v in zip(cols, row)
+    })
 
 
 # ── delete row ─────────────────────────────────────────────────────────────────
@@ -255,6 +435,11 @@ async def delete_row(
     row_id: str,
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    # Before any statement: a raw DELETE here would remove a vendor with no check, no
+    # unassigning and no trail entry.
+    if table == _VENDORS:
+        raise HTTPException(403, _detail(USE_VENDOR_DELETE, "use_vendor_delete"))
+    _refuse_audit_write(table)
     await _require_table(table, db)
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     result = await db.execute(
@@ -290,6 +475,13 @@ async def add_column(
     confirm: bool = Query(False),
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    # Before anything else (12 Oct 2026): dropping vendors.status reads every retired vendor
+    # as live again, in every company, and the vendor delete then refuses to retire anything.
+    # The vendors table's shape belongs to the vendor delete and its migrations, not this editor.
+    if table == _VENDORS:
+        raise HTTPException(403, _detail(
+            "The vendors table's columns cannot be changed here. " + USE_VENDOR_DELETE,
+            "use_vendor_delete"))
     if not confirm:
         raise HTTPException(
             400,
@@ -326,6 +518,13 @@ async def drop_column(
     confirm: bool = Query(False),
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    # Before anything else (12 Oct 2026): dropping vendors.status reads every retired vendor
+    # as live again, in every company, and the vendor delete then refuses to retire anything.
+    # The vendors table's shape belongs to the vendor delete and its migrations, not this editor.
+    if table == _VENDORS:
+        raise HTTPException(403, _detail(
+            "The vendors table's columns cannot be changed here. " + USE_VENDOR_DELETE,
+            "use_vendor_delete"))
     if not confirm:
         raise HTTPException(
             400,

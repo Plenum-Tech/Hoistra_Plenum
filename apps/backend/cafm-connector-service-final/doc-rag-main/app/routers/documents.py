@@ -31,14 +31,40 @@ def _run_ingestion_pipeline(document_id: str, dest_path: Path, filename: str) ->
     Keeps the upload HTTP request short so gateways (Azure ACA ~240s, nginx) do not 504.
     """
     start = time.time()
+
+    # THE READ IS CLOSED BEFORE CLAUDE IS CALLED.
+    #
+    # This used to open a session, read the row — which autobegins a transaction and takes
+    # AccessShareLock on plenum_cafm.ingestion_documents — and then call Claude with that
+    # lock still held for the minutes extraction takes. Meanwhile init_db() issues
+    # `ALTER TABLE … ADD COLUMN IF NOT EXISTS` on every boot, which wants AccessExclusiveLock.
+    #
+    # On 17 Sep 2026 one instance restarted while another was mid-extraction. The ALTER
+    # queued behind the open transaction, and because a PENDING exclusive lock blocks every
+    # later reader, all traffic to that table stopped — from every service, on every host.
+    # 46 queries queued, the oldest waiting 27 minutes.
+    #
+    # Nothing here needs a transaction open across the call: the id is all extraction wants,
+    # and the row is looked up again for the write.
+    probe = SessionLocal()
+    try:
+        doc_row = probe.query(Document).filter(Document.id == document_id).first()
+        if not doc_row:
+            logger.error("Ingestion background: document not found | id={}", document_id)
+            return
+        doc_pk = doc_row.id
+    finally:
+        probe.close()
+
+    extracted = extraction_service.extract(dest_path, document_id=doc_pk)
+
+    # The write half, on a connection that has held nothing while the model worked.
     db = SessionLocal()
     try:
         doc_row = db.query(Document).filter(Document.id == document_id).first()
         if not doc_row:
-            logger.error("Ingestion background: document not found | id={}", document_id)
+            logger.error("Ingestion background: document vanished mid-extraction | id={}", document_id)
             return
-
-        extracted = extraction_service.extract(dest_path, document_id=doc_row.id)
         logger.info(
             "Ingestion stage=extract | doc_id={} | pages={} | images={} | chars={} | ms={}",
             doc_row.id,

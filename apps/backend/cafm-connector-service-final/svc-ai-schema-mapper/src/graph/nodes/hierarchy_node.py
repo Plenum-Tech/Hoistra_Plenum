@@ -80,6 +80,16 @@ async def hierarchy_node(state: MigrationState) -> MigrationState:
                 "sample_row": {k: str(v)[:50] for k, v in records[0].items()},
             }
 
+        # A Go run's preprocess measured, for each pair of related columns, how much of one the
+        # other holds; the hierarchy model gets those numbers next to the names.
+        _links = ((state.get("engine_reports") or {}).get("preprocess") or {}).get("links") or []
+        for _l in _links:
+            _t = schema_summary.get(str(_l.get("table")))
+            if _t is not None:
+                _t.setdefault("measured_links", []).append(
+                    {"column": _l.get("column"), "references": _l.get("references"),
+                     "containment": round(float(_l.get("containment") or 0), 3)})
+
         table_names = list(column_names_per_table.keys())
         log(f"Schema summary: {len(schema_summary)} tables")
 
@@ -260,6 +270,15 @@ async def hierarchy_node(state: MigrationState) -> MigrationState:
                 log(f"FM ontology: added {_added} ontology-implied relationship(s) for review")
         except Exception as _ont_err:  # pragma: no cover — supplement is additive
             log(f"FM ontology supplement skipped: {_ont_err}")
+
+        # ── Step 3c: the Keys & shared attributes gate (B20.1) decides what is enforced ──
+        # Before the duplicate collapse below, which renames sheets the gate's members name.
+        confirmed_hierarchies, _b20_dropped, _b20_added = apply_classification_answers(
+            confirmed_hierarchies, state, column_names_per_table
+        )
+        if _b20_dropped or _b20_added:
+            log(f"Classification gate: {_b20_dropped} relationship(s) not enforced, "
+                f"{_b20_added} added as the person classified them")
 
         # ── FINAL duplicate collapse over the COMPLETE relationship set ──────────────────────────
         # Sheets co-routed to the same destination (work_order + workorders → work_orders) are ONE
@@ -458,6 +477,120 @@ def _fk_key(fk: dict) -> tuple[str, str, str, str]:
     )
 
 
+def _mapped_column_names(state: dict) -> dict[str, dict[str, str]]:
+    """``{sheet (lower): {source column (lower): column name after mapping}}``.
+
+    The renames preprocess applied, in its order: the tier mappings (already re-targeted by the
+    B14.1 answers), B14.1 answers no mapping named, then the custom columns the gates named.
+    """
+    from .preprocess_node import _snake
+
+    out: dict[str, dict[str, str]] = {}
+
+    def _put(table, field, name) -> None:
+        if table and field and name:
+            out.setdefault(str(table).lower(), {})[str(field).lower()] = str(name)
+
+    for bucket in ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table"):
+        for table, maps in (state.get(bucket) or {}).items():
+            for m in maps or []:
+                if isinstance(m, dict):
+                    _put(table, m.get("source_field"), m.get("target_field"))
+    for table, cols in (state.get("column_dest_overrides") or {}).items():
+        for field, choice in (cols or {}).items() if isinstance(cols, dict) else ():
+            if choice and str(field).lower() not in out.get(str(table).lower(), {}):
+                _put(table, field, _snake(field) if str(choice) == "__new__" else choice)
+    for e in state.get("extra_fields_config") or []:
+        if isinstance(e, dict) and str(e.get("storage_strategy") or "custom") == "custom":
+            _put(e.get("source_table"), e.get("source_field"), e.get("custom_column_name"))
+    return out
+
+
+def apply_classification_answers(
+    relationships: list, state: dict, columns_by_table: dict
+) -> "tuple[list, int, int]":
+    """The Keys & shared attributes gate's (B20.1) answers, applied to the relationships the SQL
+    artifacts and the write enforce. Returns ``(relationships, dropped, added)``.
+
+    Until 29 Oct 2026 the answers reached only state["column_intelligence"], which the screens
+    draw, while this step re-derived the relationships from scratch: a demoted or excluded FK
+    was still enforced, and a promoted Shared Attribute only if detection found it anyway.
+
+    * FK → Shared Attribute, or an excluded group: no relationship from any member column.
+    * Shared Attribute → FK: each member references the group's PK member (REFERENCE, confirmed).
+    * Every other group: unchanged — detection and the hierarchy gate decide, as before.
+
+    Members are "sheet.source column"; relationships name the sheet and the column after mapping.
+    """
+    ci = state.get("column_intelligence") or {}
+    if not isinstance(ci, dict):
+        return relationships, 0, 0
+    rows = [r for r in (ci.get("classification") or []) if isinstance(r, dict)]
+    rejected = [r for r in (ci.get("classification_rejected_rows") or []) if isinstance(r, dict)]
+    demoted = [r for r in rows if r.get("human_override") == "fk_to_shared"] + rejected
+    promoted = [r for r in rows if r.get("human_override") == "shared_to_fk"]
+    if not demoted and not promoted:
+        return relationships, 0, 0
+
+    names = _mapped_column_names(state)
+    tables = {str(t).lower(): t for t in (columns_by_table or {})}
+    cols_lower = {str(t).lower(): {str(c).lower(): c for c in (cs or [])}
+                  for t, cs in (columns_by_table or {}).items()}
+
+    def _resolve(member) -> "tuple[str, str] | None":
+        """(sheet, column as the relationships name it) for 'sheet.source column', else None."""
+        key = str(member or "")
+        if "." not in key:
+            return None
+        t, c = key.split(".", 1)
+        sheet = tables.get(t.lower())
+        if sheet is None:
+            return None
+        have = cols_lower.get(t.lower(), {})
+        for cand in (names.get(t.lower(), {}).get(c.lower()), c):
+            if cand and str(cand).lower() in have:
+                return sheet, have[str(cand).lower()]
+        return None
+
+    not_enforced: set[tuple[str, str]] = set()
+    for row in demoted:
+        for m in row.get("members") or []:
+            hit = _resolve(m)
+            if hit:
+                not_enforced.add((hit[0].lower(), hit[1].lower()))
+    kept = [r for r in relationships
+            if (str(r.get("source_table") or "").lower(),
+                str(r.get("source_column") or "").lower()) not in not_enforced]
+    dropped = len(relationships) - len(kept)
+
+    existing = {(str(r.get("source_table") or "").lower(), str(r.get("source_column") or "").lower(),
+                 str(r.get("target_table") or "").lower()) for r in kept}
+    added = 0
+    for row in promoted:
+        pk = _resolve(row.get("has_pk") or row.get("canonical_has_pk"))
+        if pk is None:
+            continue  # no PK member to reference — the answer stays a label, as at the gate
+        for m in row.get("members") or []:
+            src = _resolve(m)
+            if src is None or src == pk:
+                continue
+            k = (src[0].lower(), src[1].lower(), pk[0].lower())
+            if k in existing:
+                continue
+            existing.add(k)
+            kept.append(HierarchyRelationship(
+                source_table=src[0], source_column=src[1],
+                target_table=pk[0], target_column=pk[1],
+                relationship_type="REFERENCE", confidence=1.0, data_match_rate=0.0,
+                reasoning=f"Classified as a foreign key at the Keys & shared attributes gate "
+                          f"(group {row.get('group_id')})",
+                customer_confirmed=True, confirmed_at=None,
+                system_default=False, mapping_note=False,
+            ))
+            added += 1
+    return kept, dropped, added
+
+
 def _merge_fk_dicts(primary: list[dict], secondary: list[dict]) -> list[dict]:
     merged: dict[tuple[str, str, str, str], dict] = {}
     for fk in primary + secondary:
@@ -531,21 +664,27 @@ Return ONLY JSON:
       "target_column": "id",
       "relationship_type": "CONTAINMENT",
       "confidence": 0.9,
-      "reasoning": "column site_id references sites"
+      "reasoning": "site_id references sites"
     }}
   ],
   "hierarchy_levels": {{ "sites": 0, "data": 1 }}
-}}"""
+}}
+
+Keep each "reasoning" to at most 8 words, and output compact JSON (no indentation)."""
 
     from ...matchers.fm_ontology import fm_skill_preamble
 
     response = await client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2000,
+        # A workbook's relationships did not fit in 2,000: the JSON stopped mid-string on every run
+        # and the step fell back to column names (2–3 Oct 2026).
+        max_tokens=8000,
         # FM Skill Context so hierarchy inference reasons in FM containment terms.
         system=fm_skill_preamble(),
         messages=[{"role": "user", "content": prompt}],
     )
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise ValueError("the answer was cut off at the token limit")
     response_text = response.content[0].text.strip()
     if response_text.startswith("```"):
         response_text = response_text.split("```")[1]
@@ -577,6 +716,14 @@ def _validate_inferred_fk_dicts(
         if not source_records or not target_records:
             continue
         if source_column not in source_records[0] or target_column not in target_records[0]:
+            continue
+        # A column cannot reference itself. Its values always appear among its own, so the
+        # match below would read 100% and every row would become its own parent: no roots,
+        # and a tree that loops. Energy_Meters.meter_ref -> Energy_Meters.meter_ref was
+        # accepted exactly this way and stopped a migration at the review page.
+        if source_table == target_table and source_column == target_column:
+            log(f"Claude proposed {source_table}.{source_column} as its own parent - a column "
+                f"cannot reference itself; discarded")
             continue
         source_values = {
             str(record.get(source_column)).lower().strip()

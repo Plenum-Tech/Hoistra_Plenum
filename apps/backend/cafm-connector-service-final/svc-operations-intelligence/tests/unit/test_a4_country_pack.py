@@ -21,19 +21,44 @@ class TestA4UkPackStructure:
         pack = load_pack_json()
         assert len(pack["certificate_types"]) >= 47
 
-    def test_docx_authoritative_counts_54(self):
-        """Word pack v1.1 = 54 cards (27 Building + 27 Vendor)."""
+    def test_the_pack_counts_itself_correctly(self):
+        """The declared counts are the real ones, and the pack never shrinks below the Word
+        pack it came from.
+
+        This used to pin 27 Building + 27 Vendor = 54, the card count of Word pack v1.1. That
+        made every genuine addition a test failure: the pack now carries 28 vendor types, the
+        extra being BAFE SP105 for dry and wet risers, which is a real certificate and not a
+        duplicate. An exact number would have to be edited each time one is added, and an
+        edit like that is indistinguishable from papering over a miscount.
+
+        So the two things that actually matter are asserted instead — that what the pack says
+        about itself is true, and that nothing has been lost — and a duplicated or miscounted
+        type still fails here.
+        """
         pack = load_pack_json()
         types = pack["certificate_types"]
         building = [t for t in types if t["certificate_scope"] == "Building"]
         vendor = [t for t in types if t["certificate_scope"] == "Vendor"]
-        assert len(building) == 27
-        assert len(vendor) == 27
-        assert len(types) == 54
+
         counts = pack.get("type_counts") or {}
-        assert counts.get("total") == 54
-        assert counts.get("building") == 27
-        assert counts.get("vendor") == 27
+        assert counts.get("building") == len(building), "declared building count is wrong"
+        assert counts.get("vendor") == len(vendor), "declared vendor count is wrong"
+        assert counts.get("total") == len(types), "declared total is wrong"
+        assert len(building) + len(vendor) == len(types), "a type has an unknown scope"
+
+        # The Word pack v1.1 baseline: the pack may grow past it, never below it.
+        assert len(building) >= 27
+        assert len(vendor) >= 27
+        assert len(types) >= 54
+
+    def test_no_certificate_type_is_listed_twice(self):
+        # The exact-count assertion used to catch a duplicate by accident. This catches it
+        # on purpose, which is what it was worth.
+        types = load_pack_json()["certificate_types"]
+        codes = [t["certificate_type_code"] for t in types]
+        names = [t["certificate_type_name"] for t in types]
+        assert len(codes) == len(set(codes)), "a certificate type code appears twice"
+        assert len(names) == len(set(names)), "a certificate type name appears twice"
 
     def test_docx_combined_operative_modules(self):
         """P402/P403/P404 and PA1/PA2/PA6 are single CountryPack cards; modules on ResourceSkill."""
@@ -107,8 +132,19 @@ class TestA4VerificationRegisters:
             "SIA licence",
             "BPCA",
         ):
-            assert name in regs
-            assert regs[name].startswith("http")
+            # verification_registers is a list of records, not a name-keyed mapping: each
+            # carries the register, the trade it covers, and the aliases a certificate type
+            # refers to it by. The old `name in regs` compared a string against those records
+            # and so could never be true — this matches on the text the records actually hold.
+            hay = " | ".join(
+                str(r.get("register", "")) + " " + " ".join(str(a) for a in (r.get("aliases") or []))
+                for r in regs)
+            assert name.lower() in hay.lower(), f"{name} is in no verification register"
+            match = next(
+                r for r in regs
+                if name.lower() in (str(r.get("register", "")) + " "
+                                    + " ".join(str(a) for a in (r.get("aliases") or []))).lower())
+            assert str(match.get("verification_url", "")).startswith("http"), name
 
     def test_types_with_verification_url_are_https(self):
         pack = load_pack_json()

@@ -23,6 +23,7 @@ from ..models.work_order import WorkOrder
 from ..config import settings
 from ..core.exceptions import DatabaseError
 from ..core.logging import get_logger
+from ..shared import record_lookup
 
 log = get_logger(__name__)
 
@@ -64,40 +65,36 @@ class WorkOrderFlow:
         if not asset_input:
             return {"resolved": False, "reason": "empty_asset"}
 
-        result = await session.execute(
-            select(Asset).where(
-                Asset.asset_name.ilike(f"%{parsed_asset}%")
-                | Asset.asset_code.ilike(f"%{parsed_asset}%")
-            ).limit(20)
+        # The shared ladder (exact, compact, phrase, every word), never a close spelling: the
+        # asset resolved here is the one the new work order is raised on. It used to take the
+        # closest of twenty by spelling above 0.55, so "Jasmet Chiller" could land on any chiller.
+        found = await record_lookup.lookup(
+            session, Asset, (Asset.asset_name, Asset.asset_code), parsed_asset,
+            lambda a: (a.asset_name, a.asset_code, f"{a.asset_name or ''} {a.asset_code or ''}"),
+            order_by=(Asset.asset_name, Asset.asset_id),
         )
-        candidates = result.scalars().all()
-        if not candidates:
+        hits = found["matches"]
+        if not hits:
             return {"resolved": False, "reason": "asset_not_found", "input": parsed_asset}
 
-        ranked: list[tuple[float, Asset]] = []
-        for row in candidates:
-            score = max(
-                _similarity(parsed_asset, getattr(row, "asset_name", None)),
-                _similarity(parsed_asset, getattr(row, "asset_code", None)),
-            )
-            ranked.append((score, row))
-        ranked.sort(key=lambda x: x[0], reverse=True)
-
-        top_score, top = ranked[0]
-        if top_score < 0.55:
+        top = record_lookup.unique(found)
+        if top is None:
+            # Several equal matches, or a partial one from a cut read: ask, never pick.
             return {
                 "resolved": False,
                 "reason": "asset_ambiguous",
                 "input": parsed_asset,
-                "top_score": round(top_score, 3),
-                "candidates": [getattr(r, "asset_name", None) for _, r in ranked[:3]],
+                "match_type": found["match"],
+                "candidate_count": len(hits),
+                "truncated": found["truncated"],
+                "candidates": [getattr(r, "asset_name", None)
+                               for r in hits[:record_lookup.SHOW_LIMIT]],
             }
 
         return {
             "resolved": True,
             "input": parsed_asset,
-            "match_type": "fuzzy",
-            "match_score": round(top_score, 3),
+            "match_type": found["match"],
             "asset_id": str(getattr(top, "asset_id", "")),
             "asset_name": getattr(top, "asset_name", None),
             "asset_code": getattr(top, "asset_code", None),
@@ -109,34 +106,32 @@ class WorkOrderFlow:
         if not location_input:
             return {"resolved": False, "reason": "empty_location"}
 
-        result = await session.execute(
-            select(Location).where(Location.name.ilike(f"%{parsed_location}%")).limit(20)
+        # Same ladder as _resolve_asset, no close spelling: "JASMEET BUILDING" is JASMEET, and
+        # "Building 7" is never "Building 70".
+        found = await record_lookup.lookup(
+            session, Location, (Location.name,), parsed_location, lambda l: (l.name,),
+            order_by=(Location.name, Location.location_id),
         )
-        candidates = result.scalars().all()
-        if not candidates:
+        hits = found["matches"]
+        if not hits:
             return {"resolved": False, "reason": "location_not_found", "input": parsed_location}
 
-        ranked: list[tuple[float, Location]] = []
-        for row in candidates:
-            score = _similarity(parsed_location, getattr(row, "name", None))
-            ranked.append((score, row))
-        ranked.sort(key=lambda x: x[0], reverse=True)
-
-        top_score, top = ranked[0]
-        if top_score < 0.55:
+        top = record_lookup.unique(found)
+        if top is None:
             return {
                 "resolved": False,
                 "reason": "location_ambiguous",
                 "input": parsed_location,
-                "top_score": round(top_score, 3),
-                "candidates": [getattr(r, "name", None) for _, r in ranked[:3]],
+                "match_type": found["match"],
+                "candidate_count": len(hits),
+                "truncated": found["truncated"],
+                "candidates": [getattr(r, "name", None) for r in hits[:record_lookup.SHOW_LIMIT]],
             }
 
         return {
             "resolved": True,
             "input": parsed_location,
-            "match_type": "fuzzy",
-            "match_score": round(top_score, 3),
+            "match_type": found["match"],
             "location_id": str(getattr(top, "location_id", "")),
             "location_name": getattr(top, "name", None),
             "location_type": getattr(top, "type", None),

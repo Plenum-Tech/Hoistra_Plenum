@@ -14,9 +14,11 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..config import settings
 from ..core.exceptions import (
+    UDRError,
     UnsafeIdentifierError,
     TableNotFoundError,
     ColumnNotFoundError,
@@ -24,13 +26,111 @@ from ..core.exceptions import (
     UnsafeQueryError,
 )
 from ..core.logging import get_logger
+from . import scope
+from .principal import Principal
 
 log = get_logger(__name__)
 
 # Same guard used by table_customizer.py — never relax this.
 _SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 
+#: Set once the scoped views have been seen. Never cached as False — see _scoped_views_exist.
+_SCOPED_VIEWS_PRESENT = False
+
 SCHEMA = settings.db_schema
+
+
+# ── a vendor's lifecycle is not a generic write ───────────────────────────────
+#
+# Deleting a vendor is done in one place (Hussain, 12 Oct 2026): the Vendors page, through
+# operations-intelligence, which runs a dry run, asks for the name typed back, clears the
+# vendor's current assignments and writes the vendor audit trail. A vendor with history is
+# RETIRED, not removed — the row stays with status 'deleted' and " (deleted)" on its name, so
+# the work and invoices that name it still resolve. Every write this service makes — the REST
+# routes, this service's agent tools, and the chat agent's proxies to both — goes through
+# DatabaseService, so the vendors table is guarded here, once: no delete, no status change,
+# and no edit at all to a retired vendor's row. No caller is exempt; a superadmin's delete
+# needs its trail entry as much as anyone's.
+
+_VENDORS = "vendors"
+#: vendors.status of a retired vendor.
+_DELETED = "deleted"
+
+_USE_VENDOR_DELETE = ("Vendors are deleted from the Vendors page, where the delete is checked "
+                      "and recorded in the vendor audit trail.")
+
+
+class WriteRefused(UDRError):
+    """A write this service will not make. Carries the HTTP status and reason for the routes;
+    its message is what the agent tools relay as is."""
+
+    def __init__(self, status_code: int, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.reason = reason
+
+
+class VendorWriteRefused(WriteRefused):
+    """A vendor write that only the vendor delete may make, or that links new data to a
+    retired vendor."""
+
+
+def _vendor_status(value: Any) -> str:
+    # NULL is live and case is ignored: the same test as operations-intelligence's
+    # live_vendor_sql (shared/vendor_identity.py), the source of truth.
+    return "active" if value is None else str(value).lower()
+
+
+#: Columns that name a vendor, in whichever table carries them (12 Oct 2026). A value written
+#: into one links new work, a contact or a contract to that vendor, which the spec refuses for
+#: a retired vendor on every path.
+_VENDOR_REF_COLUMNS = frozenset({"vendor_id", "assigned_vendor", "supplier_id", "contractor_id"})
+
+#: A vendors read filtered on one of these is an exact lookup — resolving the vendor a closed
+#: work order names — so it is history and keeps retired rows (12 Oct 2026).
+_VENDOR_KEY_COLUMNS = frozenset({"id", "vendor_code"})
+
+#: The live-vendor test on the unaliased vendors table; operations-intelligence's
+#: live_vendor_sql (shared/vendor_identity.py) is the source of truth. to_jsonb so a
+#: deployment without the column reads every row as live rather than failing.
+_LIVE_VENDOR_SQL = f"COALESCE(lower(to_jsonb(\"{_VENDORS}\")->>'status'), 'active') <> '{_DELETED}'"
+
+#: Append-only records written by the actions they describe (12 Oct 2026). The vendor audit
+#: trail is read from ops_audit_log and trusts what a row says, so a row inserted through
+#: generic CRUD would be a "deleted" entry nobody made. Reads stay open.
+_AUDIT_TABLES = frozenset({"ops_audit_log", "audit_logs"})
+
+
+def _refuse_audit_write(table: str) -> None:
+    if table.strip().lower() in _AUDIT_TABLES:
+        log.warning("db.write.audit_table_refused", table=table)
+        raise WriteRefused(
+            403, "audit_trail_read_only",
+            "The audit trail cannot be edited here. Its entries are written by the actions "
+            "they record.",
+        )
+
+
+def _live_vendors_only(table: str, filters: dict[str, Any] | None = None) -> bool:
+    """Whether a vendors read leaves out retired vendors: a list read does; a read that asks
+    about status, or looks one vendor up exactly, is a history read and does not."""
+    if table != _VENDORS:
+        return False
+    keys = {str(k).lower() for k in (filters or {})}
+    return "status" not in keys and not (keys & _VENDOR_KEY_COLUMNS)
+
+
+def _assert_not_denied(table: str) -> None:
+    """Refuse a table that is closed to this service outright.
+
+    Called from _validate_ident so it covers every route at once — read, search, get, create,
+    update and delete all pass a table name through there, and a guard added per method is a
+    guard the next method forgets."""
+    if scope.is_denied(table):
+        log.warning("db.security.denied_table", table=table)
+        raise UnsafeQueryError(
+            f"The table {table!r} is not available through the Universal Database Reader."
+        )
 
 
 def _validate_ident(name: str) -> str:
@@ -60,8 +160,63 @@ def _serialize_row(row: dict) -> dict:
 
 
 class DatabaseService:
-    def __init__(self, session: AsyncSession) -> None:
+    """Reads and writes any table in the schema, restricted to what ``principal`` may see.
+
+    ``principal`` is optional so internal callers (migrations, tests) keep working unchanged;
+    every HTTP route passes a real one. See services/scope.py for what "restricted" means per
+    table — the predicate is derived from the table's own columns at request time, because the
+    table is not known until the request arrives.
+    """
+
+    def __init__(self, session: AsyncSession, principal: "Principal | None" = None) -> None:
         self._db = session
+        self._principal = principal
+
+    async def _scope(self, table: str) -> tuple[str, dict[str, Any]]:
+        """The row restriction for this caller on this table: ``(fragment, params)``."""
+        return await scope.predicate(self._db, table, self._principal)
+
+    async def _scoped_views_exist(self) -> bool:
+        """Whether the filtered views are in place. Checked once per process, and only ever
+        cached as True — a False must be re-checked, because the migration may land at any
+        moment and a cached False would keep the route refusing for the life of the process."""
+        global _SCOPED_VIEWS_PRESENT
+        if _SCOPED_VIEWS_PRESENT:
+            return True
+        found = bool(
+            await self._db.scalar(
+                text(
+                    "SELECT 1 FROM information_schema.schemata "
+                    "WHERE schema_name = :schema LIMIT 1"
+                ),
+                {"schema": scope.SCOPED_SCHEMA},
+            )
+        )
+        _SCOPED_VIEWS_PRESENT = found
+        return found
+
+    async def _scoped_insert_values(self, table: str, data: dict[str, Any]) -> dict[str, Any]:
+        """``data`` with the caller's company stamped on, or an error if they named another.
+
+        Unrestricted callers (superadmin, internal) are passed through untouched, so seeds and
+        migrations that legitimately write across companies keep working.
+        """
+        principal = self._principal
+        if principal is None or principal.unrestricted:
+            return data
+        columns = await scope.scope_columns(self._db, table)
+        if scope.ORG_COLUMN not in columns:
+            return data
+        if principal.organization_id is None:
+            raise UnsafeQueryError(
+                "Your account is not attached to a company, so it cannot create records here."
+            )
+        given = data.get(scope.ORG_COLUMN)
+        if given is not None and str(given) != str(principal.organization_id):
+            raise UnsafeQueryError(
+                "You can only create records within your own company."
+            )
+        return {**data, scope.ORG_COLUMN: str(principal.organization_id)}
 
     # ── Schema introspection ──────────────────────────────────────────────────
 
@@ -82,9 +237,12 @@ class DatabaseService:
             """),
             {"schema": SCHEMA},
         )
+        # Denied tables are not listed either. Leaving them in the catalogue only invites the
+        # agent to name one and be refused, and the refusal itself confirms the table exists.
         tables = [
             {"table": r.table_name, "row_estimate": int(r.row_estimate)}
             for r in result
+            if not scope.is_denied(r.table_name)
         ]
         log.info("db.list_tables.done", schema=SCHEMA, table_count=len(tables))
         return tables
@@ -225,6 +383,17 @@ class DatabaseService:
                 filter_params[key] = val
             where_clause = "WHERE " + " AND ".join(parts)
 
+        # The caller's own restriction, derived from this table's columns. Applied to the row
+        # query AND the count — a total that counts rows the caller cannot read is a worse lie
+        # than showing none, because it drives "has_more" and the pager.
+        scope_sql, scope_params = await self._scope(table)
+        where_clause = scope.combine(where_clause, scope_sql)
+        filter_params.update(scope_params)
+        # A retired vendor is history, not a supplier one can pick (12 Oct 2026); the total is
+        # narrowed with the rows.
+        if _live_vendors_only(table, filters):
+            where_clause = scope.combine(where_clause, _LIVE_VENDOR_SQL)
+
         order_clause = ""
         if order_by:
             _validate_ident(order_by)
@@ -276,9 +445,15 @@ class DatabaseService:
         _validate_ident(id_column)
         await self._assert_table_exists(table)
 
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f'WHERE "{id_column}" = :rid', scope_sql)
+        # By id or code it is a history lookup and finds a retired vendor; by anything else
+        # (a name) it is picking one, and does not (12 Oct 2026).
+        if _live_vendors_only(table, {id_column: record_id}):
+            where = scope.combine(where, _LIVE_VENDOR_SQL)
         result = await self._db.execute(
-            text(f'SELECT * FROM {SCHEMA}."{table}" WHERE "{id_column}" = :rid'),
-            {"rid": record_id},
+            text(f'SELECT * FROM {SCHEMA}."{table}" {where}'),
+            {"rid": record_id, **scope_params},
         )
         row = result.fetchone()
         if row is None:
@@ -316,15 +491,24 @@ class DatabaseService:
             _validate_ident(col)
         limit = min(max(1, limit), settings.max_query_rows)
 
+        # Parenthesised before anything is ANDed to it. The search terms are ORed, and OR binds
+        # looser than AND — `a ILIKE t OR b ILIKE t AND scope` would apply the scope to the last
+        # term only and return every row matching the first, which is the leak this fixes.
         like_parts = " OR ".join(f'"{c}"::text ILIKE :term' for c in search_columns)
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f"WHERE ({like_parts})", scope_sql)
+        # A search is how the agent finds a vendor to act on; a retired one is not a candidate
+        # (12 Oct 2026). History is read by id or with a status filter through read_records.
+        if _live_vendors_only(table):
+            where = scope.combine(where, _LIVE_VENDOR_SQL)
         sql = f"""
             SELECT * FROM {SCHEMA}."{table}"
-            WHERE {like_parts}
+            {where}
             LIMIT :limit OFFSET :offset
         """
         result = await self._db.execute(
             text(sql),
-            {"term": f"%{search_term}%", "limit": limit, "offset": offset},
+            {"term": f"%{search_term}%", "limit": limit, "offset": offset, **scope_params},
         )
         rows = [_serialize_row(dict(r._mapping)) for r in result]
         log.info(
@@ -365,12 +549,46 @@ class DatabaseService:
             )
             raise UnsafeQueryError("Multiple statements (semicolon) are not allowed.")
 
+        # A caller-supplied SELECT cannot have a per-table predicate injected into it, so the
+        # restriction lives in the objects it names: plenum_scoped holds one self-filtering view
+        # per table, and the caller is carried in transaction-local settings the views read.
+        if scope.allocated_to_nothing(self._principal):
+            log.info("db.execute_select.no_buildings_allocated", sql_preview=stripped[:120])
+            return []
+
+        # The views are built by a migration that runs at another service's startup. Until it
+        # has, this route has no restriction to apply — and the one thing it must not do then is
+        # carry on against the base tables, which is precisely the unscoped behaviour being
+        # removed. Refuse instead: a caller who sees an error asks; a caller who sees another
+        # company's rows does not.
+        if not await self._scoped_views_exist():
+            log.error("db.execute_select.scoped_schema_missing", schema=scope.SCOPED_SCHEMA)
+            raise UnsafeQueryError(
+                "Custom SELECT is unavailable: the scoped views have not been created yet. "
+                "They are built by migration udr_scoped_views.sql at startup."
+            )
+
+        scoped_sql = scope.redirect_to_scoped_schema(sql)
+        for name, value in scope.session_settings(self._principal):
+            # set_config(..., true) is transaction-local and takes bind parameters, which
+            # SET LOCAL does not. Set on every request: these ride a pooled connection, and a
+            # value left from the previous caller would scope this query to their company.
+            await self._db.execute(
+                text("SELECT set_config(:name, :value, true)"),
+                {"name": name, "value": value},
+            )
+        # Covers any table named without a schema; the rewrite above covers qualified ones.
+        await self._db.execute(
+            text(f"SET LOCAL search_path TO {scope.SCOPED_SCHEMA}, public")
+        )
+
         log.debug(
             "db.execute_select.start",
             sql_preview=stripped[:120],
+            redirected=scoped_sql != sql,
             param_count=len(params) if params else 0,
         )
-        result = await self._db.execute(text(sql), params or {})
+        result = await self._db.execute(text(scoped_sql), params or {})
         rows = result.fetchmany(settings.max_query_rows)
         serialized = [_serialize_row(dict(r._mapping)) for r in rows]
         log.info(
@@ -389,9 +607,17 @@ class DatabaseService:
             columns=list(data.keys()),
         )
         _validate_ident(table)
+        _refuse_audit_write(table)
         await self._assert_table_exists(table)
         for col in data:
             _validate_ident(col)
+        await self._refuse_retired_vendor_refs(data)
+
+        # An INSERT has no WHERE to restrict, so the equivalent guard is the value written:
+        # a caller who is scoped to a company may only create rows IN that company. Left
+        # unguarded, the row-level filter on every read would be trivially side-stepped by
+        # inserting a row labelled with somebody else's company.
+        data = await self._scoped_insert_values(table, data)
 
         cols = ", ".join(f'"{c}"' for c in data)
         placeholders = ", ".join(f":v_{c}" for c in data)
@@ -428,6 +654,7 @@ class DatabaseService:
         )
         _validate_ident(table)
         _validate_ident(id_column)
+        _refuse_audit_write(table)
         await self._assert_table_exists(table)
         for col in data:
             _validate_ident(col)
@@ -436,10 +663,22 @@ class DatabaseService:
         named = {f"u_{c}": v for c, v in data.items()}
         named["_rid"] = record_id
 
+        # The same predicate as a read. An UPDATE that can reach a row the caller may not read
+        # is the worse half of this bug: the row is not just visible, it is altered.
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f'WHERE "{id_column}" = :_rid', scope_sql)
+        named.update(scope_params)
+
+        if table == _VENDORS:
+            await self._refuse_vendor_lifecycle_edit(
+                where, {"_rid": record_id, **scope_params}, data, record_id
+            )
+        await self._refuse_retired_vendor_refs(data)
+
         result = await self._db.execute(
             text(
                 f'UPDATE {SCHEMA}."{table}" SET {set_clause} '
-                f'WHERE "{id_column}" = :_rid RETURNING *'
+                f"{where} RETURNING *"
             ),
             named,
         )
@@ -479,14 +718,23 @@ class DatabaseService:
         )
         _validate_ident(table)
         _validate_ident(id_column)
+        if table == _VENDORS:
+            # Before any statement, whatever the key column: a vendor deleted here would skip
+            # the dry run, the unassigning and the trail entry.
+            log.warning("db.delete_record.vendor_refused", record_id=record_id,
+                        id_column=id_column)
+            raise VendorWriteRefused(403, "use_vendor_delete", _USE_VENDOR_DELETE)
+        _refuse_audit_write(table)
         await self._assert_table_exists(table)
 
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f'WHERE "{id_column}" = :rid', scope_sql)
         result = await self._db.execute(
             text(
                 f'DELETE FROM {SCHEMA}."{table}" '
-                f'WHERE "{id_column}" = :rid RETURNING "{id_column}"'
+                f'{where} RETURNING "{id_column}"'
             ),
-            {"rid": record_id},
+            {"rid": record_id, **scope_params},
         )
         await self._db.commit()
         deleted = result.fetchone() is not None
@@ -510,7 +758,80 @@ class DatabaseService:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
+    async def _refuse_vendor_lifecycle_edit(
+        self,
+        where: str,
+        params: dict[str, Any],
+        data: dict[str, Any],
+        record_id: Any,
+    ) -> None:
+        """Raise if this UPDATE would edit a retired vendor, or retire one.
+
+        Read with the UPDATE's own WHERE — key column and company scope — so it sees exactly
+        the rows the UPDATE would write, and locked, so the vendor delete cannot retire one
+        between this read and that write. A status that reads the same (NULL and 'active',
+        'Active' and 'active') is not a change: a caller saving a whole row back is not
+        deleting or reviving anything.
+        """
+        result = await self._db.execute(
+            text(f"SELECT to_jsonb(t)->>'status' FROM {SCHEMA}.\"{_VENDORS}\" t "
+                 f"{where} FOR UPDATE"),
+            params,
+        )
+        current = [_vendor_status(s) for s in result.scalars().all()]
+        if _DELETED in current:
+            log.warning("db.update_record.vendor_deleted", record_id=record_id)
+            raise VendorWriteRefused(
+                409, "vendor_deleted",
+                "This vendor has been deleted. Its record is kept as history and cannot be edited.",
+            )
+        # Only retiring is refused (reviving is the 409 above). active <-> inactive is an
+        # ordinary edit, and nothing else in the platform sets it (12 Oct 2026).
+        if "status" in data and _vendor_status(data["status"]).strip() == _DELETED:
+            log.warning("db.update_record.vendor_status_refused", record_id=record_id)
+            raise VendorWriteRefused(
+                403, "use_vendor_delete",
+                "A vendor cannot be marked deleted here. " + _USE_VENDOR_DELETE,
+            )
+
+    async def _refuse_retired_vendor_refs(self, data: dict[str, Any]) -> None:
+        """Raise 409 if a vendor column in ``data`` names a retired vendor, 503 if unreadable.
+
+        One status read for every vendor named, ids compared as lower-cased text (vendor ids
+        are varchar with legacy values; a uuid may arrive in any case), FOR SHARE so a write
+        racing the vendor delete waits for it and then reads 'deleted'. Not narrowed to the
+        caller's company: a retired vendor is refused whoever's it is.
+        """
+        ids = sorted({str(v).strip().lower() for k, v in data.items()
+                      if k in _VENDOR_REF_COLUMNS and v is not None and str(v).strip()})
+        if not ids:
+            return
+        try:
+            result = await self._db.execute(
+                text(f"SELECT to_jsonb(v)->>'status' FROM {SCHEMA}.\"{_VENDORS}\" v "
+                     "WHERE lower(v.id::text) = ANY(:_vendor_ids) FOR SHARE"),
+                {"_vendor_ids": ids},
+            )
+            statuses = [_vendor_status(s) for s in result.scalars().all()]
+        except SQLAlchemyError as exc:
+            log.error("db.write.vendor_check_failed", error=str(exc)[:200])
+            raise VendorWriteRefused(
+                503, "vendor_check_failed",
+                "We could not confirm this vendor is still current, so nothing was saved. "
+                "Try again in a moment.",
+            ) from exc
+        if _DELETED in statuses:
+            log.warning("db.write.retired_vendor_refused", vendor_ids=ids)
+            raise VendorWriteRefused(
+                409, "vendor_deleted",
+                "This vendor has been deleted, so nothing new can be linked to it. "
+                "Choose a current vendor.",
+            )
+
     async def _assert_table_exists(self, table: str) -> None:
+        # Before the existence check, not after: a denied table must not be distinguishable
+        # from a missing one, and every read and write path already funnels through here.
+        _assert_not_denied(table)
         result = await self._db.execute(
             text("""
                 SELECT 1

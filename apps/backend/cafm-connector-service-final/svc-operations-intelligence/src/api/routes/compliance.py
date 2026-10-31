@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
@@ -12,6 +15,7 @@ from ...engines.compliance import country_pack as pack_svc
 from ...engines.compliance import scan as scan_svc
 from ...engines.compliance import verification as verify_svc
 from ...engines.compliance import verification_sources as sources_svc
+from ...engines.compliance import vendor_buildings as vb_svc
 from ...engines.compliance import ccc_verify as ccc_verify_svc
 from ...engines.compliance import document_forensics as forensics_svc
 from ...engines.compliance import extract as extract_svc
@@ -28,9 +32,12 @@ from ...engines.compliance import membership as membership_svc
 from ...engines.compliance import register_dump as dump_svc
 from ...engines.compliance.channels import register_search as register_search_svc
 from ...engines.compliance import reverify as reverify_svc
+from ...engines.compliance import human_verification as human_verify_svc
+from ...engines.compliance import certificate_file as cert_file_svc
 from ...shared import approvals as approvals_svc
 from ...swarm import adversary as adversary_svc
 from ..schemas.compliance import (
+    FilingRequest,
     ActivateBuildingPackRequest,
     AdversaryRequest,
     ArchiveCertificatesRequest,
@@ -40,6 +47,7 @@ from ..schemas.compliance import (
     CccVerifyRequest,
     CertificateUpsertRequest,
     ConfirmCertificateRequest,
+    HumanVerificationRequest,
     CreateVendorForCertificateRequest,
     LinkCertificateDocumentRequest,
     CountryPackLoadRequest,
@@ -65,15 +73,149 @@ from ..schemas.compliance import (
     VerifyNowRequest,
 )
 
-router = APIRouter(prefix="/api/compliance", tags=["compliance"])
+from ...engines import ingest_gate
+from ...engines.auth import access
+from ...engines.compliance import epc_rating as epc_svc
+from ...engines.compliance import filings as filings_svc
+from ...engines.energy import ratings_position as position_svc
+from .auth import scope
+
+router = APIRouter(prefix="/api/compliance", tags=["compliance"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
+
+
+class ValidateDocumentRequest(BaseModel):
+    """What extraction produced, before anything is written."""
+    doc_type: str = Field(
+        ..., description="compliance_certificate | vendor_invoice | service_contract"
+    )
+    extracted: dict[str, Any] = Field(default_factory=dict)
+    certificate_type_code: str | None = Field(
+        None, description="Required for a certificate — the pack declares its mandatory fields per type."
+    )
+    country_code: str | None = None
+    field_confidence: dict[str, Any] | None = Field(
+        None, description="Per-field confidence from extraction. Anything low is surfaced to confirm rather than retype."
+    )
+    answers: dict[str, Any] | None = Field(
+        None, description="A person's answers to a previous round. Merged before re-checking."
+    )
+    answered_by: str | None = None
+
+
+@router.post("/documents/validate")
+async def validate_document(
+    body: ValidateDocumentRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """What must be answered before this document can be written. Reads only; writes nothing.
+
+    Call it with what extraction produced. `ready: false` means a mandatory field could not
+    be read, and `questions` is what to put to the person — only the fields that are actually
+    missing, plus any read with low confidence shown for confirmation rather than retyping.
+
+    Send the answers back in `answers` to re-check. When `ready` is true the merged payload
+    in `document` is what to ingest, and it records which fields a person supplied: a date
+    typed at ingest is usable evidence, and it is not the same as one read off the
+    certificate.
+
+    For a certificate the mandatory list comes from the country pack, which declares it per
+    certificate type — this endpoint does not hold a second copy of that answer.
+    """
+    merged = ingest_gate.apply_answers(
+        body.extracted, body.answers, answered_by=body.answered_by
+    )
+    out = await ingest_gate.check_document(
+        session,
+        body.doc_type,
+        merged,
+        certificate_type_code=body.certificate_type_code,
+        country_code=body.country_code,
+        field_confidence=body.field_confidence,
+    )
+    out["document"] = merged
+    out["answered"] = sorted((merged.get("raw_metadata") or {}).get("answered_fields") or {})
+    return out
+
+
+class GatedCertificateRequest(ValidateDocumentRequest):
+    """A certificate ingest that refuses to write an incomplete record."""
+    confirmed_by_pm: bool = False
+    link_targets: list[str] | None = None
+
+
+@router.post("/documents/ingest")
+async def ingest_document_gated(
+    body: GatedCertificateRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Validate, then write — and refuse to write until the mandatory fields are there.
+
+    422 with the questions when something required could not be read. Nothing is written on
+    that path: a certificate with no expiry never becomes due, so it drops silently out of
+    compliance reporting, and an absence is far more expensive to find later than a question
+    is to answer now.
+
+    Send the answers back in `answers` and call again. Only the certificate type is wired
+    here so far; invoices and contracts validate through /documents/validate and ingest
+    through their own routes.
+    """
+    access.assert_can_ingest(s)
+    merged = ingest_gate.apply_answers(
+        body.extracted, body.answers, answered_by=body.answered_by
+    )
+    gate = await ingest_gate.check_document(
+        session,
+        body.doc_type,
+        merged,
+        certificate_type_code=body.certificate_type_code,
+        country_code=body.country_code,
+        field_confidence=body.field_confidence,
+    )
+    if not gate["ready"]:
+        response.status_code = 422
+        return {**gate, "written": False, "document": merged}
+
+    if body.doc_type != "compliance_certificate":
+        response.status_code = 400
+        return {
+            **gate, "written": False,
+            "error": f"No gated ingest for {body.doc_type} yet — it validates here and "
+                     "ingests through its own route.",
+        }
+
+    payload = dict(merged)
+    payload.setdefault("certificate_type_code", body.certificate_type_code)
+    payload.setdefault("country_code", body.country_code)
+    result = await cert_svc.upsert_certificate(
+        session, payload,
+        confirmed_by_pm=body.confirmed_by_pm,
+        link_targets=body.link_targets,
+    )
+    # Read the outcome rather than assuming it. Reporting a write that the engine refused
+    # is the one failure a gate must not have: the caller stops asking, and nothing is
+    # there.
+    wrote = bool((result or {}).get("ok", True))
+    if not wrote:
+        response.status_code = 422
+    return {**gate, "written": wrote, "certificate": result,
+            "error": None if wrote else (result or {}).get("error")}
 
 
 @router.post("/certificates")
 async def upsert_certificate(
     body: CertificateUpsertRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     data = body.model_dump()
+    data["organization_id"] = access.organization_for(s, body.organization_id)
     confirmed = data.pop("confirmed_by_pm", False)
     return await cert_svc.upsert_certificate(session, data, confirmed_by_pm=confirmed)
 
@@ -121,7 +263,11 @@ async def list_certificates(
     ),
     limit: int = Query(200, le=1000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
+    # The company is the caller's, not the query string's.
+    organization_id = s.organization_id
     rows = await cert_svc.list_certificates(
         session,
         cert_scope=cert_scope,
@@ -140,7 +286,14 @@ async def list_certificates(
         expiry_month=expiry_month,
         include_archived=include_archived,
         limit=limit,
+        building_ids=s.building_ids,
     )
+    if s.restricted:
+        # A plain user sees certificates on their buildings, plus vendor accreditations
+        # (which name no property) — never another building's certificates.
+        rows = [r for r in rows
+                if s.allows_building(r.get("building_id"))
+                or (not r.get("building_id") and str(r.get("cert_scope") or "").lower() == "vendor")]
     return {
         "ok": True,
         "count": len(rows),
@@ -186,8 +339,10 @@ async def count_certificates(
     ),
     limit: int = Query(500, le=1000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Deterministic attribute count — use for 'how many have X' questions."""
+    organization_id = access.organization_for(s, organization_id)
     return await cert_svc.count_certificates(
         session,
         cert_scope=cert_scope,
@@ -206,6 +361,7 @@ async def count_certificates(
         organization_id=organization_id,
         risk_filter=risk_filter,
         limit=limit,
+        building_ids=s.building_ids,
     )
 
 
@@ -219,8 +375,10 @@ async def vendors_by_certificate_count(
     ),
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Return vendors grouped by their number of live accreditation certificates."""
+    organization_id = access.organization_for(s, organization_id)
     return await cert_svc.list_vendors_by_certificate_count(
         session,
         min_count=min_count,
@@ -257,7 +415,11 @@ async def confirm_certificate(
 async def certificate_link_candidates(
     certificate_id: UUID,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    # Named by id, so there is no list to narrow. Unchecked, a certificate id from any
+    # company returned that certificate's candidate vendors, sites and assets.
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
     """Match a certificate's document against the vendor / site / asset tables and return the
     top candidate rows for each (with the currently-linked row flagged). Read-only."""
     cert = await session.get(cert_svc.ComplianceCertificate, certificate_id)
@@ -266,20 +428,56 @@ async def certificate_link_candidates(
     return {"ok": True, **(await cert_svc.resolve_link_candidates(session, cert))}
 
 
+# A write refused over the vendor it would link to, answered by what the refusal is (review,
+# 12 Oct 2026): a vendor removed or not the caller's is not found, a retired one conflicts
+# with the vendor's state, an unreadable one is worth retrying.
+_VENDOR_REFUSAL_STATUS = {"vendor_not_found": 404, "invalid_vendor_id": 400,
+                          "vendor_deleted": 409, "vendor_unreadable": 503}
+
+
+def _raise_vendor_refusal(out: dict) -> None:
+    code = _VENDOR_REFUSAL_STATUS.get(str(out.get("reason") or ""))
+    if code and out.get("ok") is False:
+        raise HTTPException(status_code=code, detail={"ok": False, **out})
+
+
+# Hoist vendors' two writes (frontend logic/vendorHoist.js) are an admin's, on their own
+# company's certificate. They asked for no scope at all, so any signed-in caller could name
+# another company's certificate and create a vendor in that company or re-point its
+# certificate (pre-push review, 12 Oct 2026). A superadmin viewing a company acts in it.
+async def _hoist_guard(session: AsyncSession, s: access.Scope, certificate_id: UUID) -> None:
+    access.assert_admin(s, action="hoist a vendor or relink a certificate")
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id, action="change")
+
+
 @router.post("/certificates/{certificate_id}/link")
 async def link_certificate_document(
     certificate_id: UUID,
     body: LinkCertificateDocumentRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Auto-link the cert's document_id to the PM-chosen vendor/site/asset rows."""
-    return await cert_svc.link_certificate_document(
+    await _hoist_guard(session, s, certificate_id)
+    # The asset is written onto the certificate and given the document, so it must be the
+    # caller's too. (The vendor is checked by the engine's vendor_link_refusal.)
+    if body.asset_id:
+        await access.assert_owned(session, s, "assets", body.asset_id, action="change")
+    # A uuid site id is written to the certificate as its site: the caller's too (second review).
+    # A varchar site key goes to site_ref, resolved within the certificate's company.
+    if body.site_id and vb_svc._canon_uuid(body.site_id):
+        await access.assert_owned(session, s, "sites", body.site_id, action="change")
+    out = await cert_svc.link_certificate_document(
         session,
         certificate_id,
         vendor_id=body.vendor_id,
         site_id=body.site_id,
         asset_id=body.asset_id,
     )
+    # A deleted vendor takes no new documents; that is a conflict with the vendor's state,
+    # not a bad request.
+    _raise_vendor_refusal(out)
+    return out
 
 
 @router.post("/certificates/{certificate_id}/create-vendor")
@@ -287,9 +485,11 @@ async def create_vendor_for_certificate(
     certificate_id: UUID,
     body: CreateVendorForCertificateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Create a vendor row from the chat form (vendor cert with no extractable name) and link
     this certificate + its document to the new vendor, populating the rich profile fields."""
+    await _hoist_guard(session, s, certificate_id)
     profile = {
         k: v
         for k, v in {
@@ -334,14 +534,16 @@ async def extract_vendor_profile(
 async def archive_certificates(
     body: ArchiveCertificatesRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §3 — soft-archive the PM-confirmed certificates (reversible; multi-select)."""
+    org_id = access.organization_for(s, body.organization_id)
     return await cert_svc.archive_certificates(
         session,
         certificate_ids=body.certificate_ids,
         reason=body.reason,
         archived_by=body.archived_by,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -349,13 +551,15 @@ async def archive_certificates(
 async def unarchive_certificates(
     body: UnarchiveCertificatesRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Reverse a soft-archive."""
+    org_id = access.organization_for(s, body.organization_id)
     return await cert_svc.unarchive_certificates(
         session,
         certificate_ids=body.certificate_ids,
         restored_by=body.restored_by,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -363,25 +567,36 @@ async def unarchive_certificates(
 async def draft_renewal_email(
     body: RenewalEmailRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Draft a renewal email for one selected certificate (by id or number) and queue it."""
-    return await cert_svc.draft_renewal_email(
+    # 28 Oct 2026: bounded to the caller's register. Another company's certificate, or one on
+    # a building the caller is not allocated, is 404 exactly like an unknown id (a 403 would
+    # confirm it exists), and nothing is queued or audited.
+    out = await cert_svc.draft_renewal_email(
         session,
         certificate_id=body.certificate_id,
         certificate_number=body.certificate_number,
+        organization_id=s.organization_id,
+        building_ids=s.building_ids,
     )
+    if out.get("reason") == "not_found":
+        raise HTTPException(status_code=404, detail=out)
+    return out
 
 
 @router.post("/building-change")
 async def building_change(
     body: BuildingChangeRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await cert_svc.building_change_invalidate(
         session,
         site_id=body.site_id,
         change_description=body.change_description,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -389,12 +604,17 @@ async def building_change(
 async def run_scan(
     body: ScanRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
+    if body.building_id:
+        access.assert_building(s, body.building_id, action="scan")
     return await scan_svc.run_compliance_scan(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         scope=body.scope,
         site_id=body.site_id,
+        building_id=body.building_id,
         certificate_type_code=body.certificate_type_code,
     )
 
@@ -403,10 +623,12 @@ async def run_scan(
 async def saved_space_summary(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     return {
         "ok": True,
-        **(await cert_svc.saved_space_summary(session, organization_id=organization_id)),
+        **(await cert_svc.saved_space_summary(session, organization_id=organization_id, scope=s)),
     }
 
 
@@ -500,15 +722,17 @@ async def update_pack_type_thresholds(
     certificate_type_code: str,
     body: PackThresholdsUpdateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """PM admin — edit A1 alert ladder thresholds for one Country Pack type."""
+    org_id = access.organization_for(s, body.organization_id)
     return await pack_svc.update_pack_type_thresholds(
         session,
         certificate_type_code=certificate_type_code,
         alert_thresholds=body.alert_thresholds,
         country_code=body.country_code,
         pack_version=body.pack_version,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -544,8 +768,10 @@ async def compliance_catalogue(
 async def ccc_verify(
     body: CccVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC Step 4 — public_api when available, else Verify-now / needs_human."""
+    org_id = access.organization_for(s, body.organization_id)
     return await ccc_verify_svc.verify_certificate_type(
         session,
         certificate_type_code=body.certificate_type_code,
@@ -556,8 +782,68 @@ async def ccc_verify(
         postcode=body.postcode,
         insurer_name=body.insurer_name,
         certificate_id=body.certificate_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         persist=body.persist,
+    )
+
+
+@router.get("/certificates/{certificate_id}/download")
+async def download_certificate_file(
+    certificate_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The certificate's own file, streamed from Azure Blob after a scope check.
+
+    Read with the storage account key, never by redirecting to the blob URL — that only
+    works while the container allows anonymous reads, and it hands the file to anyone."""
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
+    cert = await session.get(cert_svc.ComplianceCertificate, certificate_id)
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    try:
+        f = await cert_file_svc.open_certificate_file(session, cert)
+    except cert_file_svc.CertificateFileError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{f["filename"].encode("ascii", "ignore").decode() or "certificate"}"; '
+            f"filename*=UTF-8''{quote(f['filename'])}"
+        ),
+        "Cache-Control": "private, no-store",
+    }
+    if f.get("size"):
+        headers["Content-Length"] = str(f["size"])
+    return StreamingResponse(f["stream"], media_type=f["content_type"], headers=headers)
+
+
+@router.post("/certificates/{certificate_id}/human-verification")
+async def record_human_verification(
+    certificate_id: UUID,
+    body: HumanVerificationRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Record a person's check against the register, for a certificate the platform could
+    not verify itself. Closes the certificate's pending `verification_human` items."""
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
+    # Recording a verdict writes to the certificate and closes its queue items — a write, so
+    # a read-only account may look at the register but not certify against it.
+    access.assert_can_ingest(s)
+    return await human_verify_svc.record_human_verification(
+        session,
+        certificate_id,
+        outcome=body.outcome,
+        note=body.note,
+        register_url=body.register_url,
+        checked_by=s.user_id,
+        # Named by the server from the signed-in account, never taken from the request:
+        # a label the client chose could say anyone checked it.
+        checked_by_label=await human_verify_svc.account_label(session, s.user_id),
     )
 
 
@@ -574,14 +860,16 @@ async def document_membership(
     document_id: UUID,
     body: MembershipRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §3.2 — confirm Keep or Remove for a compliance PDF in the vector DB."""
+    org_id = access.organization_for(s, body.organization_id)
     return await membership_svc.decide_membership(
         session,
         document_id=document_id,
         action=body.action,
         actor=body.actor,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         confirmed_by=body.confirmed_by,
     )
 
@@ -590,8 +878,10 @@ async def document_membership(
 async def ingest_verification_dump(
     body: VerificationDumpIngestRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §8.2 — ingest CSV/JSON weekly dump content into local register rows."""
+    access.assert_can_ingest(s)
     return await dump_svc.ingest_dump_text(
         session,
         certificate_type_code=body.certificate_type_code,
@@ -646,11 +936,13 @@ async def register_search_post(
 async def reverify_certificates(
     body: ReverifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §8.6 — re-verify certificates due for 90-day check (manual trigger)."""
+    org_id = access.organization_for(s, body.organization_id)
     return await reverify_svc.reverify_due_certificates(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         limit=body.limit,
         force=body.force,
     )
@@ -660,11 +952,13 @@ async def reverify_certificates(
 async def auto_verify_listed(
     body: AutoVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Dashboard load — run register bot / dump verify for all listed certificates."""
+    org_id = access.organization_for(s, body.organization_id)
     return await reverify_svc.auto_verify_listed_certificates(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         limit=body.limit,
         skip_verified=body.skip_verified,
     )
@@ -688,6 +982,10 @@ async def verify_now(
         accreditation_number=body.accreditation_number,
         country_code=body.country_code,
         vendor_name=body.vendor_name,
+        # Name the certificate and the link is written onto it, so "Verify now (SIA)" is
+        # still there on reload instead of living only in the turn that built it.
+        certificate_id=getattr(body, "certificate_id", None),
+        certificate_number=getattr(body, "certificate_number", None),
     )
 
 
@@ -712,11 +1010,13 @@ async def document_forensics(body: DocumentForensicsRequest):
 async def vendor_registration_check(
     body: VendorRegistrationCheckRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """
     Search whether vendor is registered on-platform and currently compliant,
     and return the Verify-now register URL (navigation only — no scrape).
     """
+    org_id = access.organization_for(s, body.organization_id)
     return await verify_svc.check_vendor_registration_compliance(
         session,
         vendor_name=body.vendor_name,
@@ -724,7 +1024,7 @@ async def vendor_registration_check(
         accreditation_number=body.accreditation_number,
         cert_scope=body.cert_scope,
         country_code=body.country_code,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -735,13 +1035,16 @@ async def list_approvals(
     organization_id: UUID | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session,
         organization_id=organization_id,
         status=status,
         source_feature=source_feature,
         limit=limit,
+        scope=s,
     )
     return {
         "ok": True,
@@ -771,12 +1074,14 @@ async def decide_approval(
 async def adversary_check(
     body: AdversaryRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await adversary_svc.run_adversary(
         session,
         check_type=body.check_type,
         payload=body.payload,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -798,16 +1103,21 @@ async def extract_fields(
 
 
 @router.post("/ingest-batch")
-async def ingest_batch(body: BatchIngestRequest):
+async def ingest_batch(
+    body: BatchIngestRequest,
+    s: access.Scope = Depends(scope),
+):
     """CCC §3.1 — ingest up to 5 compliance PDFs from the UDR chat in parallel.
 
     Each file is classified, field-extracted, and saved as a draft (one document_id
     each) in its own session; one file failing does not block the others. Drafts await
     PM confirmation and vector-membership Keep/Remove in the Compliance Saved Space.
     """
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
     return await batch_ingest_svc.ingest_batch(
         files=[f.model_dump() for f in body.files],
-        organization_id=body.organization_id,
+        organization_id=org_id,
         country_code=body.country_code,
     )
 
@@ -838,13 +1148,15 @@ async def table_match(
 async def activate_building_pack(
     body: ActivateBuildingPackRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await building_pack_svc.activate_building_pack(
         session,
         site_id=body.site_id,
         country_code=body.country_code,
         pack_version=body.pack_version,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -852,13 +1164,15 @@ async def activate_building_pack(
 async def notify_pack_version(
     body: PackVersionNotifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await building_pack_svc.notify_pack_version_change(
         session,
         country_code=body.country_code,
         new_version=body.new_version,
         change_notes=body.change_notes,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -866,8 +1180,13 @@ async def notify_pack_version(
 async def upsert_resource_skill(
     body: ResourceSkillRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
-    return await skill_svc.upsert_resource_skill(session, body.model_dump())
+    data = body.model_dump()
+    data["organization_id"] = access.organization_for(s, body.organization_id)
+    out = await skill_svc.upsert_resource_skill(session, data)
+    _raise_vendor_refusal(out)
+    return out
 
 
 @router.get("/resource-skills")
@@ -875,9 +1194,13 @@ async def list_resource_skills(
     vendor_id: UUID | None = None,
     limit: int = Query(200, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    if vendor_id is not None:
+        await access.assert_owned(session, s, "vendors", vendor_id)
     rows = await skill_svc.list_vendor_operative_skills(
-        session, vendor_id, limit=limit
+        session, vendor_id, limit=limit,
+        organization_id=None if s.is_superadmin else s.organization_id,
     )
     return {"ok": True, "count": len(rows), "skills": rows}
 
@@ -886,11 +1209,13 @@ async def list_resource_skills(
 async def recommend_contractors(
     body: RecommendContractorsRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     rows = await contractor_svc.recommend_contractors(
         session,
         required_accreditation=body.required_accreditation,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         limit=body.limit,
     )
     return {"ok": True, "count": len(rows), "contractors": rows}
@@ -901,10 +1226,13 @@ async def coverage_buildings(
     organization_id: UUID | None = None,
     country_code: str = "UK",
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Per-building CountryPack coverage %."""
+    organization_id = access.organization_for(s, organization_id)
     return await coverage_svc.building_coverage(
-        session, organization_id=organization_id, country_code=country_code
+        session, organization_id=organization_id, country_code=country_code,
+        building_ids=s.building_ids,
     )
 
 
@@ -917,6 +1245,7 @@ async def backfill_site_links(
     ),
     limit: int = Query(1000, ge=1, le=5000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Link building certificates already in the register to the site they belong to.
 
@@ -926,7 +1255,36 @@ async def backfill_site_links(
     that matches two sites (never linked — a certificate filed against the wrong building
     misstates both buildings' obligations), and every building that matches no site row.
     """
+    organization_id = access.organization_for(s, organization_id)
     from ...engines.compliance.site_links import backfill_site_links as _backfill
+
+    return await _backfill(
+        session, organization_id=organization_id, dry_run=dry_run, limit=limit
+    )
+
+
+@router.post("/coverage/backfill-building-links")
+async def backfill_building_links(
+    organization_id: UUID | None = None,
+    dry_run: bool = Query(
+        True,
+        description="true (default) reports what would be linked and writes nothing.",
+    ),
+    limit: int = Query(1000, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Link certificates already in the register to the building they belong to.
+
+    A certificate's building is resolved once, at ingest. If the answer was no — the
+    building did not exist yet, the name did not match, the document named no building —
+    nothing asked again, and that certificate stayed invisible to every building-scoped
+    view and every coverage figure. This asks again, from the certificate's own fields
+    first and from its source document second, and reports the certificates that no rule
+    can place rather than guessing a building for them.
+    """
+    organization_id = access.organization_for(s, organization_id)
+    from ...engines.compliance.building_links import backfill_building_links as _backfill
 
     return await _backfill(
         session, organization_id=organization_id, dry_run=dry_run, limit=limit
@@ -939,13 +1297,16 @@ async def coverage_vendors(
     country_code: str = "UK",
     trade_category: str | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Per-vendor CountryPack coverage % (optional trade filter)."""
+    organization_id = access.organization_for(s, organization_id)
     return await coverage_svc.vendor_coverage(
         session,
         organization_id=organization_id,
         country_code=country_code,
         trade_category=trade_category,
+        building_ids=s.building_ids,
     )
 
 
@@ -956,8 +1317,10 @@ async def evidence_pack_get(
     vendor_id: UUID | None = None,
     include_approvals: bool = True,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """One-click PDF evidence pack for insurers / auditors / BSA."""
+    organization_id = access.organization_for(s, organization_id)
     return await evidence_svc.generate_evidence_pack_file(
         session,
         organization_id=organization_id,
@@ -971,14 +1334,87 @@ async def evidence_pack_get(
 async def evidence_pack_post(
     body: EvidencePackRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await evidence_svc.generate_evidence_pack_file(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         site_id=body.site_id,
         vendor_id=body.vendor_id,
         include_approvals=body.include_approvals,
     )
+
+
+# ── vendor ↔ building assignments (engines/compliance/vendor_buildings.py) ──────────────────
+
+class AssignVendorBuildingsRequest(BaseModel):
+    building_ids: list[UUID]
+    source: str = "manual"
+
+
+_ASSIGN_STATUS = {"not_set_up": 503, "no_buildings": 400, "building_not_found": 404,
+                  "not_assigned": 404, **_VENDOR_REFUSAL_STATUS}
+
+
+def _assign_out(out: dict) -> dict:
+    code = _ASSIGN_STATUS.get(str(out.get("reason") or ""))
+    if code and out.get("ok") is False:
+        raise HTTPException(status_code=code, detail=out)
+    return out
+
+
+@router.get("/vendor-buildings")
+async def list_vendor_buildings(
+    vendor_id: str | None = None,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The company's vendor ↔ building assignments; a caller allocated to some buildings sees
+    those buildings' only. ``available: false`` on a database not set up for them yet."""
+    org = access.organization_for(s, organization_id)
+    if org is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "No company in scope."})
+    return await vb_svc.list_assignments(session, organization_id=org, vendor_id=vendor_id,
+                                         building_ids=s.building_ids)
+
+
+@router.post("/vendors/{vendor_id}/buildings")
+async def assign_vendor_buildings(
+    vendor_id: str,
+    body: AssignVendorBuildingsRequest,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Assign the vendor to buildings. An admin's, in their own company (a superadmin viewing
+    one acts in it); the vendor and every building must be the company's, and live."""
+    access.assert_admin(s, action="assign a vendor to buildings")
+    org = access.organization_for(s, organization_id)
+    if org is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "No company in scope."})
+    return _assign_out(await vb_svc.assign(
+        session, organization_id=org, vendor_id=vendor_id,
+        building_ids=[str(b) for b in body.building_ids], user_id=s.user_id, source=body.source))
+
+
+@router.delete("/vendors/{vendor_id}/buildings/{building_id}")
+async def unassign_vendor_building(
+    vendor_id: str,
+    building_id: UUID,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """End the vendor's assignment to the building (kept as history)."""
+    access.assert_admin(s, action="take a vendor off a building")
+    org = access.organization_for(s, organization_id)
+    if org is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "No company in scope."})
+    return _assign_out(await vb_svc.unassign(
+        session, organization_id=org, vendor_id=vendor_id, building_id=str(building_id),
+        user_id=s.user_id))
 
 
 @router.get("/vendors/{vendor_id}/passport")
@@ -986,8 +1422,10 @@ async def vendor_passport(
     vendor_id: str,
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Pre-engagement vendor passport (accreditations + insurance + posture)."""
+    organization_id = access.organization_for(s, organization_id)
     return await passport_svc.build_vendor_passport(
         session, vendor_id, organization_id=organization_id
     )
@@ -998,13 +1436,15 @@ async def vendor_passport_share(
     vendor_id: str,
     body: PassportShareRequest | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Create a time-limited shareable passport link."""
+    org_id = access.organization_for(s, body.organization_id)
     body = body or PassportShareRequest()
     return await passport_svc.share_vendor_passport(
         session,
         vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         ttl_hours=body.ttl_hours,
         recipient=body.recipient,
     )
@@ -1016,7 +1456,11 @@ async def vendor_passport_by_token(
     session: AsyncSession = Depends(get_session),
 ):
     """Public/read-only passport resolve from share token."""
-    return await passport_svc.passport_from_share_token(session, token)
+    out = await passport_svc.passport_from_share_token(session, token)
+    # The vendor was deleted after the link was shared: gone, not merely not found.
+    if out.get("reason") == "passport_unavailable":
+        raise HTTPException(status_code=410, detail={"ok": False, **out})
+    return out
 
 
 @router.get("/approvals/one-click/{token}")
@@ -1076,3 +1520,74 @@ async def one_click_redeem(
         decision=body.decision,
         pm_notes=body.pm_notes,
     )
+
+
+# ── B5 · MEES from the EPC register ─────────────────────────────────────────────────────
+
+@router.get("/mees")
+async def mees_summary(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Which buildings sit below EPC E now and below B for 2030, from the EPCs on file."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await epc_svc.mees_summary(session, organization_id=s.organization_id, building_ids=ids)
+
+
+# ── B8 · filings: LL84, BCA benchmarking, Green Mark ────────────────────────────────────
+
+@router.post("/filings", status_code=201)
+async def record_filing(
+    body: FilingRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Record that a filing was made (or a certification awarded) for a building and year.
+    Idempotent on (building, scheme, year): filing the same year again updates the record."""
+    from datetime import date as _date
+    org_id = access.organization_for(s, body.organization_id)
+    access.assert_building(s, body.building_id, action="record a filing for")
+    try:
+        return await filings_svc.record_filing(
+            session, organization_id=org_id, building_id=body.building_id, scheme=body.scheme,
+            period_year=body.period_year, status=body.status,
+            filed_at=_date.fromisoformat(body.filed_at) if body.filed_at else None,
+            reference=body.reference, certification_level=body.certification_level,
+            valid_until=_date.fromisoformat(body.valid_until) if body.valid_until else None,
+            submitted_by=body.submitted_by, evidence_document_id=body.evidence_document_id,
+            detail=body.detail, actor=str(s.user_id), created_by=s.user_id)
+    except filings_svc.FilingError as exc:
+        raise HTTPException(status_code=exc.http_status,
+                            detail={"ok": False, "error": exc.message, "reason": exc.reason})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": str(exc), "reason": "bad_date"})
+
+
+@router.get("/filings")
+async def list_filings(
+    building_id: UUID | None = None,
+    scheme: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    rows = await filings_svc.list_filings(session, organization_id=s.organization_id, building_ids=ids, scheme=scheme)
+    return {"ok": True, "count": len(rows), "filings": rows, "schemes": {
+        k: {"label": v["label"], "country": v["country"], "kind": v["kind"], "note": v["note"]}
+        for k, v in filings_svc.SCHEMES.items()}}
+
+
+@router.get("/filings/position")
+async def filings_position(
+    country_code: str = Query(..., description="US | SG"),
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Where each building stands on the country's filing obligations: filed / due / overdue,
+    certified / lapsed / none."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    ids = await position_svc.building_ids_in_country(session, ids, country_code)
+    return await filings_svc.filing_positions(session, organization_id=s.organization_id, building_ids=ids,
+                                              country_code=country_code)

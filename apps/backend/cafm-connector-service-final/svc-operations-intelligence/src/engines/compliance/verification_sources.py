@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -77,6 +77,14 @@ CODE_ALIASES: dict[str, str] = {
     "PA1": "PESTICIDE_PAx",
     "PA2": "PESTICIDE_PAx",
     "PA6": "PESTICIDE_PAx",
+    # Pack codes whose verify-code alias was missing, so §8 verification looked up the pack
+    # code itself and found no source row. The single-door classifier now stores the pack
+    # code (it used to store the verify code, which never joined country_certificate_pack),
+    # so these four types had no verification channel until the alias existed.
+    "PA1_PA2_PA6": "PESTICIDE_PAx",
+    "ASBESTOS_P402_P403_P404": "BOHS_P40x",
+    "BTEC_LEGIONELLA": "LEGIONELLA_COMP",
+    "NSI_GOLD_SECURITY": "NSI_GOLD_SEC",
     # UK EL/PL liability-insurance variants → the two FCA-verified canonical codes, so
     # EVERY liability-insurance certificate routes to the FCA register check centrally
     # (one rule, not per-code seed rows). get_pack_type uses the raw code, so extraction
@@ -102,7 +110,11 @@ def normalize_country(country_code: str | None) -> str:
         return "UK"
     if c in {"USA", "UNITED STATES", "UNITED STATES OF AMERICA"}:
         return "US"
-    if c in {"ARE", "UNITED ARAB EMIRATES"}:
+    # "AE" is the ISO-3166-1 alpha-2 code for the Emirates and the code plenum_cafm.sites
+    # stores. Without it the same country arrived under two names — "AE" matched no pack,
+    # so a certificate stored that way was scored against nothing and reported under a
+    # country that has no register.
+    if c in {"AE", "ARE", "UNITED ARAB EMIRATES"}:
         return "UAE"
     return c
 
@@ -152,28 +164,28 @@ async def seed_verification_sources(session: AsyncSession) -> dict[str, Any]:
         # Split into single statements and run each via raw DBAPI: asyncpg can't run
         # multiple commands in one prepared statement, and text() would misparse the
         # ``::jsonb`` casts as bind params. Mirrors db.apply_sql_migrations.
-        from ...db import _split_sql, engine
+        from ...db import _split_sql, exec_migration_statements
 
         async def _apply(path, label):
             """Apply one migration file; never let a failure crash startup."""
             if not path.exists():
                 log.warning("verification_sources.sql_missing", file=label)
                 return
-            try:
-                async with engine.begin() as conn:
-                    for stmt in _split_sql(path.read_text(encoding="utf-8")):
-                        await conn.exec_driver_sql(stmt)
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "verification_sources.sql_failed", file=label, error=str(exc)[:300]
-                )
+            # Through the shared executor, which knows that a concurrent index build
+            # cannot sit in a transaction. Running these in a begin() block of its own is
+            # what broke this file the moment the index builds became CONCURRENTLY.
+            _, errs = await exec_migration_statements(
+                _split_sql(path.read_text(encoding="utf-8"))
+            )
+            for err in errs:
+                log.warning("verification_sources.sql_failed", file=label, error=err)
 
         # 1) schema upgrade (country_code + composite PK) — must precede the base seed
         await _apply(SOURCES_SQL.parent / SCHEMA_SQL_FILE, SCHEMA_SQL_FILE)
         # 2) UK base seed
-        async with engine.begin() as conn:
-            for stmt in _split_sql(sql):
-                await conn.exec_driver_sql(stmt)
+        _, base_errs = await exec_migration_statements(_split_sql(sql))
+        for err in base_errs:
+            log.warning("verification_sources.sql_failed", file="base_seed", error=err)
         # 3) per-country seeds — independent, so one failure never blocks the others
         for fname in COUNTRY_SQL_FILES:
             await _apply(SOURCES_SQL.parent / fname, fname)

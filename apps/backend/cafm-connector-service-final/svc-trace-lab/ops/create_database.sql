@@ -1,0 +1,27 @@
+-- Hoist Trace Lab: the one statement that creates its own database (G0 addendum 2.3).
+--
+-- RUN BY HAND, by Hussain or a DBA, and by nobody else: no Claude session runs this, and no code in this
+-- repository does. Nothing here is applied automatically. See ops/README.md, step 1.
+--
+-- How to run it (psql wants postgresql://, not postgresql+asyncpg://, and no query string; PGSSLMODE
+-- carries the TLS setting). CREATE DATABASE cannot run inside a transaction, so do not pass -1:
+--
+--   PGSSLMODE=require psql "postgresql://ADMIN:PASSWORD@HOST:5432/postgres" -f create_database.sql
+--
+-- Connect to the maintenance database (postgres), on the same server as the main application database
+-- or on another one: Trace Lab only needs a DSN for it (TRACE_LAB_DB_URL). It must be a SEPARATE
+-- database, never a schema inside the main one, so the chat's generic SQL tools and svc-udr's custom
+-- SELECT can never read it (Postgres cannot query across databases).
+--
+-- Owner: the role that runs this statement becomes the owner. Run it as the role Trace Lab will connect
+-- as, or as an admin and then hand the database over afterwards (ALTER DATABASE hoist_tracelab OWNER TO
+-- <that role>). Trace Lab creates its own schema (tracelab) and tables later, with its migrations
+-- (ops/README.md, step 4), so that role needs CREATE on this database and nothing on any other.
+--
+-- Encoding: UTF8 is expected. A new database copies template1, so this is right on Azure Database for
+-- PostgreSQL and on the postgres:16 images. If template1 on your server is not UTF8, write instead:
+--   CREATE DATABASE hoist_tracelab ENCODING 'UTF8' TEMPLATE template0;
+-- (add LC_COLLATE and LC_CTYPE to match the server when template0 asks for them). Check afterwards with:
+--   SELECT datname, pg_encoding_to_char(encoding) FROM pg_database WHERE datname = 'hoist_tracelab';
+
+CREATE DATABASE hoist_tracelab;

@@ -1,0 +1,122 @@
+/* Labels, Progress and Notes (22 Oct 2026), and the platform team's consultants on People. Hoistra tokens only, on top
+   of lab.css (page heads, tables, empty states, buttons). Positive (the failure is in the answer) wears the risk tint,
+   negative the ok tint. Every class here starts lab-lv-. */
+
+/* Shared */
+.lab-lv-page { min-width: 0; }
+.lab-lv-code { display: inline-flex; align-items: center; flex: none; padding: 2px 7px; border: 1px solid var(--color-divider); border-radius: 6px;
+  background: var(--color-bg); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; line-height: 1.5;
+  color: var(--color-text); white-space: nowrap; }
+button.lab-lv-code { cursor: pointer; }
+button.lab-lv-code:hover { border-color: var(--color-accent); color: var(--color-accent); }
+button.lab-lv-code:focus-visible, .lab-lv-scroll:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.lab-lv-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 500; color: var(--color-neutral-400); }
+.lab-lv-field .lab-input, .lab-lv-field .lab-note { font-weight: 400; color: var(--color-text); }
+.lab-lv-panel { display: flex; flex-direction: column; gap: 12px; max-width: 640px; padding: 16px 18px; border: 1px solid var(--color-divider);
+  border-radius: 10px; background: var(--color-surface); }
+.lab-lv-panel h2, .lab-lv-h2 { margin: 0; font-size: 17px; font-weight: 500; letter-spacing: -0.01em; color: var(--color-text); }
+.lab-lv-h2 { margin-bottom: 10px; }
+.lab-lv-label { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-neutral-500); }
+.lab-lv-count { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.lab-lv-count::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.lab-lv-count-positive::before { background: var(--st-risk); }
+.lab-lv-count-negative::before { background: var(--st-ok); }
+
+/* Labels: the matrix. The box scrolls both ways so its head row and question column stay in view. */
+.lab-lv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: 12.5px; color: var(--color-neutral-500); }
+.lab-lv-scroll { position: relative; overflow: auto; max-height: max(320px, calc(100dvh - 260px)); border: 1px solid var(--color-divider);
+  border-radius: 10px; background: var(--color-surface); }
+.lab-lv-matrix { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 13px; }
+.lab-lv-matrix th, .lab-lv-matrix td { padding: 10px 12px; text-align: left; vertical-align: top; border-right: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-divider); }
+.lab-lv-matrix tr > :last-child { border-right: none; }
+.lab-lv-matrix tbody tr:last-child > * { border-bottom: none; }
+.lab-lv-matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--color-bg); vertical-align: bottom; }
+.lab-lv-matrix thead th:first-child { left: 0; z-index: 3; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; color: var(--color-neutral-400); }
+.lab-lv-matrix tbody th { position: sticky; left: 0; z-index: 1; width: 320px; min-width: 260px; max-width: 360px; background: var(--color-surface);
+  font-weight: 400; }
+.lab-lv-matrix tbody tr:hover th { background: var(--color-neutral-900); }
+.lab-lv-mode { min-width: 176px; }
+.lab-lv-mode-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 700; line-height: 1.4;
+  color: var(--color-text); overflow-wrap: anywhere; }
+.lab-lv-has-def { text-decoration: underline dotted var(--color-neutral-500); text-underline-offset: 3px; cursor: help; }
+.lab-lv-mode-tools { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; font-weight: 400; }
+.lab-lv-mode-tools .lab-link { font-size: 12px; }
+.lab-lv-qhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 5px; }
+.lab-lv-answer { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; color: var(--color-neutral-500); white-space: nowrap; }
+.lab-lv-qtext { font-size: 13px; line-height: 1.45; color: var(--color-text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lab-lv-cell { min-width: 176px; }
+.lab-lv-cell.lab-lv-pos { background: var(--st-risk-bg); }
+.lab-lv-cell.lab-lv-neg { background: var(--st-ok-bg); }
+.lab-lv-toggle { display: inline-flex; border: 1px solid var(--color-divider); border-radius: 8px; background: var(--color-surface); overflow: hidden; }
+.lab-lv-opt { min-height: 30px; padding: 0 11px; border: none; background: transparent; font: inherit; font-size: 12.5px; color: var(--color-neutral-400); cursor: pointer; }
+.lab-lv-opt + .lab-lv-opt { border-left: 1px solid var(--color-divider); }
+.lab-lv-opt:hover { background: var(--color-neutral-900); color: var(--color-text); }
+.lab-lv-opt-positive.lab-on { background: var(--st-risk-bg); color: var(--color-text); font-weight: 600; box-shadow: inset 0 0 0 1.5px var(--st-risk); }
+.lab-lv-opt-negative.lab-on { background: var(--st-ok-bg); color: var(--st-ok); font-weight: 600; box-shadow: inset 0 0 0 1.5px var(--st-ok); }
+.lab-lv-opt:disabled { cursor: progress; opacity: 0.7; }
+.lab-lv-opt:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.lab-lv-others { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 7px; font-size: 12px; color: var(--color-neutral-400); cursor: help; }
+.lab-lv-disagree { padding: 0 6px; border: 1px dashed var(--st-risk); border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 16px; color: var(--color-text); }
+
+/* Progress: completion tiles, then a card per failure mode. */
+.lab-lv-block { display: flex; flex-direction: column; }
+.lab-lv-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.lab-lv-tile { display: flex; flex-direction: column; gap: 3px; padding: 14px 18px; border: 1px solid var(--color-divider); border-radius: 10px; background: var(--color-surface); }
+.lab-lv-tile-n { font-size: 26px; font-weight: 500; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.lab-lv-tile-of { font-size: 15px; font-weight: 400; color: var(--color-neutral-500); }
+.lab-lv-tile-text { font-size: 13px; color: var(--color-neutral-400); }
+.lab-lv-meter { display: block; height: 4px; margin-top: 8px; border-radius: 999px; background: var(--color-neutral-800); overflow: hidden; }
+.lab-lv-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--color-neutral-500); }
+.lab-lv-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.lab-lv-mcard { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border: 1px solid var(--color-divider); border-radius: 10px; background: var(--color-surface); }
+.lab-lv-mcard-hot { border-left: 3px solid var(--st-risk); }
+.lab-lv-mcard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.lab-lv-mcard-name { margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; font-weight: 700; line-height: 1.4;
+  color: var(--color-text); overflow-wrap: anywhere; }
+.lab-lv-mcard-count { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.lab-lv-mcard-n { font-size: 30px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.lab-lv-mcard-unit { font-size: 11.5px; color: var(--color-neutral-500); white-space: nowrap; }
+.lab-lv-mcard-def { margin: 0; font-size: 13px; line-height: 1.5; color: var(--color-neutral-400); display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.lab-lv-trend-wrap, .lab-lv-examples-wrap { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--color-divider); }
+.lab-lv-trend-row { gap: 8px 16px; align-items: flex-end; }
+.lab-lv-trend { display: flex; align-items: flex-end; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.lab-lv-trend li { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 26px; }
+.lab-lv-trend-n { font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--color-neutral-400); }
+.lab-lv-trend-bar { display: flex; align-items: flex-end; width: 14px; height: 32px; border-radius: 3px; background: var(--color-neutral-900); overflow: hidden; }
+.lab-lv-trend-bar > span { display: block; width: 100%; background: var(--color-neutral-500); }
+.lab-lv-trend li.lab-on .lab-lv-trend-bar > span { background: var(--st-risk); }
+.lab-lv-trend li.lab-on .lab-lv-trend-n { font-weight: 600; color: var(--color-text); }
+.lab-lv-trend-run { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10.5px; color: var(--color-neutral-500); }
+.lab-lv-move { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--color-neutral-400); }
+.lab-lv-move::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--color-neutral-500); }
+.lab-lv-move-up { color: var(--color-text); }
+.lab-lv-move-up::before { background: var(--st-risk); }
+.lab-lv-move-down { color: var(--st-ok); }
+.lab-lv-move-down::before { background: var(--st-ok); }
+.lab-lv-examples { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.lab-lv-examples li { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 2px solid var(--color-divider); }
+.lab-lv-example { margin: 0; font-size: 13px; line-height: 1.45; color: var(--color-text); display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+
+/* Notes: the question's code before its text. */
+.lab-lv-qline { display: flex; align-items: baseline; gap: 8px; }
+
+/* People: platform-wide access. */
+.lab-lv-section { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; padding-top: 20px; border-top: 1px solid var(--color-divider); }
+.lab-lv-section h2 { margin: 0; font-size: 19px; font-weight: 500; letter-spacing: -0.01em; }
+.lab-lv-give { display: flex; flex-direction: column; gap: 10px; max-width: 640px; padding: 14px 16px; border: 1px solid var(--color-divider);
+  border-radius: 10px; background: var(--color-surface); }
+.lab-lv-give h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.lab-lv-give-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.lab-lv-grow { flex: 1 1 260px; }
+.lab-lv-tag-ok { background: var(--st-ok-bg); color: var(--st-ok); }
+
+@media (max-width: 1000px) { .lab-lv-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .lab-lv-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lab-lv-matrix tbody th { width: 200px; min-width: 180px; max-width: 220px; }
+  .lab-lv-qtext { -webkit-line-clamp: 3; }
+  .lab-lv-cards { grid-template-columns: minmax(0, 1fr); }
+}
