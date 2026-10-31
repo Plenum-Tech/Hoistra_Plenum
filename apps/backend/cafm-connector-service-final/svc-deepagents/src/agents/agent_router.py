@@ -23,7 +23,7 @@ import time
 
 import structlog
 
-from . import activity_log
+from . import activity_log, spaces
 
 from ..config import DEFAULT_COMPLIANCE_SUMMARY_MODEL, settings
 from .phase2_intents import Phase2AgentId, resolve_phase2_engine
@@ -92,13 +92,28 @@ _SCHEMA = {
 }
 
 
-def _catalogue() -> tuple[str, set[str]]:
-    skills = routable_skills()
+def _catalogue(space: str | None = None) -> tuple[str, set[str]]:
+    """The agents this space may use. A space it has not heard of keeps every agent."""
+    skills = [s for s in routable_skills() if spaces.allows(space, s.agent)]
     lines = [f"- {s.agent}: {s.description}" for s in skills]
     return "\n".join(lines), {s.agent for s in skills}
 
 
-async def select_agent(question: str, context_note: str | None = None) -> dict:
+def _out_of_module(space: str | None, engine: str | None, source: str) -> dict | None:
+    """The answer when the question belongs to a module this space does not have.
+
+    No engine runs and no record is read: the point of a space is that its data is its own.
+    """
+    said = spaces.refusal(space, engine)
+    if not said:
+        return None
+    log.info("agent_router.out_of_module", space=space, engine=engine)
+    return {"agent": None, "also": [], "reason": said, "source": source,
+            "out_of_module": said, "wanted": engine}
+
+
+async def select_agent(question: str, context_note: str | None = None,
+                       space: str | None = None) -> dict:
     """Decide which agent owns this question.
 
     Returns ``{"agent": str | None, "also": [...], "reason": str, "source": str}`` where
@@ -112,13 +127,15 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
                 "reason": "a support session: answered from the Hoistra guide and the user's records"}
     if not llm_routing_enabled():
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
-        return {"agent": eng, "also": [], "reason": "llm routing disabled", "source": "disabled"}
+        return _out_of_module(space, eng, "disabled") or {
+            "agent": eng, "also": [], "reason": "llm routing disabled", "source": "disabled"}
 
     api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
-    catalogue, known = _catalogue()
+    catalogue, known = _catalogue(space)
     if not api_key or not known:
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
-        return {"agent": eng, "also": [], "reason": "router unavailable", "source": "keyword"}
+        return _out_of_module(space, eng, "keyword") or {
+            "agent": eng, "also": [], "reason": "router unavailable", "source": "keyword"}
 
     model = (getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL).strip()
     _user = (
@@ -191,6 +208,10 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
         return {"agent": eng, "also": [], "reason": f"unknown agent {agent!r}", "source": "keyword"}
 
+    gated = _out_of_module(space, agent, "llm")
+    if gated:
+        return gated
+    also = [a for a in also if spaces.allows(space, a)]
     log.info("agent_router.selected", agent=agent, also=also, reason=reason)
     return {"agent": agent, "also": also, "reason": reason, "source": "llm"}
 
