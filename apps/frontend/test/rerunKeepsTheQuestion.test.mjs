@@ -6,8 +6,12 @@
 // the old answer, the rail headed the run with that sentence, and the chat read as if a new
 // query had been typed. The server was already replaying the original question
 // (orchestrator.rerun_turn); only the transcript told it otherwise. Now the question bubble
-// stays the original question with the correction as a note beneath it, and the corrected
-// answer takes the old answer's place, as Edit does. A failed re-run puts the old answer back.
+// stays the original question with the correction as a note beneath it.
+//
+// It used to replace from that question on, as Edit does. That discarded every turn after the one
+// being corrected and put the reader back up the page, so a re-run now APPENDS to the end of the
+// conversation (1 Nov 2026): a correction is not an edit of history, and the reader is already at
+// the bottom. A failed re-run leaves everything in place and says so.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rerunTranscript, correctionMethods } from '../src/logic/corrections.js';
@@ -21,21 +25,32 @@ const CHAT = [
   { role: 'you', text: Q2 }, { role: 'bot', text: 'Five vendors.', turnId: 't2' }
 ];
 
-test('correcting the last answer keeps its question and drops only that answer', () => {
+test('correcting the last answer appends its question, verbatim, to the end', () => {
   const out = rerunTranscript(CHAT, 't2', 'ignored', 'For the compliance analyst stage: hi.');
-  assert.equal(out.length, 3);
-  assert.deepEqual(out.slice(0, 2), CHAT.slice(0, 2));
-  assert.equal(out[2].role, 'you');
-  assert.equal(out[2].text, Q2);                     // the original question, verbatim
-  assert.equal(out[2].correction, 'For the compliance analyst stage: hi.');
-  assert.ok(!/Re-run with correction/.test(out[2].text));
+  assert.equal(out.length, CHAT.length + 1);
+  assert.deepEqual(out.slice(0, CHAT.length), CHAT);   // nothing above it moved
+  const last = out[out.length - 1];
+  assert.equal(last.role, 'you');
+  assert.equal(last.text, Q2);                         // the original question, verbatim
+  assert.equal(last.correction, 'For the compliance analyst stage: hi.');
+  assert.ok(!/Re-run with correction/.test(last.text));
 });
 
-test('correcting an earlier answer replaces from its question on, as Edit does', () => {
+test('correcting an EARLIER answer keeps every turn since and appends to the end', () => {
   const out = rerunTranscript(CHAT, 't1', 'ignored', 'Count DEC certificates too.');
-  assert.equal(out.length, 1);
-  assert.equal(out[0].text, Q1);
-  assert.equal(out[0].correction, 'Count DEC certificates too.');
+  assert.equal(out.length, CHAT.length + 1);
+  assert.deepEqual(out.slice(0, CHAT.length), CHAT);   // Q2 and its answer survive
+  const last = out[out.length - 1];
+  assert.equal(last.text, Q1);                         // the corrected answer's own question
+  assert.equal(last.correction, 'Count DEC certificates too.');
+});
+
+test('a re-run never discards a turn', () => {
+  for (const id of ['t1', 't2', 'gone']) {
+    const out = rerunTranscript(CHAT, id, Q2, 'x');
+    assert.equal(out.length, CHAT.length + 1, id);
+    assert.deepEqual(out.slice(0, CHAT.length), CHAT, id);
+  }
 });
 
 test('an answer not in the transcript falls back to the run\'s own question, appended', () => {
@@ -53,7 +68,7 @@ function controller(chat) {
   return c;
 }
 
-test('Re-run the steps: the original question, then the corrected answer in the old one\'s place', async () => {
+test('Re-run the steps: the original question and its corrected answer, both at the end', async () => {
   const real = deepAgentsApi.traceRerun;
   let seen = null;
   deepAgentsApi.traceRerun = async (turnId, body) => { seen = { turnId, body }; return { ok: true, turn_id: 't3', rerun_of: 't2', answer: 'Four vendors.', tool_calls: [], applied: [], taught: [] }; };
@@ -62,12 +77,14 @@ test('Re-run the steps: the original question, then the corrected answer in the 
     await c.crRerun();
     assert.equal(seen.turnId, 't2');                  // the server replays the original turn
     const chat = c.state.ccChat;
-    assert.equal(chat.length, 4);
-    assert.equal(chat[2].text, Q2);
-    assert.match(chat[2].correction, /hi/);
-    assert.equal(chat[3].text, 'Four vendors.');
-    assert.equal(chat[3].rerunOf, 't2');
-    assert.ok(!chat.some((m) => m.text === 'Five vendors.'));
+    assert.equal(chat.length, CHAT.length + 2);         // the question, then its new answer
+    assert.deepEqual(chat.slice(0, CHAT.length), CHAT); // nothing above either of them moved
+    assert.equal(chat[CHAT.length].text, Q2);
+    assert.match(chat[CHAT.length].correction, /hi/);
+    assert.equal(chat[CHAT.length + 1].text, 'Four vendors.');
+    assert.equal(chat[CHAT.length + 1].rerunOf, 't2');
+    // The answer being corrected stays where it was said: a correction is not an edit of history.
+    assert.ok(chat.some((m) => m.text === 'Five vendors.'));
   } finally { deepAgentsApi.traceRerun = real; }
 });
 
@@ -119,7 +136,8 @@ test('a corrected answer renders like the first one: the structured outputs are 
   try {
     const c = controller(CHAT);
     await c.crRerun();
-    const bot = c.state.ccChat[3];
+    const chat = c.state.ccChat;
+    const bot = chat[chat.length - 1];   // the re-run appends; the answer is last
     assert.ok(bot.rich, 'the rich payload is kept');
     assert.equal(bot.rich.narrative, 'Four vendors are blocked.');
     assert.equal(bot.rich.kpis.length, 1);
@@ -133,6 +151,7 @@ test('a corrected answer with no structured outputs stays markdown', async () =>
   try {
     const c = controller(CHAT);
     await c.crRerun();
-    assert.equal(c.state.ccChat[3].rich, null);
+    const chat2 = c.state.ccChat;
+    assert.equal(chat2[chat2.length - 1].rich, null);   // the re-run appends; the answer is last
   } finally { deepAgentsApi.traceRerun = real; }
 });

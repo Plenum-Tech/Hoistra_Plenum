@@ -155,17 +155,21 @@ export function correctionText(edits, context) {
 }
 
 // The transcript a re-run starts from: the corrected answer's ORIGINAL question, verbatim, with
-// the correction as a note beneath it, and nothing after it. The corrected answer then lands
-// where the old one was, as Edit does. Posting the correction as a question of its own made a
-// re-run read as a new query (5 Oct 2026). An answer no longer in the transcript appends the
-// run's own question.
+// the correction as a note beneath it, APPENDED to the end of the conversation. Posting the
+// correction as a question of its own made a re-run read as a new query (5 Oct 2026), so the
+// question bubble is still the original question.
+//
+// It used to replace from that question on, as Edit does, which discarded every turn after the
+// one being corrected and put the reader back up the page (1 Nov 2026). A correction is not an
+// edit of history: the earlier answer and everything said since are still what happened, and a
+// re-run is a new attempt at the end of the conversation, where the reader already is.
 export function rerunTranscript(chat, turnId, fallbackQuestion, correction) {
   const list = chat || [];
   const ai = list.findIndex((m) => m && m.role !== 'you' && m.turnId === turnId);
   let qi = -1;
   for (let j = ai - 1; j >= 0; j -= 1) { if (list[j] && list[j].role === 'you') { qi = j; break; } }
   const question = (qi > -1 && list[qi].text) || fallbackQuestion || '';
-  return (qi > -1 ? list.slice(0, qi) : list).concat([{ role: 'you', text: question, correction: correction, rerun: true }]);
+  return list.concat([{ role: 'you', text: question, correction: correction, rerun: true }]);
 }
 
 // Which answer the rail shows: the pinned one while it is still in the transcript, otherwise
@@ -284,7 +288,7 @@ export const correctionMethods = {
       if ((out.taught || []).length) this.flash('Saved as a teaching too — similar questions get it from now on.');
       this.setState((p) => ({ ccTraceIdx: (p.ccChat || []).length - 1 }));
     } catch (e) {
-      // The old answer comes back: a failed re-run has nothing to replace it with.
+      // Nothing was removed, so the old answer is still above: the note says what happened.
       this.setState({ ccBusy: false, ccStream: null, ccChat: before.concat([{ role: 'bot', error: true, note: true, text: 'Could not re-run: ' + ((e && e.message) || e) }]) });
     }
   },

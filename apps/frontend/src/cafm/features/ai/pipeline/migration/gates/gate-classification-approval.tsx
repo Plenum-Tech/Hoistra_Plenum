@@ -132,7 +132,6 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
   // until you approve there was nowhere to see what a Shared Attribute actually produces. Worse,
   // the payload behind that card is built BEFORE the answer, so a group re-classified here could
   // not appear in it at all. This panel is built from the live choices instead.
-  const q = (n: string) => (/^[a-z_][a-z0-9_]*$/.test(n) ? n : `"${String(n).replace(/"/g, '""')}"`);
 
   // Every source table in the run — the backend appends "_ref" when a lookup would collide with
   // one, so the preview has to apply the same rule or it names a table that never appears.
@@ -142,22 +141,17 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
     if (t) sourceTables.add(t);
   }));
 
-  const previewDdl = (canonical: string, members: string[]) => {
-    const pk = canonical;
-    const table = sourceTables.has(pk) ? `${pk}_ref` : pk;
-    const pairs = members.map((m) => String(m).split(".")).filter((x) => x.length === 2);
-    const lines = [
-      `CREATE TABLE IF NOT EXISTS plenum_cafm.${q(table)} (`,
-      `    ${q(pk)} TEXT PRIMARY KEY`,
-      `);`,
-      `COMMENT ON TABLE plenum_cafm.${q(table)} IS 'Shared attribute normalised into a lookup ` +
-        `table. Source columns, each now a foreign key into this table: ` +
-        `${pairs.map(([t, c]) => `${t}.${c}`).join(", ")}.';`,
-    ];
-    pairs.forEach(([t, c]) => lines.push(
-      `ALTER TABLE plenum_cafm.${q(t)} ADD CONSTRAINT ${q(`fk_${t}_${c}`)} ` +
-      `FOREIGN KEY (${q(c)}) REFERENCES plenum_cafm.${q(table)} (${q(pk)});`));
-    return lines.join("\n");
+  // A group you have just re-classified has no table yet, so there is no emitted DDL to show —
+  // and composing the CREATE here would put the destination schema into shipped source, which no
+  // screen is allowed to name (test/noInternalNames.test.mjs). What it WILL build is said in
+  // words instead; the real DDL, from the service, is shown for every group that already has one.
+  const previewOf = (canonical: string, members: string[]) => {
+    const table = sourceTables.has(canonical) ? `${canonical}_ref` : canonical;
+    return {
+      table,
+      key: canonical,
+      sources: members.map(String).filter((m) => m.includes(".")),
+    };
   };
 
   const ddlEntries = [...fkRows, ...sharedRows]
@@ -178,7 +172,8 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
         return {
           gid: c.group_id, table: sourceTables.has(name) ? `${name}_ref` : name, preview: true,
           meta: "row count known on submit",
-          ddl: previewDdl(name, (c.members ?? []).map(String)),
+          ddl: "",
+          preview_of: previewOf(name, (c.members ?? []).map(String)),
         };
       }
       // An unchanged shared group with no lookup table is one the service declined to normalise
@@ -186,7 +181,8 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
       return { gid: c.group_id, table: c.canonical_name ?? "", preview: false,
                meta: "no lookup table — the values are not a vocabulary", ddl: "" };
     })
-    .filter(Boolean) as Array<{ gid: string; table: string; preview: boolean; meta: string; ddl: string }>;
+    .filter(Boolean) as Array<{ gid: string; table: string; preview: boolean; meta: string; ddl: string;
+                            preview_of?: { table: string; key: string; sources: string[] } }>;
 
   const RowShell = ({
     row,
@@ -377,6 +373,17 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                   <pre className="overflow-x-auto rounded bg-slate-900 p-2.5 text-[10px] leading-relaxed text-slate-100">
                     <code>{e.ddl}</code>
                   </pre>
+                ) : e.preview_of ? (
+                  <div className="rounded border border-indigo-200 bg-indigo-50/40 p-2.5 text-[11px] text-slate-700">
+                    Will create <b className="font-mono">{e.preview_of.table}</b>, keyed on{" "}
+                    <b className="font-mono">{e.preview_of.key}</b>, holding the values of{" "}
+                    {e.preview_of.sources.map((m, i) => (
+                      <span key={m}>
+                        {i ? ", " : ""}<span className="font-mono">{m}</span>
+                      </span>
+                    ))}
+                    . Its statements are shown once it is built, on submit.
+                  </div>
                 ) : null}
               </div>
             ))}
