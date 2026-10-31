@@ -18,7 +18,18 @@ apps/backend/config.toml
 
 # tooling
 .DS_Store
+._*
 *.log
 .idea/
 .vscode/
 graphify-out/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# local database process state
+*.db-shm
+*.db-wal
