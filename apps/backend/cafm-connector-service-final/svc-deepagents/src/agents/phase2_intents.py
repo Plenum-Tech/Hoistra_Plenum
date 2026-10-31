@@ -134,6 +134,13 @@ WO_ENGINE_INTENT_KEYWORDS: tuple[str, ...] = (
     # "which inspection recommendations were never actioned" is maintenance, not a certificate.
     # Without this the question is routed to compliance, which Ops Brain does not have, and the
     # space refuses a chip it offers on its own home page (1 Nov 2026).
+    # A deviation FROM the maintenance plan is maintenance. "ppm" alone sits in this list and in
+    # contract performance's, and the tie went to contract performance, so "show the ppm
+    # deviations" reached a different engine from "planned maintenance deviations" -- the same
+    # question, decided by which word the person happened to use (30 Oct 2026). PPM COMPLETION
+    # against a contract stays contract performance; its keyword is the longer phrase.
+    "ppm deviation", "ppm deviations", "deviation from plan", "deviations from plan",
+    "schedule deviation", "schedule deviations", "deviating from",
     "inspection recommendation", "inspection recommendations",
     "inspection report", "inspection reports", "recommendations were never actioned",
     "recommendation was never actioned", "never actioned",
@@ -181,6 +188,44 @@ def format_phase2_intent_table() -> str:
 
 def _normalize(text: str) -> str:
     return " ".join((text or "").lower().split())
+
+
+#: A deterministic winner this far clear of the runner-up is reading words that are actually
+#: there, not guessing. Below it the question is genuinely open and the model's reading wins.
+CERTAIN_MARGIN = 1.0
+
+
+def phase2_scores(message: str) -> dict:
+    """Each engine's keyword score for this message. Empty when nothing matched."""
+    msg = _normalize(message)
+    if not msg:
+        return {}
+    scores: dict = {}
+    for agent, keywords in PHASE2_INTENT_BY_AGENT.items():
+        total = 0.0
+        for kw in keywords:
+            needle = _normalize(kw)
+            if needle and needle in msg:
+                total += 1.0 + 0.25 * max(0, len(needle.split()) - 1)
+        if total:
+            scores[agent] = total
+    return scores
+
+
+def certain_engine(message: str) -> "Phase2AgentId | None":
+    """The engine the words plainly name, or None when the question is open.
+
+    Certain means one engine's keywords beat every other by CERTAIN_MARGIN: the question says
+    "work order" and "SLA breach", not "how are things". A question with no keywords at all, or
+    two engines close together, is not certain and nothing here overrides a reading of it.
+    """
+    scores = phase2_scores(message)
+    if not scores:
+        return None
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    if len(ranked) == 1:
+        return ranked[0][0] if ranked[0][1] >= CERTAIN_MARGIN else None
+    return ranked[0][0] if ranked[0][1] - ranked[1][1] >= CERTAIN_MARGIN else None
 
 
 def match_phase2_agent(message: str) -> Phase2AgentId | None:

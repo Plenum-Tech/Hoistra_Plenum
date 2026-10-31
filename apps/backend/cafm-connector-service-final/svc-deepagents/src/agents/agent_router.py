@@ -26,7 +26,7 @@ import structlog
 from . import activity_log, spaces
 
 from ..config import DEFAULT_COMPLIANCE_SUMMARY_MODEL, settings
-from .phase2_intents import Phase2AgentId, resolve_phase2_engine
+from .phase2_intents import Phase2AgentId, certain_engine, resolve_phase2_engine
 from .skills import routable_skills
 from . import llm_cost
 
@@ -97,6 +97,26 @@ def _catalogue(space: str | None = None) -> tuple[str, set[str]]:
     skills = [s for s in routable_skills() if spaces.allows(space, s.agent)]
     lines = [f"- {s.agent}: {s.description}" for s in skills]
     return "\n".join(lines), {s.agent for s in skills}
+
+
+def agent_for_question(question: str, llm_choice: str | None = None) -> str | None:
+    """The engine to answer with, preferring words that are plainly there over a reading of them.
+
+    The model's choice was used as given, so when it answered "compliance" for a question about
+    work-order deviations, nothing disagreed and the turn ran on certificates (30 Oct 2026).
+
+    The keyword resolver only speaks when the question names a domain, and certain_engine only
+    returns an engine when one domain beats every other clearly. So this overrides a contradicting
+    model only where the question is explicit - "which work orders breached sla" is work orders
+    whatever else it mentions - and leaves every open question ("how are things looking", "which
+    buildings are at risk") to the model, which reads them far better than a keyword table.
+    """
+    sure = certain_engine(question or "")
+    if sure and llm_choice and llm_choice != sure and llm_choice in PHASE2_ENGINES:
+        log.info("agent_router.deterministic_override", question=(question or "")[:120],
+                 llm=llm_choice, chose=sure)
+        return sure
+    return llm_choice or sure
 
 
 def _out_of_module(space: str | None, engine: str | None, source: str) -> dict | None:
@@ -209,6 +229,11 @@ async def select_agent(question: str, context_note: str | None = None,
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
         return {"agent": eng, "also": [], "reason": f"unknown agent {agent!r}", "source": "keyword"}
 
+    # Words that are plainly there beat a reading of them (agent_for_question).
+    _sure = agent_for_question(question, agent)
+    if _sure and _sure != agent:
+        reason = (reason + " | overridden: the question names " + _sure)[:200]
+        agent = _sure
     gated = _out_of_module(space, agent, "llm")
     if gated:
         return gated
