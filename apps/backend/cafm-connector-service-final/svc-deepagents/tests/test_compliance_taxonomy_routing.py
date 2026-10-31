@@ -152,12 +152,12 @@ class TestPlanFallback:
 class TestAnalystDirective:
     def test_the_directive_names_the_pack_as_the_answer(self):
         d = O._TAXONOMY_DIRECTIVE
-        assert "list_country_pack" in d
-        assert "Building" in d and "Vendor" in d
+        assert "Use only an enabled authorized taxonomy/coverage adapter" in d
+        assert "Building-scope" in d and "Vendor-scope" in d
 
     def test_the_directive_forbids_dropping_unheld_types(self):
         # The failure mode that hides exactly the requirements a PM most needs to see.
-        assert "still required" in O._TAXONOMY_DIRECTIVE
+        assert "A list claiming completeness must account for the requested types once" in O._TAXONOMY_DIRECTIVE
 
     def test_the_directive_keeps_applicability_honest(self):
         assert "applicability" in O._TAXONOMY_DIRECTIVE.lower()

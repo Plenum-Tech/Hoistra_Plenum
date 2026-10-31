@@ -1,0 +1,9 @@
+{
+  "instruction_sha256": "1cdc1224ecada994c721b374cbb7ba978cfe446b0b231f0c091dca51ffab84c6",
+  "rendered": {
+    "general_user": "95b83444d67f690a001d13a9ca8664e694a33b7da15abe62e20b6900ec9f0056",
+    "property_manager": "be68beddedde17279f03264b321c5a18cb22aa05e26fc57567e6aa1462423819",
+    "portfolio_manager": "65ecdfac79f55bd9634e976db49d480fba25c39347fa20be489edf81c3f09ab2",
+    "compliance_officer": "c360c65142823fe4bf5253e19cd0dd65d9aeb9068308b6ec3de08cc0672cd3ca"
+  }
+}

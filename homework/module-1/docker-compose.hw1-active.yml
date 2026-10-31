@@ -1,0 +1,10 @@
+# Applied only by verified readiness activation; private runtime configuration is reused.
+services:
+  orchestrator:
+    image: hoistra-hw1-orchestrator:hw1-baseline-v37
+    environment:
+      HW1_COMPLIANCE_ENABLED: "true"
+      HW1_CONTRACT_ENABLED: "true"
+      HW1_ENERGY_ENABLED: "true"
+      HW1_INGESTION_ENABLED: "true"
+      HW1_USAGE_ENABLED: "true"

@@ -11,7 +11,7 @@ from src.agents.system_prompt import build_system_prompt
 
 # Exact PRD lists — fail if anyone trims/reorders without updating this lock
 _PRD_COMPLIANCE = (
-    "certificate, expiry, cert due, inspection, LOLER, EICR, gas safety, compliance, "
+    "certificate, cert, certs, expiry, cert due, inspection, LOLER, EICR, gas safety, compliance, "
     "accreditation, Gas Safe, NICEIC, lapsed, renewal, statutory, fire risk, vendor cert, "
     "building cert, blocked, vendor accreditation, not on record, remedial, insurance risk, "
     "expired"
