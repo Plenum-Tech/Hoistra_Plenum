@@ -190,17 +190,16 @@ def actual_tools(result, principal=None):
     return tools
 
 
-async def ask(request,body):
-    """Session ownership and manifest enforcement cover every central route/clarification."""
-    from datetime import datetime,timezone
-    from ..services.compliance_hw1.store import runtime_store
-    from ..services.compliance_hw1.sessions import conversation,append
-    from .unified_prompt import validate,enabled_for,CONTEXT
-    p=request.state.test_principal;store=runtime_store()
-    registry,instructions=validate(enabled_for(request.app))
-    await store.audit(p,'unified_agent','capability_authorized',request_id=request.state.request_id)
-    async with store.transaction(p) as repo:
-        session=await conversation(repo,p,body.conversation_id)
+async def _execute_owned_session(
+    request, body, p, store, registry, instructions, session, observation
+):
+    """Run one already-authorized conversation while its root trace is active."""
+    from datetime import datetime, timezone
+
+    from ..observability.homework import effective_prompt_version
+    from ..services.compliance_hw1.sessions import append, conversation
+    from .unified_prompt import CONTEXT
+
     request_body=SimpleNamespace(message=body.message,conversation_id=session['id'])
     context={'actor':p.user_id,'role':p.role,'registry':registry,'instructions':instructions,
              'utc_date':datetime.now(timezone.utc).date().isoformat(),'defer_answer_persistence':True}
@@ -210,15 +209,23 @@ async def ask(request,body):
     except Exception as error:
         # Preserve failed request evidence without treating a raised delegate as empty success.
         attempts=[context['read_attempt']] if context.get('read_attempt') else []
+        route=classify(body.message)[0]
+        prompt_version=effective_prompt_version(
+            registry, route, answer_prompt_used=False
+        )
+        observation.fail(error, prompt_version, route, len(attempts))
         async with store.transaction(p) as repo:
             await repo.insert('history','unified_trace',list(p.building_ids),{
                 'actor':p.user_id,'role':p.role,'category':'compliance' if p.role=='compliance_officer' else 'agent',
                 'conversation_id':session['id'],'request_id':request.state.request_id,'intent':'domain_request',
-                'selected_route':classify(body.message)[0],'actual_tools':attempts,'outcome':'failed',
+                'selected_route':route,'actual_tools':attempts,'outcome':'failed',
                 'error_status':error.status_code if isinstance(error,HTTPException) else 502,
                 'execution_observation':'recorded read attempt' if attempts else 'delegate raised before returning tool observations',
                 'prompt_metadata':context.get('read_prompt_metadata'),'provider_execution':context.get('read_provider'),
-                'unified_metadata':registry,'policy_version':registry['policy_version'],'generated_at':datetime.now(timezone.utc).isoformat()})
+                'unified_metadata':registry,'policy_version':registry['policy_version'],
+                'prompt_version':prompt_version,'otel_trace_id':observation.trace_id,
+                'scenario_id':getattr(body,'scenario_id',None),
+                'generated_at':datetime.now(timezone.utc).isoformat()})
         raise
     finally:CONTEXT.reset(token)
     result.setdefault('prompt_metadata',{'profile':'hw1-unified-control','specification_version':'0.37.0',
@@ -251,6 +258,13 @@ async def ask(request,body):
             category='compliance' if p.role=='compliance_officer' else 'answer_synthesis'
             await record_measurement(p,request.state.request_id,category,session['id'],generation.get('token_usage'),1000)
         await store.audit(p,'answer_synthesis',generation['status'],request_id=request.state.request_id)
+    prompt_version=effective_prompt_version(
+        registry,
+        route,
+        answer_prompt_used=result['answer_generation'].get('status')!='not_requested',
+    )
+    result['prompt_version']=prompt_version
+    result['otel_trace_id']=observation.trace_id
     async with store.transaction(p) as repo:
         # Delegates deferred intermediate prose; persist the actual final answer once.
         current=await conversation(repo,p,session['id'])
@@ -262,6 +276,35 @@ async def ask(request,body):
             'selected_route':route,'actual_tools':tools,'outcome':result['outcome'],'execution_outcome':outcome,
             'answer_generation':result.get('answer_generation'),
             'prompt_metadata':result.get('prompt_metadata'),'unified_metadata':registry,
-            'provider_execution':result.get('provider_execution'),'policy_version':registry['policy_version'],'generated_at':datetime.now(timezone.utc).isoformat()})
+            'provider_execution':result.get('provider_execution'),'policy_version':registry['policy_version'],
+            'prompt_version':prompt_version,'otel_trace_id':observation.trace_id,
+            'scenario_id':getattr(body,'scenario_id',None),
+            'generated_at':datetime.now(timezone.utc).isoformat()})
     result['trace_id']=trace_id
+    observation.finish(result,prompt_version)
     return result
+
+
+async def ask(request,body):
+    """Resolve trusted identity/session state before any traced agent operation."""
+    from ..observability.homework import observe_session
+    from ..services.compliance_hw1.sessions import conversation
+    from ..services.compliance_hw1.store import runtime_store
+    from .unified_prompt import enabled_for, validate
+
+    p=request.state.test_principal
+    store=runtime_store()
+    registry,instructions=validate(enabled_for(request.app))
+    await store.audit(p,'unified_agent','capability_authorized',request_id=request.state.request_id)
+    async with store.transaction(p) as repo:
+        session=await conversation(repo,p,body.conversation_id)
+    with observe_session(
+        p,
+        session['id'],
+        request.state.request_id,
+        body.message,
+        getattr(body,'scenario_id',None),
+    ) as observation:
+        return await _execute_owned_session(
+            request,body,p,store,registry,instructions,session,observation
+        )

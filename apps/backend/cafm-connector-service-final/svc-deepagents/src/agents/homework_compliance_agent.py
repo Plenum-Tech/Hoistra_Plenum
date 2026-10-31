@@ -8,6 +8,11 @@ from langchain_core.messages import SystemMessage,HumanMessage,ToolMessage
 from ..services.compliance_hw1.contracts import Query,ProposalInput,QUERY_KEYS
 from ..services.compliance_hw1.authorization import allowed_tools
 from ..services.compliance_hw1.sessions import conversation,append
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 from .compliance_prompt import assemble
 
 DESCRIPTIONS={
@@ -100,7 +105,16 @@ async def ask(principal,body,service,model,request_id=None):
         session_id=session['id'];context=session['data']
     if body.message.strip().lower() in {'yes','approve','confirm','go ahead'} and context['pending_proposal_ids']:
         identifier=context['pending_proposal_ids'][-1]
-        preview=await service.execute(principal,'compliance_get_proposal',{'entity_id':identifier},request_id)
+        arguments={'entity_id':identifier}
+        preview=await traced_tool_call(
+            principal,
+            'compliance_get_proposal',
+            arguments,
+            lambda: service.execute(
+                principal,'compliance_get_proposal',arguments,request_id
+            ),
+            allowed_tools=metadata['bound_tools'],
+        )
         return {'outcome':'awaiting_confirmation','answer':'Confirm the displayed version/hash through the authenticated confirmation endpoint; chat text alone has not applied it.',
                 'conversation_id':session_id,'preview':preview,'tool_calls':[{'tool':'compliance_get_proposal','input':{'entity_id':identifier},'output':preview}],
                 'prompt_metadata':metadata}
@@ -108,7 +122,14 @@ async def ask(principal,body,service,model,request_id=None):
     calls=[];control=None;usage_events=[];provider_tools=[];provider_failed=False;bound=model.bind_tools(tools(principal))
     for turn in range(5):
         try:
-            response=await asyncio.wait_for(bound.ainvoke(messages),timeout=60)
+            response=await asyncio.wait_for(
+                invoke_traced_model(
+                    bound,
+                    messages,
+                    rendered_prompt_sha256(prompt, metadata),
+                ),
+                timeout=60,
+            )
         except Exception:
             provider_failed=True
             control=('partial' if calls else 'failed','The provider was unavailable; no additional action was performed.')
@@ -125,13 +146,20 @@ async def ask(principal,body,service,model,request_id=None):
             break
         for call in response.tool_calls:
             try:
-                if call['name'] not in metadata['bound_tools']:raise HTTPException(403,'Unbound model tool')
                 # A model may quote supplied evidence, but cannot invent a new source document.
                 supplied=[body.message]+[turn.get('user','') for turn in context['messages']]
                 source_text=call['args'].get('source_text')
                 if source_text and not any(source_text in message for message in supplied):
                     raise HTTPException(422,'Supply the original structured evidence through the authenticated intake; model-generated source text is not accepted')
-                output=await service.execute(principal,call['name'],call['args'],request_id)
+                output=await traced_tool_call(
+                    principal,
+                    call['name'],
+                    call['args'],
+                    lambda call=call: service.execute(
+                        principal,call['name'],call['args'],request_id
+                    ),
+                    allowed_tools=metadata['bound_tools'],
+                )
                 item={'tool':call['name'],'input':call['args'],'output':output}
                 payload=output
             except HTTPException as exc:

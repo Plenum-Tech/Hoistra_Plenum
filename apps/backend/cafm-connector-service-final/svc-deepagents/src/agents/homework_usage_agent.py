@@ -6,6 +6,11 @@ from langchain_core.messages import HumanMessage,SystemMessage,ToolMessage
 from .usage_prompt import assemble
 from ..services.usage_hw1.contracts import MODELS
 from ..services.compliance_hw1.sessions import conversation,append
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 
 def generation_declined(message):
     return bool(re.search(r"\b(?:do not|don't|never)\s+(?:generate|run|trigger|send)\b",message,re.I)
@@ -44,7 +49,16 @@ async def ask(principal,body,service,model,request_id):
         if requested and requested['tool'] not in metadata['bound_tools']:requested=None
         initial=(model.bind_tools(tools,tool_choice={'type':'function','function':{'name':requested['tool']}}) if requested else bound)
         for step in range(3):
-            try: response=await asyncio.wait_for((initial if step==0 else bound).ainvoke(messages),timeout=60)
+            try:
+                selected_model = initial if step == 0 else bound
+                response=await asyncio.wait_for(
+                    invoke_traced_model(
+                        selected_model,
+                        messages,
+                        rendered_prompt_sha256(prompt, metadata),
+                    ),
+                    timeout=60,
+                )
             except Exception: failed=True;break
             responses+=1;provider_tools.extend(c["name"] for c in response.tool_calls)
             usage_events.append(getattr(response,"usage_metadata",None))
@@ -52,13 +66,24 @@ async def ask(principal,body,service,model,request_id):
             if not response.tool_calls or len(calls)+len(response.tool_calls)>2: break
             for call in response.tool_calls:
                 try:
-                    if call["name"] not in metadata["bound_tools"]:raise HTTPException(403,"Tool not permitted")
                     if call['name'] in {'usage_weekly_report','usage_monthly_report'} and generation_declined(body.message):
                         raise HTTPException(422,'Manual generation/delivery was explicitly declined')
                     if requested and (call['name']!=requested['tool'] or str(call['args'].get('period_start'))!=requested['period_start']):
                         raise HTTPException(422,'Requested report tool and period must match exactly')
                     from ..services.usage_hw1.tools import execute
-                    output=await execute(principal,{'tool':call['name'],'arguments':call['args']},request_id,service)
+                    output=await traced_tool_call(
+                        principal,
+                        call['name'],
+                        call['args'],
+                        lambda call=call: execute(
+                            principal,
+                            {'tool':call['name'],'arguments':call['args']},
+                            request_id,
+                            service,
+                        ),
+                        allowed_tools=metadata['bound_tools'],
+                        unbound_reason="Tool not permitted",
+                    )
                     calls.append({"tool":call["name"],"input":call["args"],"result":output["result"]})
                     payload=output
                 except HTTPException as error:

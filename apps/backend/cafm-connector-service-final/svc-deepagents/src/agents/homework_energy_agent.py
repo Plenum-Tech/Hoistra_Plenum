@@ -6,6 +6,11 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from ..services.energy_hw1.contracts import EnergyQuery, AnomalyQuery, AnomalyAction, AnomalyList, GapScan, GapRetry, MonthlyReport, ReportQuery
 from ..services.energy_hw1.service import TOOLS
 from ..services.compliance_hw1.sessions import append, conversation
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 from .energy_prompt import allowed_tools, assemble
 from .energy_response import render_eui
 from ..services.trace_hw1.energy import observation
@@ -68,7 +73,15 @@ async def ask(principal, body, service, model, request_id):
         messages=[SystemMessage(content=prompt),HumanMessage(content=json.dumps({"prior_turns":context["messages"],"request":body.message}))]
         model_tools=model.bind_tools(specs(principal))
         for _ in range(3):
-            try: response=await asyncio.wait_for(model_tools.ainvoke(messages),timeout=60)
+            try:
+                response=await asyncio.wait_for(
+                    invoke_traced_model(
+                        model_tools,
+                        messages,
+                        rendered_prompt_sha256(prompt, metadata),
+                    ),
+                    timeout=60,
+                )
             except Exception:
                 provider_failed=True
                 break
@@ -79,9 +92,18 @@ async def ask(principal, body, service, model, request_id):
             if len(calls)+len(response.tool_calls)>2: break
             for call in response.tool_calls:
                 try:
-                    if call["name"] not in metadata["bound_tools"]:
-                        raise HTTPException(403,"Anomaly disposition requires an explicit authenticated human API request")
-                    result=await service.execute(principal,call["name"],call["args"],request_id)
+                    result=await traced_tool_call(
+                        principal,
+                        call["name"],
+                        call["args"],
+                        lambda call=call: service.execute(
+                            principal,call["name"],call["args"],request_id
+                        ),
+                        allowed_tools=metadata["bound_tools"],
+                        unbound_reason=(
+                            "Anomaly disposition requires an explicit authenticated human API request"
+                        ),
+                    )
                     calls.append({**observation(principal, call["name"], call["args"], "model", True), "result":result["result"]})
                     messages.append(ToolMessage(content=json.dumps(result,default=str),tool_call_id=call["id"]))
                 except HTTPException as exc:
@@ -92,7 +114,13 @@ async def ask(principal, body, service, model, request_id):
             if fallback:
                 name,args=fallback
                 try:
-                    result=await service.execute(principal,name,args,request_id)
+                    result=await traced_tool_call(
+                        principal,
+                        name,
+                        args,
+                        lambda: service.execute(principal,name,args,request_id),
+                        allowed_tools=metadata["bound_tools"],
+                    )
                     calls.append({**observation(principal, name, args, "fallback", True), "result":result["result"],"route_basis":"explicit scoped energy request"})
                 except HTTPException as exc:
                     calls.append({**observation(principal, name, None, "fallback", False), "error":"Operation unavailable" if exc.status_code in (403,404) else str(exc.detail)})

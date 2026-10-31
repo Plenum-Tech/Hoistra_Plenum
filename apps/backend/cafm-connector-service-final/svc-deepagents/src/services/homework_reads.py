@@ -12,6 +12,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ..api.homework_identity import TestPrincipal
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 
 MANAGERS = frozenset({"property_manager", "portfolio_manager"})
 ALL_ROLES = MANAGERS | {"general_user", "compliance_officer"}
@@ -209,9 +214,15 @@ async def plan_and_read(message, principal, dispatcher, model, request_id=None):
         prompt = assemble_homework_read_prompt(principal)
     except PromptAssemblyError:
         raise HTTPException(503, "Homework prompt configuration unavailable") from None
-    response = await model.bind_tools(tools).ainvoke([
-        SystemMessage(content=prompt.text),
-        HumanMessage(content=message)])
+    bound_model = model.bind_tools(tools)
+    response = await invoke_traced_model(
+        bound_model,
+        [
+            SystemMessage(content=prompt.text),
+            HumanMessage(content=message),
+        ],
+        rendered_prompt_sha256(prompt.text, prompt.metadata()),
+    )
     from .usage_hw1.service import record_measurement
     await record_measurement(principal, request_id or str(uuid4()), "read_only", None,
                              getattr(response, "usage_metadata", None))
@@ -237,7 +248,13 @@ async def plan_and_read(message, principal, dispatcher, model, request_id=None):
         unified['read_attempt']={'tool':call['name'],'succeeded':False}
         unified['read_prompt_metadata']=prompt.metadata()
         unified['read_provider']={'successful_responses':1,'selected_tools':[call['name']]}
-    result = await dispatcher.execute(principal, call["name"], args, request_id, "model_planner")
+    result = await traced_tool_call(
+        principal,
+        call["name"],
+        args.model_dump(),
+        lambda: dispatcher.execute(principal, call["name"], args, request_id, "model_planner"),
+        allowed_tools=dispatcher.allowed_tools(principal),
+    )
     if unified is not None:unified['read_attempt']['succeeded']=True
     # Render only verified results, not unsupported free-text claims from the model.
     label = (f"Showing {result['returned']} of {result['total_matching']} matching records "

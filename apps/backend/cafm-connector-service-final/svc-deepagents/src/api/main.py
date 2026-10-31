@@ -113,25 +113,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             checkpointer = None
             _checkpointer_pool = None
 
-    # Build the singleton orchestrator
-    app.state.orchestrator = DeepAgentOrchestrator(
-        openai_api_key=settings.openai_api_key,
-        model=settings.openai_model,
-        checkpointer=checkpointer,
-    )
-    log.info("svc-deepagents.orchestrator.ready")
+    # Install tracing before constructing models so LangChain wrappers see every call.
+    from ..observability.homework import setup_homework_tracing
 
-    yield
+    tracing_runtime = setup_homework_tracing()
+    try:
+        # Build the singleton orchestrator
+        app.state.orchestrator = DeepAgentOrchestrator(
+            openai_api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            checkpointer=checkpointer,
+        )
+        log.info("svc-deepagents.orchestrator.ready")
 
-    # Shutdown — close the checkpointer pool if open
-    if _checkpointer_pool is not None:
-        try:
-            await _checkpointer_pool.close()
-            log.info("svc-deepagents.hitl.pool.closed")
-        except Exception as exc:
-            log.warning("svc-deepagents.hitl.pool.close_error", error=str(exc))
-
-    log.info("svc-deepagents.shutdown")
+        yield
+    finally:
+        # Shutdown must flush traces even when another service cleanup fails.
+        if _checkpointer_pool is not None:
+            try:
+                await _checkpointer_pool.close()
+                log.info("svc-deepagents.hitl.pool.closed")
+            except Exception as exc:
+                log.warning("svc-deepagents.hitl.pool.close_error", error=str(exc))
+        tracing_runtime.shutdown()
+        log.info("svc-deepagents.shutdown")
 
 
 app = FastAPI(

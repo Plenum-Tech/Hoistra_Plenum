@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
+from ..observability.homework import invoke_traced_model
 
 ROOT = Path(__file__).resolve().parents[2] / 'skills'
 MAX_INPUT_BYTES = 150_000
@@ -58,8 +59,15 @@ async def generate_answer(model, answer_input):
                 'evidence_sha256': hashlib.sha256(serialized.encode()).hexdigest(),
                 'successful_responses': 0, 'token_usage': None}
     try:
-        response = await asyncio.wait_for(model.ainvoke(
-            [SystemMessage(content=prompt), HumanMessage(content=serialized)], max_tokens=2500), timeout=60)
+        response = await asyncio.wait_for(
+            invoke_traced_model(
+                model,
+                [SystemMessage(content=prompt), HumanMessage(content=serialized)],
+                prompt_hash,
+                max_tokens=2500,
+            ),
+            timeout=60,
+        )
         metadata['successful_responses'] = 1
         metadata['token_usage'] = getattr(response, 'usage_metadata', None)
         text = response.content

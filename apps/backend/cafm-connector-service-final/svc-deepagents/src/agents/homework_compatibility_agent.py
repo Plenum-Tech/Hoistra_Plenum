@@ -6,6 +6,11 @@ from .unified_prompt import augment
 from ..services.unified_hw1.compatibility import Compatibility,compare
 from ..services.compliance_hw1.store import runtime_store
 from ..services.compliance_hw1.sessions import conversation,append
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 async def ask(p,body,model,request_id):
     prompt,metadata=augment('Compare only explicitly supplied immutable source IDs using the typed compatibility tool. Missing metadata never establishes a join.',
         {'profile':'hw1-unified-support','bound_tools':['unified_source_compatibility'],'max_tool_calls':1},p)
@@ -13,12 +18,25 @@ async def ask(p,body,model,request_id):
         'parameters':Compatibility.model_json_schema()}}
     calls=[];selected=[];responses=0;usage=None
     try:
-        response=await asyncio.wait_for(model.bind_tools([tool]).ainvoke([SystemMessage(content=prompt),HumanMessage(content=body.message)]),60)
+        bound_model = model.bind_tools([tool])
+        response=await asyncio.wait_for(
+            invoke_traced_model(
+                bound_model,
+                [SystemMessage(content=prompt), HumanMessage(content=body.message)],
+                rendered_prompt_sha256(prompt, metadata),
+            ),
+            60,
+        )
         responses=1;usage=getattr(response,'usage_metadata',None);selected=[c['name'] for c in response.tool_calls]
         if len(response.tool_calls)==1:
             c=response.tool_calls[0]
-            if c['name']!='unified_source_compatibility':raise HTTPException(403,'Unbound model tool')
-            q=Compatibility.model_validate(c['args']);result=await compare(p,q)
+            result=await traced_tool_call(
+                p,
+                c['name'],
+                c['args'],
+                lambda: compare(p,Compatibility.model_validate(c['args'])),
+                allowed_tools={'unified_source_compatibility'},
+            )
             calls.append({'tool':c['name'],'input':c['args'],'result':result})
         outcome='answered' if calls else 'needs_clarification'
     except HTTPException as error:

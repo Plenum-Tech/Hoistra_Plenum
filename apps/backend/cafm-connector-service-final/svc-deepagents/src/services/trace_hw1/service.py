@@ -33,6 +33,8 @@ class TraceService:
                     and set(r["buildings"]) <= set(principal.building_ids)]
             rows.sort(key=lambda r: r["data"].get("generated_at", ""), reverse=True)
             result={"traces": [{"trace_id": r["id"], "conversation_id": r["data"].get("conversation_id"),
+                "otel_trace_id": r["data"].get("otel_trace_id"),
+                "scenario_id": r["data"].get("scenario_id"),
                 "request_id": r["data"].get("request_id"), "intent": r["data"].get("intent"),
                 "selected_route": r["data"].get("selected_route"),
                 "actual_tools": export_tools(principal, r["data"].get("actual_tools", [])), "outcome": r["data"].get("outcome"),
@@ -41,6 +43,7 @@ class TraceService:
                 "provider_execution":r['data'].get('provider_execution'),
                 "answer_generation":r["data"].get("answer_generation"),
                 "execution_outcome":r["data"].get("execution_outcome", r["data"].get("outcome")),
+                "prompt_version":r["data"].get("prompt_version"),
                 "policy_version": r["data"].get("policy_version"),
                 "generated_at": r["data"].get("generated_at")} for r in rows[:limit]],
                 "returned": min(len(rows), limit), "total_matching": len(rows),

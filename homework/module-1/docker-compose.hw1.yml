@@ -51,6 +51,14 @@ services:
       CLOUD_PROVIDER: openai
       HITL_ENABLED: "true"
       LANGSMITH_TRACING: "false"
+      HW2_TRACING_ENABLED: ${HW2_TRACING_ENABLED:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      # Inside Docker, localhost is this container rather than the VPS host.
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://host.docker.internal:3000}
+      TRACELOOP_TRACE_CONTENT: ${TRACELOOP_TRACE_CONTENT:-false}
+      OTEL_SERVICE_NAME: hoistra-homework-agent
+      OTEL_DEPLOYMENT_ENVIRONMENT: homework-2
       DEBUG: "false"
       ORCHESTRATOR_LLM_ROUTING: "0"
       COMPLIANCE_SKILL_PATH: "0"
@@ -64,6 +72,8 @@ services:
       MIGRATION_BASE_URL: http://127.0.0.1:8003
     volumes:
       - ./runtime/test-identities.json:/run/hoistra-hw1/test-identities.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:18008:8008"
     depends_on:

@@ -12,6 +12,12 @@ class AgentAsk(BaseModel):
     model_config = ConfigDict(extra="forbid")
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = Field(default=None, max_length=160)
+    scenario_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
 
 
 @router.post("/ask")

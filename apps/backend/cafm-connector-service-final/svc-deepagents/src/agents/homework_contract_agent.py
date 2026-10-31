@@ -15,6 +15,11 @@ from ..services.contract_hw1.contracts import (
 from ..services.contract_hw1.service import TOOL_ROLES
 from ..services.contract_hw1.fixtures import FIXTURE_VERSION
 from ..services.compliance_hw1.sessions import append, conversation
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 from .contract_prompt import allowed_tools, assemble
 
 DESCRIPTIONS = {
@@ -134,7 +139,14 @@ async def ask(principal, body, service, model, request_id=None):
         bound = model.bind_tools(tool_specs(principal))
         for _ in range(5):
             try:
-                response = await asyncio.wait_for(bound.ainvoke(messages), timeout=60)
+                response = await asyncio.wait_for(
+                    invoke_traced_model(
+                        bound,
+                        messages,
+                        rendered_prompt_sha256(prompt, metadata),
+                    ),
+                    timeout=60,
+                )
             except Exception:
                 provider_failed = True
                 control = "The model provider was unavailable; no additional operation was performed."
@@ -152,8 +164,15 @@ async def ask(principal, body, service, model, request_id=None):
                 break
             for item in response.tool_calls:
                 try:
-                    if item['name'] not in metadata['bound_tools']:raise HTTPException(403,'Unbound model tool')
-                    output = await service.execute(principal, item["name"], item["args"], request_id)
+                    output = await traced_tool_call(
+                        principal,
+                        item["name"],
+                        item["args"],
+                        lambda item=item: service.execute(
+                            principal, item["name"], item["args"], request_id
+                        ),
+                        allowed_tools=metadata['bound_tools'],
+                    )
                     calls.append({"tool": item["name"], "input": item["args"], "output": output})
                     payload = output
                 except HTTPException as exc:
@@ -168,7 +187,13 @@ async def ask(principal, body, service, model, request_id=None):
             if fallback:
                 name,args=fallback
                 try:
-                    output=await service.execute(principal,name,args,request_id)
+                    output=await traced_tool_call(
+                        principal,
+                        name,
+                        args,
+                        lambda: service.execute(principal,name,args,request_id),
+                        allowed_tools=metadata['bound_tools'],
+                    )
                     calls.append({"tool":name,"input":args,"output":output,
                                   "route_basis":"explicit scoped Contract Performance request"})
                 except HTTPException as exc:

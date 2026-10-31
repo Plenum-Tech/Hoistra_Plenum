@@ -6,6 +6,11 @@ from langchain_core.messages import HumanMessage,SystemMessage,ToolMessage
 from .communications_prompt import assemble
 from ..services.communications_hw1.contracts import MODELS
 from ..services.compliance_hw1.sessions import conversation,append
+from ..observability.homework import (
+    invoke_traced_model,
+    rendered_prompt_sha256,
+    traced_tool_call,
+)
 
 async def ask(principal,body,service,model,request_id):
     prompt,metadata=assemble(principal)
@@ -22,7 +27,15 @@ async def ask(principal,body,service,model,request_id):
         messages=[SystemMessage(content=prompt),HumanMessage(content=json.dumps({"prior_turns":session["data"]["messages"],"request":body.message}))]
         bound=model.bind_tools(tools)
         for _ in range(3):
-            try: response=await asyncio.wait_for(bound.ainvoke(messages),timeout=60)
+            try:
+                response=await asyncio.wait_for(
+                    invoke_traced_model(
+                        bound,
+                        messages,
+                        rendered_prompt_sha256(prompt, metadata),
+                    ),
+                    timeout=60,
+                )
             except Exception: failed=True;break
             responses+=1;provider_tools.extend(c["name"] for c in response.tool_calls)
             usage_events.append(getattr(response,"usage_metadata",None))
@@ -30,8 +43,16 @@ async def ask(principal,body,service,model,request_id):
             if not response.tool_calls or len(calls)+len(response.tool_calls)>2: break
             for call in response.tool_calls:
                 try:
-                    if call["name"] not in metadata["bound_tools"]:raise HTTPException(403,"Tool not permitted")
-                    output=await service.execute(principal,call["name"],call["args"],request_id)
+                    output=await traced_tool_call(
+                        principal,
+                        call["name"],
+                        call["args"],
+                        lambda call=call: service.execute(
+                            principal,call["name"],call["args"],request_id
+                        ),
+                        allowed_tools=metadata["bound_tools"],
+                        unbound_reason="Tool not permitted",
+                    )
                     calls.append({"tool":call["name"],"input":call["args"],"result":output["result"]})
                     payload=output
                 except HTTPException as error:
