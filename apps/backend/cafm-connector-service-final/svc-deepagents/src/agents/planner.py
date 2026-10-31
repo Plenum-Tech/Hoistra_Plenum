@@ -96,6 +96,14 @@ Rules:
   An engine step costs 5-10x a tool step and rewrites the data as prose the final answer rewrites again:
   use an engine ONLY when the step needs judgement across several reads (a compliance analysis, an
   energy investigation, a vendor performance review).
+- When the question spans more than one DOMAIN, give each domain a step on the engine that owns it -
+  the engine lines below say what each owns. One engine cannot answer another's part, and no tool
+  substitutes for the judgement the owning engine applies. "What is work order W's status, did it
+  meet its response SLA, and how has vendor V performed at this building" is two steps: the status
+  and the SLA are wo_engine's, vendor V's record at that building is contract_performance's. The
+  cost rule above is about a step that a tool could do, never a reason to leave a domain unanswered.
+- Name the building, period, vendor and work order in EVERY ask that needs them. An engine handed a
+  step that does not name them cannot see the question and can only ask back for them.
 - Keep the scope the question (and the working set) gives: never widen to other buildings or periods.
 - Never plan an action that changes data (create, approve, send, delete) - this is a read-only plan.
 - `answer_shape`: one line on how the final answer should be laid out.
