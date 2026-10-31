@@ -1,6 +1,6 @@
 # Homework 2 — Cartwheel-to-Hoistra Requirements Mapping
 
-**Status:** Approved and implemented in Step 3; awaiting live trace verification
+**Status:** Complete except for the explicitly deferred Homework 2 video
 
 **Date:** 2026-10-31
 
@@ -208,7 +208,7 @@ Five requests drawn from the committed `homework/module-1/hw1-session.jsonl`:
 | 2 | `HW1-WO-02-MODEL-SYNTHESIS-e47021fb` | General user / `hw1-general` | `reads`; `work_order_status` |
 | 3 | `HW1-WO-MULTI-READ-FAIL-01` | Portfolio manager / `hw1-portfolio` | Preserve and inspect the current multi-read failure/clarification |
 | 4 | `HW1-COMPLIANCE-MULTI-TOOL-FAIL-01` | Compliance officer / `hw1-compliance` | Preserve and inspect current communications-routing failure |
-| 5 | `HW1-ENERGY-01-MODEL-SYNTHESIS-a8af5244` | Property manager / `hw1-property` | A second energy run in a fresh conversation |
+| 5 | `HW1-ENERGY-01-FINAL-AUTHENTICATED` (fresh repeat) | Property manager / `hw1-property` | A second energy run in a fresh conversation |
 
 The fifth request is a repeatability sample because the committed Homework 1
 file contains four distinct authenticated request texts. The handout requires
@@ -242,9 +242,41 @@ Use case `HW1-ENERGY-01-FINAL-AUTHENTICATED` for the controlled comparison:
 The comparison validates version capture. It is not a quality comparison and
 must not alter business data.
 
+### Completion evidence — 2026-10-31
+
+- Implementation commit: `e228427` (`Add Homework 2 observability tracing`).
+- Two-trace evidence commit: `86f5e41` (`Add Homework 2 comparison traces`).
+- Final validation: 17 focused observability tests and the complete 582-test
+  service suite passed; the full run also completed 65 subtests.
+- Part E traces in the separate **Hoistra Homework 2** Langfuse project:
+  1. `a54650761cab9bdc83d9f8febfe8b15d`
+  2. `7eebffc96e7b4ddb430d7843ccc2e532`
+  3. `a84f3b591e6b8b761b03bfc43b0bcc47`
+  4. `9b2d2a8bfba6a65aadd44256d96e82fd`
+  5. `22fb242d31295711563155d6e92cc6ea`
+- The controlled Part F baseline was trace
+  `22fb242d31295711563155d6e92cc6ea`, prompt version
+  `00e5a2e64767c7f5135b89cc1e8f45da298bdbeb58bcd3fbc00f4fa2ae0e170d`.
+- The temporary changed-prompt trace was
+  `605b3ed7ece27d62f2477ec7c976cf96`, prompt version
+  `c09ecd324dfb5f5034bae597bff36da677790d2ae6c5d28e695f0f3101750559`.
+- The temporary wording-only edit was:
+
+  ```diff
+  -You write the final answer from one backend-provided evidence envelope.
+  +You write the final answer from a backend-provided evidence envelope.
+  ```
+
+- The original prompt, manifest checksum, repository state, and committed
+  service image were restored after the comparison.
+- Repository-root `hw2-traces.json` contains exactly the two selected comparison
+  traces and their required correlation fields.
+- The Homework 2 video is deliberately deferred until Homeworks 1–3 are ready
+  for recording together.
+
 ## 4. OpenTelemetry/Langfuse implementation locations
 
-Subject to approval, Step 3 will use these locations:
+Step 3 uses these implementation locations:
 
 - new shared setup/helpers under
   `apps/backend/cafm-connector-service-final/svc-deepagents/src/observability/`;
@@ -267,7 +299,7 @@ Langfuse service.
 
 ## 5. Deliverables
 
-Planned Homework 2 deliverables:
+Homework 2 deliverables:
 
 - observability setup/helper module(s);
 - the traced Hoistra endpoint and model/tool hooks;
