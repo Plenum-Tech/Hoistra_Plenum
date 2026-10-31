@@ -1,68 +1,174 @@
 ---
 name: compliance-tool-selection
 agent: compliance
-title: Which tool answers which question
-description: ALWAYS loaded. Fetch strategy and when a dedicated tool is the right call.
+title: Selecting evidence and aggregation tools
+description: Selects the narrowest authorized enabled operation for compliance records, counts, grouped results, taxonomy and supporting evidence. Does not enable tools or specialist execution.
 ---
-## Core strategy — FETCH EVERYTHING, THEN FILTER IN YOUR ANSWER
-Do NOT try to express the user's question as a tool filter. Pull the COMPLETE compliance
-table and apply the filter yourself when composing the reply. A tool-side status filter is
-how whole sections go missing (filter to Lapsed and you wrongly report "0 compliant"; filter
-to one level and the other level vanishes).
 
-Default for ANY question about certificates on record:
-  get_compliance_saved_space_summary()                  → KPI buckets
-  list_building_certificates(limit=200)                 → NO status filter
-  list_vendor_accreditations(limit=200)                 → NO status filter
-Every row comes back with all columns (status, days_to_expiry, expiry_date, certificate
-number, vendor/building name, trade, country_code, forensics_risk_score, forensics_verdict,
-draft, remedial_status …). Call the vendor list only for a vendor-only question and the
-building list only for a building-only question; call BOTH whenever the question covers both
-levels or does not say.
+# Compliance tool selection
 
-### STEP 1 — work out the filter from the question, then apply it
-Include ONLY rows that satisfy it; DROP every row that does not. Never list a row whose own
-status contradicts what was asked — that is the worst error you can make here.
-- Lapsed / expired / non-compliant = status Lapsed or Expired, OR days_to_expiry < 0.
-- Current / compliant / valid / in-date = NOT lapsed (days_to_expiry >= 0).
-- At-risk / expiring soon = not lapsed but days_to_expiry <= 90.
-- Blocked vendor = a vendor holding a lapsed or blocked accreditation.
-- Draft = the draft flag, never a status.
-Worked example — "certificates which are compliant but not lapsed" means include ONLY Current
-rows and exclude EVERY Lapsed/Expired row. A row showing "Status: Lapsed" must NOT appear in
-that answer. Filters combine (e.g. "US vendor certs expiring soon" = country_code US AND
-vendor scope AND 0 <= days_to_expiry <= 90).
-If nothing passes the filter for a section, say so plainly — never pad with rows that fail it.
+Target policy: specification v0.37.0.
 
-### STEP 2 — structure
-If the question covers both levels, output BOTH a Building section and a Vendor section, even
-if one is empty. Head each with its match count, e.g. "Building certificates — 3 current".
-Any count you state must equal the number of rows you actually listed.
+Follow the core/shared instructions, Compliance skill, tool-routing
+and vocabulary when those reviewed documents are explicitly loaded.
 
-### STEP 3 — fields
-Per row: certificate type name, building name (buildings) or vendor/company name (vendors),
-certificate number, status, expiry date, days remaining/overdue. If the user asks for any
-extra field, include it on EVERY row listed — risk assessment score = forensics_risk_score
-(0-100, higher = riskier) with forensics_verdict as its PASS/FAIL/Review label; country =
-country_code. If a requested field is null print "not recorded" rather than omitting it.
+This file describes selection discipline, not a tool registry.
+Only the tool definitions offered for the authenticated request
+establish what can be called.
 
-## When a dedicated tool IS the right answer
-1. **Pure counts** ("how many … where …": insurance risk flag, issuer, inspector, cert type,
-   remedial, substrings) → count_compliance_certificates ONCE; the `count` field is the answer.
-   Do not sum overlapping calls. Brand synonyms work for cert_type (Gas Safe → GAS_SAFE).
-2. **Vendors grouped by certificate count** ("vendors holding more than 2 certificates")
-   → list_vendors_by_certificate_count ONCE. "more than N" = comparison="gt"; "at least N" =
-   "gte"; "exactly N" = "eq". Do NOT use the flat vendor list for this aggregation.
-3. **Taxonomy** ("is Gas Safe building or vendor?", "which building certificates for Fire?")
-   → list_country_pack(scope=…, trade_category=…). Never infer from on-record certificates;
-   0 records ≠ "neither".
-4. Never say "no vendors blocked" when summary risk_dashboard.vendors_blocked > 0.
-5. **Never pass organization_id** — portfolio read tools do not accept it (same as /compliance).
+The current homework profile permits one guarded read-tool call.
+Compliance specialist execution and business actions remain disabled.
 
-## Totals and counts of required types
+## 1. Select by the requested result
 
-`get_pack_facts()` — whenever the answer will state how many types the pack requires, how many are held, or how many have nothing on record. It computes those from the pack and the register so you do not. One call; the `count` fields ARE the numbers.
+Identify the authorized subject, entity, filters, period and output.
+Choose an enabled operation whose declared arguments and result
+actually support that question.
 
-## Hand-off — you gather, the analyst writes
+| Requested result | Select |
+|---|---|
+| Permitted certificate-status summary | Scoped status-summary read |
+| Specific records or certificate details | Scoped filtered record read |
+| Number of matching certificates | Exact backend count |
+| Vendors grouped by held-certificate count | Backend grouped aggregation |
+| Country-pack types or applicability | Versioned taxonomy/applicability read |
+| Supporting document content | Authorized document/evidence read |
+| Correction, renewal, booking, block or unblock | Enabled approval-controlled action |
+| Requested communication | Preview/confirmation and simulated outbox |
 
-You are the data-gathering step. A separate analyst writes the answer the reader sees, from the tool results you fetched — not from your prose. So once the tools have returned, reply with at most three short sentences: which tools you called and with what filter, which rows or types are the ones the question is about, and anything odd you noticed in the data (a tie, an unlinked row, a type present by code but not by name). Do not write the answer, do not list every row, do not format headings or tables. A long draft here is discarded and only costs the reader time.
+Do not call a dashboard summary by default for a narrowly scoped
+record, vendor or count question.
+
+Do not invoke a mutation, scan, verification or report-generation
+operation merely because a read result is unavailable.
+
+## 2. Match the tool contract
+
+Check the offered tool's declared arguments and returned fields.
+Do not invent filters, status values, identifiers or tool names.
+
+The current certificate_status, certificate_documents and
+compliance_evidence tools have limited declared read contracts.
+Their availability does not imply support for arbitrary country,
+trade, date, vendor, authenticity or grouped-count filters.
+
+If no enabled operation supports the requested result, explain the
+limitation. Do not claim a broad read answered an exact filtered question.
+
+Identity, organization and assignments come from trusted backend
+context. Never introduce model/client overrides through tool arguments.
+
+## 3. Retrieve only the authorized matching population
+
+Use backend filtering and authorization before disclosure.
+Do not fetch the whole register and filter it in the answer.
+
+Preserve every requested compound condition. For example, vendor
+subject AND specified country AND requested expiry interval must
+remain combined when the adapter supports them.
+
+Use the reviewed vocabulary for expiry, risk, draft and block state.
+Clarify ambiguous meanings rather than silently choosing a population.
+
+A failed entity match must not fall back to unrestricted rows.
+Only authorized candidates may be used for clarification.
+
+A named vendor does not automatically authorize all its buildings
+or all information about that vendor.
+
+## 4. Exact counts and grouped results
+
+Use an enabled exact-count adapter with the requested conditions.
+Treat its result as authoritative only for its stated scope, filters
+and completeness.
+
+Rows and counts must use the same authorized population.
+Do not substitute an entire-building or portfolio total.
+
+For grouped vendor questions, use a verified grouped aggregation.
+"More than N" means greater than N; "at least N" means greater than
+or equal to N; "exactly N" means equal to N.
+
+Use only comparison values actually declared by the adapter.
+
+Distinguish certificate rows, unique vendors, buildings and pack types.
+Do not sum overlapping categories or infer unique-owner counts
+from a partial certificate page.
+
+If only a partial list is available, label its count as partial.
+Do not present a page count as the population total.
+
+## 5. Pagination and requested fields
+
+Respect bounded pagination and returned completeness metadata.
+State total matches separately from displayed records.
+
+A complete count may exceed displayed rows. Do not force them to
+match when pagination explains the difference.
+
+Return requested fields only where permitted and supported.
+For a returned null value, state that it is not recorded.
+For an unsupported field, explain that it was not available.
+
+Do not interpret missing values as zero, clear, valid or assessed.
+A retrieval failure is not a successful empty result.
+
+## 6. Taxonomy and coverage
+
+Use an enabled country-pack/applicability adapter for questions
+about certificate types and requirements.
+
+Do not infer the taxonomy from documents currently on file.
+Use returned pack/version totals rather than fixed counts.
+
+Where held/missing coverage is requested, use verified coverage facts
+with the stated denominator and applicability basis.
+
+Pack completeness is not overall compliance or the HOI Score.
+Fixed Homework document quantities are not legal requirements.
+
+## 7. Building, vendor and document evidence
+
+Select building or vendor evidence according to the question.
+Do not automatically retrieve both for every request.
+
+Distinguish accreditations a vendor holds from building certificates
+it issued. Retrieve both only when requested or needed to answer,
+and only through an enabled workflow within execution limits.
+
+Document evidence retains role and full-content scope checks.
+A source reference is not permission to download the original.
+
+General Users receive permitted summaries, not full-document access.
+Compliance Officers receive certificate-related evidence only.
+
+## 8. Actions and side effects
+
+A tool name containing "verify", "scan", "generate" or "share" does
+not establish that it is read-only. Follow its declared side effects.
+
+Do not run new assessments merely to list existing assessment results.
+Do not share evidence or send messages as a side effect of answering.
+
+Renewal does not automatically unblock a vendor.
+Business actions require the separately approved role, evidence,
+preview/confirmation and execution workflow.
+
+No compliance operation creates or operates an external work order.
+
+## 9. Answer handoff and execution evidence
+
+Use the answering path actually implemented by the deployment.
+
+The current homework profile formats verified read results in Python.
+It does not enable a separate Compliance analyst/reviewer pipeline.
+
+Do not claim that an analyst, reviewer or specialist ran merely
+because a legacy document describes that handoff.
+
+If an approved answering pipeline is later enabled, pass authorized
+tool results with their scope, filters, provenance and completeness.
+Do not pass unsupported prose as if it were retrieved evidence.
+
+Keep intent, selected operation and actual executed calls distinct.
+If no tool executed, the executed-tool list is empty.

@@ -1,0 +1,200 @@
+{
+  "manifest_version": "2.0.0",
+  "specification_version": "0.37.0",
+  "policy_version": "hw1-compliance-v1",
+  "profile": "hw1-compliance",
+  "max_tool_calls": 4,
+  "instructions": [
+    {
+      "source_path": "orchestrator/SKILL.md",
+      "source_sha256": "1d4bfb017bd2ca39e698e8952dc2a925997c746c80e8121bf7fa8dcd45c3b8d5",
+      "path": "profiles/compliance/00-SKILL.md",
+      "sha256": "a15020601081d88cc139ea343c4e210aa433a9c4d0b8326f56f876871f577432",
+      "kind": "shared"
+    },
+    {
+      "source_path": "policies/permissions.md",
+      "source_sha256": "21c7ac68d01318a9a103cdf14c78dd497cfb7d9f7fb14c6a5bb319fdc4d3104f",
+      "path": "profiles/compliance/01-permissions.md",
+      "sha256": "56f8283e498653ce6b35e7dc119c5639f12c2a9e7a645f71eaa1d62fdda70874",
+      "kind": "shared"
+    },
+    {
+      "source_path": "policies/actions-and-evidence.md",
+      "source_sha256": "d4f1824110dd976e4fca707103fdd43d2c0da7aaea75d45ee51dccfe86e82eab",
+      "path": "profiles/compliance/02-actions-and-evidence.md",
+      "sha256": "2c67e5580c62be5ea429f62c314eba07b546c0de2bace5131418427ab28c5a0a",
+      "kind": "shared"
+    },
+    {
+      "source_path": "policies/responses-and-audit.md",
+      "source_sha256": "7966c09f8c54712f55557601e149b0549cb8bb35d07c0c6e71fd95d331eb0f23",
+      "path": "profiles/compliance/03-responses-and-audit.md",
+      "sha256": "7966c09f8c54712f55557601e149b0549cb8bb35d07c0c6e71fd95d331eb0f23",
+      "kind": "shared"
+    },
+    {
+      "source_path": "query-builder/SKILL.md",
+      "source_sha256": "9106b7bd4743d81bec5027eb18112a2ffb2c73a127f4441883ce2cd828604daa",
+      "path": "profiles/compliance/04-SKILL.md",
+      "sha256": "74349b61091eaade9a74949a7511d4b49628daa7e9c0c1d589b1c337f5ccdf1f",
+      "kind": "shared"
+    },
+    {
+      "source_path": "compliance/SKILL.md",
+      "source_sha256": "648117720930a5afc9b8e05434a6feb9c193bd7a7974907e4e4004c465c119a2",
+      "path": "profiles/compliance/05-SKILL.md",
+      "sha256": "648117720930a5afc9b8e05434a6feb9c193bd7a7974907e4e4004c465c119a2",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/vocabulary.md",
+      "source_sha256": "ab853743ec6f234301bbd146add541a6e37cea156c5dd41697587cc1181ef59d",
+      "path": "profiles/compliance/06-vocabulary.md",
+      "sha256": "ab853743ec6f234301bbd146add541a6e37cea156c5dd41697587cc1181ef59d",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/tool-routing.md",
+      "source_sha256": "1ed0f5cb412a68b4607bdfbc9bb89828db20d8d1930ba12d8c734cc5773eb8f6",
+      "path": "profiles/compliance/07-tool-routing.md",
+      "sha256": "44c1cbcb38054acc7f60d37e6bb3d95ae90d85fd26740f6acc3c5ec31ddaa1ab",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/tool-selection.md",
+      "source_sha256": "c640449921c2d0e1cec2a26db2daa2c9522e815ce2077e4807dfd077405aadff",
+      "path": "profiles/compliance/08-tool-selection.md",
+      "sha256": "5ef8f1b2ef0c45d94fb2afd0c2e822408bd940ad03166f93c727fa5578917381",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/renewals.md",
+      "source_sha256": "a52081c8d0d40c1c06fb3d234964956ca2e17815b43c0089be0867b817f38888",
+      "path": "profiles/compliance/09-renewals.md",
+      "sha256": "f9c8e2467c44f0492d1a878d4b7c0c95545ddc92390e80c2dac5d43701b500df",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/recipes.md",
+      "source_sha256": "104cb214813101ba77b4c6ebef0e92698243e7cbb8b791bdfee4064b3d365221",
+      "path": "profiles/compliance/10-recipes.md",
+      "sha256": "cd6af143741430532c66e4690717918c36fa197951483565f2310e7364919a1e",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/cross-domain.md",
+      "source_sha256": "c0f4cc0698395b18ef304456ebf01471256f0309ba672af3f9c1de701bedd1d4",
+      "path": "profiles/compliance/11-cross-domain.md",
+      "sha256": "479ea0832267dff12d11cc0ca558ed65c65e7a92a0890e7d53964efd710ca18e",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/tables.md",
+      "source_sha256": "daf084c9b75d9513dc5a0219fa8bb47841d4fb5012b27b22245fc740a72cb43f",
+      "path": "profiles/compliance/12-tables.md",
+      "sha256": "daf084c9b75d9513dc5a0219fa8bb47841d4fb5012b27b22245fc740a72cb43f",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/taxonomy.md",
+      "source_sha256": "7659cc591dbbade9edc732926591402cf4bb51875c250c40bf476901a9f15d47",
+      "path": "profiles/compliance/13-taxonomy.md",
+      "sha256": "7659cc591dbbade9edc732926591402cf4bb51875c250c40bf476901a9f15d47",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/domain_compliance_knowledge.md",
+      "source_sha256": "56633e292044f277cab3fda372985dd0e0b7e117aff4cd9351e17b94c4001b13",
+      "path": "profiles/compliance/14-domain_compliance_knowledge.md",
+      "sha256": "56633e292044f277cab3fda372985dd0e0b7e117aff4cd9351e17b94c4001b13",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/answering.md",
+      "source_sha256": "f9203d3ec0b2fdc8dcd576530ac0ffe20a124284529bb476239013d95c80fc26",
+      "path": "profiles/compliance/15-answering.md",
+      "sha256": "c264381a7ced49739c320e46c1e0b395ecd98f1bdc3d54c8d53db7f7c69971de",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/review.md",
+      "source_sha256": "90318c5451f1fcb65f57f2425f66c95a2f611ce03479a3bb6a7ae0eb3bd001d3",
+      "path": "profiles/compliance/16-review.md",
+      "sha256": "90318c5451f1fcb65f57f2425f66c95a2f611ce03479a3bb6a7ae0eb3bd001d3",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/scope-eval.md",
+      "source_sha256": "21498f3e8622b54d27d4e7718a4f01e3f7619a660dda367a562ce09deac65c62",
+      "path": "profiles/compliance/17-scope-eval.md",
+      "sha256": "21498f3e8622b54d27d4e7718a4f01e3f7619a660dda367a562ce09deac65c62",
+      "kind": "domain"
+    },
+    {
+      "source_path": "compliance/never.md",
+      "source_sha256": "348c712f8acda3f1c12a0d611ae7fac59d88455893510193684d36d0058ac348",
+      "path": "profiles/compliance/18-never.md",
+      "sha256": "7836b8037b2e0b119794e67f06258760aa4dbe0b89029573e1cd1080e249315f",
+      "kind": "domain"
+    }
+  ],
+  "role_tools": {
+    "compliance_officer": [
+      "compliance_count_certificates",
+      "compliance_get_coverage",
+      "compliance_get_evidence",
+      "compliance_get_findings",
+      "compliance_get_proposal",
+      "compliance_get_taxonomy",
+      "compliance_get_vendor_eligibility",
+      "compliance_group_vendors",
+      "compliance_list_certificates",
+      "compliance_prepare_proposal",
+      "compliance_resolve_entity",
+      "homework_get_outbox"
+    ],
+    "general_user": [
+      "compliance_count_certificates",
+      "compliance_get_coverage",
+      "compliance_get_proposal",
+      "compliance_get_taxonomy",
+      "compliance_get_vendor_eligibility",
+      "compliance_group_vendors",
+      "compliance_list_certificates",
+      "compliance_prepare_proposal",
+      "compliance_resolve_entity",
+      "homework_get_outbox"
+    ],
+    "portfolio_manager": [
+      "compliance_count_certificates",
+      "compliance_get_coverage",
+      "compliance_get_evidence",
+      "compliance_get_findings",
+      "compliance_get_proposal",
+      "compliance_get_taxonomy",
+      "compliance_get_vendor_eligibility",
+      "compliance_group_vendors",
+      "compliance_list_certificates",
+      "compliance_prepare_proposal",
+      "compliance_resolve_entity",
+      "homework_get_hoi",
+      "homework_get_outbox"
+    ],
+    "property_manager": [
+      "compliance_count_certificates",
+      "compliance_get_coverage",
+      "compliance_get_evidence",
+      "compliance_get_findings",
+      "compliance_get_proposal",
+      "compliance_get_taxonomy",
+      "compliance_get_vendor_eligibility",
+      "compliance_group_vendors",
+      "compliance_list_certificates",
+      "compliance_prepare_proposal",
+      "compliance_resolve_entity",
+      "homework_get_hoi",
+      "homework_get_outbox"
+    ]
+  }
+}

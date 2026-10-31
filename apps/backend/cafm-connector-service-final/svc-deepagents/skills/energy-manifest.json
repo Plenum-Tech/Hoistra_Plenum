@@ -1,0 +1,74 @@
+{
+  "manifest_version": "1.0.0",
+  "specification_version": "0.37.0",
+  "policy_version": "hw1-energy-v1",
+  "profile": "hw1-energy",
+  "instructions": [
+    {
+      "source_path": "orchestrator/SKILL.md",
+      "source_sha256": "1d4bfb017bd2ca39e698e8952dc2a925997c746c80e8121bf7fa8dcd45c3b8d5",
+      "path": "profiles/energy/00-SKILL.md",
+      "sha256": "1d4bfb017bd2ca39e698e8952dc2a925997c746c80e8121bf7fa8dcd45c3b8d5"
+    },
+    {
+      "source_path": "policies/permissions.md",
+      "source_sha256": "21c7ac68d01318a9a103cdf14c78dd497cfb7d9f7fb14c6a5bb319fdc4d3104f",
+      "path": "profiles/energy/01-permissions.md",
+      "sha256": "21c7ac68d01318a9a103cdf14c78dd497cfb7d9f7fb14c6a5bb319fdc4d3104f"
+    },
+    {
+      "source_path": "policies/actions-and-evidence.md",
+      "source_sha256": "d4f1824110dd976e4fca707103fdd43d2c0da7aaea75d45ee51dccfe86e82eab",
+      "path": "profiles/energy/02-actions-and-evidence.md",
+      "sha256": "d4f1824110dd976e4fca707103fdd43d2c0da7aaea75d45ee51dccfe86e82eab"
+    },
+    {
+      "source_path": "policies/responses-and-audit.md",
+      "source_sha256": "7966c09f8c54712f55557601e149b0549cb8bb35d07c0c6e71fd95d331eb0f23",
+      "path": "profiles/energy/03-responses-and-audit.md",
+      "sha256": "7966c09f8c54712f55557601e149b0549cb8bb35d07c0c6e71fd95d331eb0f23"
+    },
+    {
+      "source_path": "query-builder/domain-enabled.md",
+      "source_sha256": "cdafffc2e12492b942741da3de2315876830b35b3463a1679b428bbfa0d70218",
+      "path": "profiles/energy/04-domain-enabled.md",
+      "sha256": "cdafffc2e12492b942741da3de2315876830b35b3463a1679b428bbfa0d70218"
+    },
+    {
+      "source_path": "energy-intelligence/hw1.md",
+      "source_sha256": "31012bcf7e85d80f8319ab4416a969b0ffc90d89e2698aae5f684c2b8de75729",
+      "path": "profiles/energy/05-hw1.md",
+      "sha256": "31012bcf7e85d80f8319ab4416a969b0ffc90d89e2698aae5f684c2b8de75729"
+    }
+  ],
+  "role_tools": {
+    "general_user": [],
+    "property_manager": [
+      "energy_anomaly_act",
+      "energy_anomaly_list",
+      "energy_anomaly_scan",
+      "energy_benchmarks",
+      "energy_eui",
+      "energy_gap_retry",
+      "energy_gap_scan",
+      "energy_get_monthly_report",
+      "energy_monthly_report",
+      "energy_readings",
+      "energy_remediation_queue"
+    ],
+    "portfolio_manager": [
+      "energy_anomaly_act",
+      "energy_anomaly_list",
+      "energy_anomaly_scan",
+      "energy_benchmarks",
+      "energy_eui",
+      "energy_gap_retry",
+      "energy_gap_scan",
+      "energy_get_monthly_report",
+      "energy_monthly_report",
+      "energy_readings",
+      "energy_remediation_queue"
+    ],
+    "compliance_officer": []
+  }
+}

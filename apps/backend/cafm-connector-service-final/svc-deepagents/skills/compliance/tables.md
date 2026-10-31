@@ -1,49 +1,79 @@
 ---
 name: compliance-tables
 agent: compliance
-title: The tables underneath the tools
-description: ALWAYS loaded. Column names, the building key, and what coverage measures.
----
-## 1. Tables underneath your tools
-
-| Table | Grain | Key columns |
-|-------|-------|-------------|
-| `compliance_certificates` | one certificate or accreditation | `id`, `certificate_type_code`, `certificate_number`, `cert_scope` (Building \| Vendor), `asset_id`, `site_id`, `site_ref`, `building_name`, `building_reference`, `vendor_id`, `issuer`, `issue_date`, `expiry_date`, `next_due_date`, `status`, `days_to_expiry`, `result`, `defects_found`, `remedial_actions`, `remedial_status`, `document_id`, `country_code`, `authenticity_warning`, `insurance_risk_flag` |
-| `country_certificate_packs` | the statutory taxonomy | `certificate_type_code`, `certificate_type_name`, `certificate_scope`, `trade_category`, `country_code`, `frequency_months`, `regulation_reference`, `issuing_body`, `required_contractor_accreditation` |
-| `building_country_packs` | which pack a building runs | `site_id`, `country_code`, `pack_version` |
-| `compliance_verification_sources` | the register to verify against | `certificate_type_code`, `register`, `source_url`, `channel` |
-| `resource_skills` | an operative's personal ticket | `vendor_id`, `operative_name`, `skill_type_code`, `certificate_number`, `expiry_date`, `days_to_expiry` |
-| `approvals_queue_items` | the PM's queue | `source_feature`, `item_type`, `severity`, `status`, `summary`, `payload`, `email_draft` |
-| `compliance_scan_runs` | one nightly-equivalent scan | `scope`, `building_scanned`, `vendor_scanned`, `alerts_created`, `blocks_set` |
-| `compliance_risk_snapshots` | risk over time | `snapshot_date`, `vendors_blocked`, `high_risk_lt_30`, `medium_risk_lt_90` |
-| `vendors` (core) | the vendor itself | `id`, `vendor_name`, `block_state`, `block_reason`, `blocked_accreditation_type` |
-
+title: Validated compliance data contracts
+description: Documents source categories and identity/provenance boundaries; table names are backend implementation references, not schema or permission grants.
 ---
 
-## 2. The building key — read this before grouping by site
+# Compliance data contracts
 
-A building certificate can identify its building **three different ways**, and which one is
-populated depends on how it was ingested:
+Target policy: specification v0.37.0.
 
-1. `site_id` — a UUID, set when the certificate resolved to a UUID-keyed site row;
-2. `site_ref` — a varchar, set when the site row is keyed on `sites.site_id varchar(50)`
-   (which is what this deployment actually uses);
-3. `building_name` / `building_reference` only — the building is named on the document but
-   matches no site row at all.
+Follow the core/shared policies and reviewed Compliance instructions.
+This file is not a tool registry or live-schema dump. A source table in
+legacy code is not evidence that it is connected to Homework 1.
+Backend adapters own schema/key validation and data-access predicates.
 
-So bucket by **`site_id` → else `site_ref` → else normalised `building_name` → else portfolio**.
-A certificate that names a building is still that building's certificate even when nothing in
-`sites` matches it. Collapsing all three cases into one "portfolio" bucket is the bug this
-rule exists to prevent.
+## 1. Source categories and adapter responsibilities
 
-`get_compliance_coverage` already does this. Prefer it over hand-rolling the grouping.
+| Source category | Legacy implementation references | Required adapter contract |
+|---|---|---|
+| Certificates and accreditations | compliance_certificates | Verified subject/holder, authorized building/vendor relationship, accepted version, date anchor, status and source |
+| Country packs and assignments | country_certificate_packs; building_country_packs | Pack/version, subject, returned counts and applicability basis |
+| Issuer/register checks | compliance_verification_sources | Check source, scope, assessment time and actual outcome; distinguish unassessed/unavailable |
+| Vendor eligibility | vendors and retained blocking evidence | Approved state, relevant reasons, organization and decision provenance; no state inferred from dates alone |
+| Proposals and decisions | approvals_queue_items | Action-specific eligibility, exact approved proposal, before/after values, actor and atomic resolution |
+| Detection history | compliance_scan_runs; compliance_risk_snapshots | Scope/time/version and actual findings/events; scan existence does not prove authorized state changes |
+| Supporting documents | Authorized document/version sources | Full-content scope or verified excerpt, immutable originals and source/page references |
+| Operative credentials | resource_skills where supported | Only permitted certificate evidence; unrelated personnel/account details excluded |
 
-## 3. What `coverage` actually measures — say so
+These are implementation references to validate, not guaranteed tables,
+column names, UUID types or offered tool arguments. Do not expose schema,
+raw rows or arbitrary SQL because this table names a source.
 
-Coverage compares certificates on file against **every Building-scope type in the country
-pack**. Applicability per building is not recorded, so it measures **pack completeness, not
-compliance** — no building is expected to hold all 27 types. Every coverage row carries
-`required_basis: "country_pack"` and a note saying this. When you quote a coverage percentage,
-quote it as *"N of 27 pack types on file"*, never as a compliance score.
+## 2. Building and vendor identity
 
----
+Legacy data may use site_id, site_ref, building_reference or building_name.
+A backend-validated relationship must establish the authorized entity.
+Do not use a normalized name as an access grant or invent a type conversion.
+
+Preserve source identifiers and mapping provenance. Ambiguous, absent or
+unverified links require clarification or withholding; do not broaden an
+unresolved record into a portfolio/organization bucket to disclose it.
+
+Managers require explicit assigned-building vendor links for vendor actions.
+An Officer's organization-wide access remains compliance-function-only.
+Shared documents/vendors do not automatically disclose every linked building.
+
+## 3. Field and query semantics
+
+The adapter declares available fields, filter meanings and supported
+operations. Reject unknown arguments instead of accepting arbitrary
+organization, SQL, table or runtime-context overrides.
+
+Keep expiry/date anchor, risk assessment, approved block state, draft/
+acceptance, forensic findings and source version as distinct concepts.
+Unsupported values must not become invented defaults or status enums.
+
+Apply role, organization, building/entity and information scope before
+retrieving records, candidate names, counts or document contents.
+Use identical filters/population for count/page queries and disclose
+completeness. Unknown schema is unavailable, not empty successful data.
+
+## 4. Provenance and versions
+
+Retain original evidence, prior versions and approved current representation.
+A correction changes authorized derived records, not the original source.
+Projection, metadata, links and download endpoints require the same checks.
+Do not expose standalone vector/source deletion or silently remove history.
+
+## 5. Coverage interpretation
+
+Return the denominator basis and pack/version for coverage. A country-pack
+completeness denominator is not automatically the building's applicable
+legal obligations. Missing applicability is unknown, not permission to
+claim compliance or exemption.
+
+Do not substitute coverage for the ten-group HOI Score or give HOI to
+General Users/Compliance Officers. Fixed test fixture counts are separate
+from both schema discovery and statutory applicability.
