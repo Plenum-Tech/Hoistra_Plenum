@@ -7867,6 +7867,16 @@ class DeepAgentOrchestrator:
                            "reason": "the previous answer asked for this; continuing that conversation"}
             else:
                 routing = await select_agent(user_message, step["router_context"])
+            # The question belongs to a module this space does not have. Nothing runs and no
+            # register is read: the point of a space is that its data is its own (spaces.py).
+            _outside = (routing or {}).get("out_of_module")
+            if _outside:
+                trace.on_plan(planner.one_step_plan("clarify", _outside, source="router"), source="router")
+                return attach_route_to_result(
+                    {"session_id": session_id, "answer": _outside, "tool_calls": [], "success": True,
+                     "error": None, "interrupted": False, "interrupt_payload": None},
+                    session_id, intent=ROUTE_GENERAL, domain="orchestrator",
+                )
             ask_how, ask_what = self._ask_back(step["kind"], routing, user_message)
             if ask_how == "cards":
                 return self._domain_choice(session_id, user_message, session_state, ask_what)
@@ -8380,6 +8390,21 @@ class DeepAgentOrchestrator:
                 routing = {"clarify": True, "reason": None}
             else:
                 routing = await select_agent(user_message, step["router_context"])
+            # The question belongs to a module this space does not have. Nothing runs and no
+            # register is read: the point of a space is that its data is its own (spaces.py).
+            _outside = (routing or {}).get("out_of_module")
+            if _outside:
+                trace.on_plan(planner.one_step_plan("clarify", _outside, source="router"), source="router")
+                yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
+                       "text": "Read the question -> it needs "
+                               + str((routing or {}).get("wanted") or "another module")
+                               + ", which this space does not have. Nothing was read."}
+                result = {"session_id": sid, "answer": _outside, "tool_calls": [], "success": True,
+                          "error": None, "interrupted": False, "interrupt_payload": None}
+                attach_route_to_result(result, sid, intent=ROUTE_GENERAL, domain="orchestrator")
+                await self._close_streamed_turn(sid, result, _stream_t0)
+                yield workflow_stream_completion_payload(sid, answer=_outside, tool_calls=[])
+                return
             ask_how, ask_what = self._ask_back(step["kind"], routing, user_message)
             if ask_how == "text":
                 # The question names its area but reads more than one way: the router's own

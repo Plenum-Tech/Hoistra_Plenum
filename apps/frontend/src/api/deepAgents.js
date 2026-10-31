@@ -9,7 +9,7 @@
 //
 // Also the activity log (plenum_cafm.agent_activity_log): the UI's own actions are appended
 // as turns so they sit in the same trail as the server-side stages when troubleshooting.
-import { BASES, apiFetch, accessToken, getActingOrg } from './client.js';
+import { BASES, apiFetch, accessToken, getActingOrg, getActiveSpace } from './client.js';
 
 const B = BASES.deepAgents;
 
@@ -51,6 +51,8 @@ export function newTurn() { return 'ui-turn-' + Date.now().toString(36) + Math.r
 // included, that is not their real one is a 403. null (nobody viewing as anyone) is the
 // only value every ordinary caller may ever send, so this must stay null for them.
 function orgOverride() { const o = getActingOrg(); return o ? { organization_id: o } : {}; }
+// The role space the question is asked in, so the backend answers from that module only.
+function spaceField() { const s = getActiveSpace(); return s ? { space: s } : {}; }
 
 export const deepAgentsApi = {
   health: () => apiFetch(B, '/health', { timeoutMs: 6000 }),
@@ -115,7 +117,7 @@ export const deepAgentsApi = {
   run: (message, sessionId, context) =>
     apiFetch(B, '/api/workflow/run', {
       method: 'POST',
-      body: Object.assign({ message: message, session_id: sessionId || null, context: context || null }, orgOverride()),
+      body: Object.assign({ message: message, session_id: sessionId || null, context: context || null }, orgOverride(), spaceField()),
       timeoutMs: T_ASK
     }),
 
@@ -135,7 +137,7 @@ export const deepAgentsApi = {
   runStateful: (message, sessionId, context, signal) =>
     apiFetch(B, '/api/workflow/run-stateful', {
       method: 'POST',
-      body: Object.assign({ message: message, session_id: sessionId || null, context: context || null }, orgOverride()),
+      body: Object.assign({ message: message, session_id: sessionId || null, context: context || null }, orgOverride(), spaceField()),
       timeoutMs: T_ASK,
       signal: signal
     }),

@@ -1,6 +1,6 @@
 // The controller: one state object, methods split by domain and mixed in.
 import { Controller } from './Controller.js';
-import { setActingOrg } from '../api/client.js';
+import { setActingOrg, setActiveSpace } from '../api/client.js';
 import { coreMethods } from './core.js';
 import { complianceMethods } from './compliance.js';
 import { vendorsMethods } from './vendors.js';
@@ -367,6 +367,10 @@ export class HoistraLogic extends Controller {
   setState(patch, cb) {
     const prev = this.state;
     super.setState(patch, cb);
+    // The backend answers from the active space's modules only, and can only do that if it is
+    // told which space this is. Set here rather than at each switch so a restored session, a
+    // sign-in and a company change all carry it too (api/client.js, agents/spaces.py).
+    if (prev.instance !== this.state.instance) setActiveSpace(this.state.instance);
     if (prev.ccChat !== this.state.ccChat) this.sessionSync();
     // The rail's answer has its run (Correct, every step) whichever way it got on screen.
     if (prev.ccChat !== this.state.ccChat || prev.ccTraceIdx !== this.state.ccTraceIdx

@@ -120,6 +120,7 @@ async def select_agent(question: str, context_note: str | None = None,
     ``source`` is ``"llm"``, ``"keyword"`` (fell back) or ``"disabled"``. ``agent`` is None
     when nothing should short-circuit and the orchestrator loop should run as it does today.
     """
+    space = space if space is not None else spaces.current()
     if is_support_session(context_note):
         # The orchestrator loop answers: it has the guide in the context and every tool for a
         # question about the user's own records. Never one engine, never asked back.

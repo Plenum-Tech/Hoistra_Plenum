@@ -52,6 +52,15 @@ export function setActingOrg(id) { actingOrgId = id ? String(id) : null; orgEpoc
 // so there is nothing to report and nothing to retry.
 export function isStaleScope(e) { return !!(e && e.staleScope); }
 export function getActingOrg() { return actingOrgId; }
+
+// The role space the user is working in (logic/instances.js: ops, comp, assets, full). A space
+// answers only from its own modules, and the backend cannot know which one you are looking at
+// unless it is told - the instance was declared in the browser and never left it, which is why
+// compliance certificates could come back inside Ops Brain. Null means no space was declared,
+// which the backend reads as no restriction.
+let activeSpace = null;
+export function setActiveSpace(key) { activeSpace = key ? String(key) : null; }
+export function getActiveSpace() { return activeSpace; }
 export function currentOrgId() { return actingOrgId || ORG_ID || ''; }
 
 let hooks = { getToken: () => null, refresh: null, onTerminal: null };

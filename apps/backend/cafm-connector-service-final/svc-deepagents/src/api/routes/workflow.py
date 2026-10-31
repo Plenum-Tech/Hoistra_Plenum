@@ -26,6 +26,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
+from ...agents import spaces
 from ...config import settings
 from ...agents.single_door_flow import (
     ensure_upload_dir,
@@ -69,6 +70,10 @@ class WorkflowRequest(BaseModel):
     # no-op, naming a different one as anyone but a superadmin is a 403, and a normal caller
     # never sends this at all. Default None reproduces today's behaviour exactly.
     organization_id: str | None = Field(None, description="Superadmin-only: view as this company")
+    # The role space the question is asked in (logic/instances.js: ops, comp, assets, full).
+    # A space answers only from its own modules (agents/spaces.py); absent means no restriction,
+    # which is what every caller that has not been updated sends.
+    space: str | None = Field(None, max_length=40, description="Active role space key")
 
 
 class ToolCallRecord(BaseModel):
@@ -359,6 +364,10 @@ async def run_workflow(
     caller_principal.set(principal)
     _acting = _resolve_acting_org(body.organization_id, principal)
     caller_organization_id.set(_acting)
+    # The role space this question is asked in. A space answers only from its own
+    # modules (agents/spaces.py); None is every module, which is what a caller that does
+    # not send one gets.
+    spaces.active_space.set(getattr(body, "space", None))
     activity_log.set_current_session(body.session_id, body.session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run", message_len=len(body.message), session_id=body.session_id,
@@ -403,6 +412,10 @@ async def run_stateful_workflow(
     caller_principal.set(principal)
     _acting = _resolve_acting_org(body.organization_id, principal)
     caller_organization_id.set(_acting)
+    # The role space this question is asked in. A space answers only from its own
+    # modules (agents/spaces.py); None is every module, which is what a caller that does
+    # not send one gets.
+    spaces.active_space.set(getattr(body, "space", None))
     if not sid:
         raise HTTPException(
             status_code=400,
@@ -1064,6 +1077,10 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
         try:
             _acting = _resolve_acting_org(body.get("organization_id"), principal)
             caller_organization_id.set(_acting)
+            # The role space this question is asked in. A space answers only from its own
+            # modules (agents/spaces.py); None is every module, which is what a caller that
+            # does not send one gets. The socket carries a plain dict, not the model.
+            spaces.active_space.set(body.get("space"))
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
             await websocket.send_text(json.dumps({

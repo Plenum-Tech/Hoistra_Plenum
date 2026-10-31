@@ -25,6 +25,7 @@
 //
 // The pure shapers here are tested in test/instances.test.mjs; the methods are mixed into
 // HoistraLogic.prototype and `this` is the controller.
+import { setActiveSpace } from '../api/client.js';
 import { money } from './homeLive.js';
 import { t } from './constants.js';
 
@@ -200,6 +201,9 @@ export const instancesMethods = {
   instPick(key) {
     if (!instanceOf(key)) return;
     if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
+    // The backend answers from this space's modules only, and can only do that if it is
+    // told which space you are in (api/client.js, agents/spaces.py).
+    setActiveSpace(key);
     this.setState({ instance: key, view: 'home', navOpen: true, detail: null, queueOpen: false, orchOpen: false, acctOpen: false, query: '' });
   },
 

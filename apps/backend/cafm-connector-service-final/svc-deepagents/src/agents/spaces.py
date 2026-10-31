@@ -18,6 +18,22 @@ piece of work and is noted rather than half-done here.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+
+#: The space the current request is being answered in, set once where the request arrives so
+#: the router does not have to be threaded through every call between here and there. None
+#: means no space was declared, which allows everything.
+active_space: ContextVar[str | None] = ContextVar("hoistra_active_space", default=None)
+
+
+def current() -> str | None:
+    """The space this request is in, or None."""
+    try:
+        return active_space.get()
+    except LookupError:          # pragma: no cover - a context without the var set
+        return None
+
+
 #: The report each domain engine serves, as logic/instances.js names reports.
 _ENGINE_REPORT = {
     "wo_engine": "ops",
