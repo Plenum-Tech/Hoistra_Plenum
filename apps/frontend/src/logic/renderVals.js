@@ -298,8 +298,12 @@ export const renderValsMethods = {
     // A task opened from the Sessions list fills the content area (sessions.js openSession) —
     // only for that task on that page: an action that raises another task, a move to another
     // page, or closing the dock puts it back beside the page.
-    const orchFull = !!(s.orchOpen && s.orchFull && s.orchTask && s.orchFullTask === s.orchTask.id
-      && s.orchFullView === s.view);
+    // Full width two ways. A task opened from the Sessions list fills the content area by
+    // itself, for that task on that page. And the reader can ask for it at any time, which is
+    // what the expand control sets: a long answer, a wide table or a trace to read is worth the
+    // whole screen whether or not it came from a session (1 Nov 2026).
+    const orchFull = !!(s.orchOpen && (s.orchFullManual
+      || (s.orchFull && s.orchTask && s.orchFullTask === s.orchTask.id && s.orchFullView === s.view)));
     const navW = s.navOpen ? 248 : 52;
 
     const detail = s.detail;
@@ -2064,6 +2068,9 @@ export const renderValsMethods = {
       // default (orchBaseW) so a drag can never make the dock narrower than designed, and
       // the ceiling is ORCH_MAX_W so it can never swallow the register beside it.
       orchResizeShow: s.orchOpen && !orchFull ? "block" : "none",
+      orchFullToggle: () => this.toggleOrchFull(),
+      orchFullIcon: orchFull ? "ph-arrows-in-simple" : "ph-arrows-out-simple",
+      orchFullTitle: orchFull ? "Back to the side panel" : "Expand to full screen",
       orchAtMax: orchW >= ORCH_MAX_W,
       // The handle is fixed, not absolute: the dock scrolls its own content, and an
       // absolute handle would scroll away with it.

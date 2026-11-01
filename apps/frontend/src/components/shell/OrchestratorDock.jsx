@@ -53,7 +53,11 @@ export default function OrchestratorDock({ vals }) {
               {"Ask. Run. Anything."}
             </span>
           </div>
-          <i className="ph ph-x hv6" onClick={vals.closeOrch} style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <i className={"ph " + vals.orchFullIcon + " hv6"} onClick={vals.orchFullToggle} title={vals.orchFullTitle}
+               style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+            <i className="ph ph-x hv6" onClick={vals.closeOrch} style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+          </div>
         </div>
         <div style={{ fontSize: "15px", lineHeight: "1.35", marginTop: "16px" }}>
           {vals.orchTitle}

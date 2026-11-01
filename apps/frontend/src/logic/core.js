@@ -319,7 +319,11 @@ export const coreMethods = {
   // closing the dock mid-flow is the only place that stops it before its own completion
   // tick fires a stale result + a flash() toast at whoever is looking at the app by then.
   // (_scanTick went with the condition-scan flow, which read a fixture — see screens/Assets.jsx.)
-  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, orchFull: false, flow: null, inv: null, ingExpect: "" }); },
+  // Expand the dock to the content area, or put it back. Closing it forgets the choice, so a
+  // dock reopened later starts beside the page as it always has.
+  toggleOrchFull() { this.setState({ orchFullManual: !this.state.orchFullManual }); },
+
+  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, orchFull: false, orchFullManual: false, flow: null, inv: null, ingExpect: "" }); },
 
   // Opens the orchestrator AND arms a flow: booking draft, contractor swap, or an email.
   // ingExpect (the certificate an Upload is for) belongs to the card that set it: a later card
