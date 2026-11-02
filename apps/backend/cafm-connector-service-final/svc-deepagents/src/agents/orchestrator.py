@@ -4404,6 +4404,35 @@ class DeepAgentOrchestrator:
             },
         }
 
+    async def _choose_engine(
+        self,
+        routing: dict[str, Any] | None,
+        msg_l: str,
+        *,
+        user_message: str,
+        support: bool,
+    ) -> tuple[Phase2AgentId | None, str | None]:
+        """The one place a turn decides which engine answers it.
+
+        Both entry points call this: the websocket the frontend talks to, and POST /run-stateful,
+        which is what a batch run calls. They used to decide separately, and only the batch path
+        fell back to the intent classifier, so the same question could be routed one way from the
+        browser and another from a batch (reported 30 Oct 2026, item 5: "equivalent queries
+        against the same instance should produce consistent results"). A second copy of this
+        decision anywhere is how that divergence comes back.
+        """
+        engine, routing_note = self._decide_dispatch(routing, msg_l)
+        self._claim_turn_for_page_engines(routing)
+        # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
+        # intent classifier so the orchestrator comprehends meaning, not just exact keywords.
+        # Not when the router made a decision the engines cannot take -- wo_engine or udr is
+        # an answer, and a second classifier re-reading "statutory" into compliance is how
+        # a maintenance question left this function as a certificate question.
+        if engine is None and routing_note is None and not support:
+            engine = await self._llm_classify_engine(user_message)
+        return engine, routing_note
+
+
     @staticmethod
     def _claim_turn_for_page_engines(routing: dict[str, Any] | None) -> frozenset[str]:
         """Close the database catalogue for this turn when the router gave it to page engines.
@@ -6610,6 +6639,21 @@ class DeepAgentOrchestrator:
         llm_cost.record(role, model, usage, ms)
         return text_out
 
+    @staticmethod
+    def _plan_context(step: dict[str, Any], extra_context: str | None) -> str:
+        """What the planner is told about the turn besides the question.
+
+        The working set is a hard filter, so it leads. A follow-up carries far more of the
+        previous exchange than a fresh question does, which is what lets "these assets" plan
+        against the assets just listed (7 Oct 2026). Shared, so the two entry points plan from
+        the same context rather than from two copies of it that drift apart.
+        """
+        ws_now = thread_scope.active_scope.get()
+        out = ("WORKING SET (hard filter): " + thread_scope.describe(ws_now) + "\n") if ws_now else ""
+        if extra_context:
+            out += "CONTEXT: " + str(extra_context)[:(4600 if step["kind"] == "followup" else 600)] + "\n"
+        return out
+
     def _planner_tools(self) -> dict[str, str]:
         """The tools a plan step may name: every engine's read tools, one line each."""
         out: dict[str, str] = {}
@@ -6687,36 +6731,31 @@ class DeepAgentOrchestrator:
                     return await t.ainvoke(args)
         raise ValueError(f"unknown tool {name}")
 
-    async def _stream_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], t0: float,
-                                   previous: str | None = None):
-        """plan -> act -> verify, streamed: the plan first, then each step's tool events as they
-        happen, then the answer. Every stage is a span (agents/planner.py, agents/trace.py)."""
-        yield {"type": "reasoning", "label": "Plan", "text": planner.describe(plan), "domain": "orchestrator"}
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    async def _run_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], *,
+                                previous: str | None = None, on_event: Any = None) -> dict[str, Any]:
+        """plan -> act -> verify, and the turn's result. Every stage is a span (agents/planner.py).
 
-        async def on_event(ev: dict[str, Any]) -> None:
-            await queue.put(ev)
+        This is the whole planned turn, and it answers to both entry points: the streamer below
+        wraps it for the websocket, and the batch path calls it directly. on_event is where the
+        streamer collects what to paint; a batch run passes nothing and the same work happens
+        silently. Closing the turn is the CALLER's, because the two close differently -- a
+        streamed turn writes its own closing row, a REST turn is closed by run_stateful.
+        """
+        async def emit(ev: dict[str, Any]) -> None:
+            if on_event is not None:
+                await on_event(ev)
+
+        await emit({"type": "reasoning", "label": "Plan", "text": planner.describe(plan),
+                    "domain": "orchestrator"})
 
         async def run_engine(engine: str, ask: str, on_ev: Any) -> tuple[str, list]:
             return await run_phase2_engine_verbose(engine, ask, on_event=on_ev)
 
         ws = thread_scope.active_scope.get()
-        exec_task = asyncio.create_task(planner.execute(
+        results = await planner.execute(
             plan, run_engine=run_engine, run_tool=self._run_planned_tool,
-            scope_hint=thread_scope.describe(ws) if ws else "", given=(previous or "")[-3500:], on_event=on_event,
-            question=user_message, replan=self._replan_after_gates, check=self._check_step))
-        pending_get = asyncio.create_task(queue.get())
-        try:
-            while not exec_task.done():
-                done, _ = await asyncio.wait({exec_task, pending_get}, return_when=asyncio.FIRST_COMPLETED)
-                if pending_get in done:
-                    yield pending_get.result()
-                    pending_get = asyncio.create_task(queue.get())
-            while not queue.empty():
-                yield queue.get_nowait()
-        finally:
-            pending_get.cancel()
-        results = await exec_task
+            scope_hint=thread_scope.describe(ws) if ws else "", given=(previous or "")[-3500:], on_event=emit,
+            question=user_message, replan=self._replan_after_gates, check=self._check_step)
         plan = (results.get("__plan__") or {}).get("output") or plan
         tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
         if previous:
@@ -6728,8 +6767,34 @@ class DeepAgentOrchestrator:
         result = {"session_id": sid, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
                   "route_metadata": {"intent": "planned", "domain": "orchestrator", "steps": [s["target"] for s in plan["steps"]]}}
         attach_route_to_result(result, sid, intent="planned", domain="orchestrator")
+        return result
+
+    async def _stream_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], t0: float,
+                                   previous: str | None = None):
+        """_run_planned_turn, painted as it happens: the plan first, then each step's tool events
+        as they are made, then the answer."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def on_event(ev: dict[str, Any]) -> None:
+            await queue.put(ev)
+
+        exec_task = asyncio.create_task(self._run_planned_turn(
+            sid, user_message, plan, previous=previous, on_event=on_event))
+        pending_get = asyncio.create_task(queue.get())
+        try:
+            while not exec_task.done():
+                done, _ = await asyncio.wait({exec_task, pending_get}, return_when=asyncio.FIRST_COMPLETED)
+                if pending_get in done:
+                    yield pending_get.result()
+                    pending_get = asyncio.create_task(queue.get())
+            while not queue.empty():
+                yield queue.get_nowait()
+        finally:
+            pending_get.cancel()
+        result = await exec_task
         await self._close_streamed_turn(sid, result, t0)
-        yield workflow_stream_completion_payload(sid, answer=answer, tool_calls=tool_calls)
+        yield workflow_stream_completion_payload(sid, answer=result["answer"],
+                                                 tool_calls=result["tool_calls"])
 
     async def rerun_turn(self, turn: dict[str, Any], corrections: list[dict[str, Any]], *, session_id: str) -> dict[str, Any]:
         """Replay a recorded turn with corrections applied (agents/rerun.py): the corrected plan is
@@ -7889,15 +7954,26 @@ class DeepAgentOrchestrator:
                 )
             if step["kind"] == "followup" and routing.get("clarify"):
                 routing = dict(self._CONTINUE)
-            engine, routing_note = self._decide_dispatch(routing, msg_l)
-            self._claim_turn_for_page_engines(routing)
-            # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
-            # intent classifier so the orchestrator comprehends meaning, not just exact keywords.
-            # Not when the router made a decision the engines cannot take — wo_engine or udr is
-            # an answer, and a second classifier re-reading "statutory" into compliance is how
-            # a maintenance question left this function as a certificate question.
-            if engine is None and routing_note is None and not support:
-                engine = await self._llm_classify_engine(user_message)
+            engine, routing_note = await self._choose_engine(
+                routing, msg_l, user_message=user_message, support=support)
+            # A question that needs decomposition is planned, run step by step and verified,
+            # exactly as the streaming path does it. The Skill lab replays recorded questions
+            # through here (agents/skill_lab.py), and a replay that skips the planner judges a
+            # different run from the one it is replaying; a scheduled question got no plan at
+            # all, so it reached Hoist Traces with nothing saying why it went where it went
+            # (30 Oct 2026, item 5).
+            if not support and planner.is_multi_part(user_message):
+                plan, why = await planner.make_plan(
+                    user_message, context=self._plan_context(step, extra_context),
+                    tools=self._planner_tools(), llm=self._planner_llm)
+                if plan is not None:
+                    trace.on_plan(plan, source="planner")
+                    return await self._run_planned_turn(
+                        session_id, user_message, plan, previous=step.get("previous_answer"))
+                trace.on_plan(None, source="planner", rejected=why)
+            trace.on_plan(planner.one_step_plan(engine or "orchestrator loop",
+                                                routing.get("reason") if routing else None,
+                                                source=(routing or {}).get("source") or "router"), source="router")
         if engine is not None and route_intent not in core_routes:
             # Any compliance data question is answered from the WHOLE portfolio: the shortcut
             # fetches every building certificate + vendor accreditation (all columns) and lets the
@@ -8435,18 +8511,13 @@ class DeepAgentOrchestrator:
                 yield workflow_stream_completion_payload(sid, answer=result["answer"], tool_calls=[],
                                                          choices=result.get("choices"))
                 return
-            phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
-            self._claim_turn_for_page_engines(routing)
+            phase2_engine, routing_note = await self._choose_engine(
+                routing, msg_l, user_message=user_message, support=support)
             # A question that needs decomposition is planned, run step by step and verified
             # (agents/planner.py); a single-engine question keeps the direct path but records
             # the one-step plan, so every run says why it went where it went.
             if not support and planner.is_multi_part(user_message):
-                ws_now = thread_scope.active_scope.get()
-                plan_ctx = ("WORKING SET (hard filter): " + thread_scope.describe(ws_now) + "\n") if ws_now else ""
-                if extra_context:
-                    # On a follow-up this carries the previous question and answer, so "these
-                    # assets" plans against the assets just listed (7 Oct 2026).
-                    plan_ctx += "CONTEXT: " + str(extra_context)[:(4600 if step["kind"] == "followup" else 600)] + "\n"
+                plan_ctx = self._plan_context(step, extra_context)
                 plan, why = await planner.make_plan(user_message, context=plan_ctx, tools=self._planner_tools(), llm=self._planner_llm)
                 if plan is not None:
                     trace.on_plan(plan, source="planner")

@@ -23,7 +23,7 @@ from src.agents.session_workspace import last_working_tool
 from src.agents.system_prompt import build_system_prompt
 from src.services import chat_threads
 
-CASES = json.loads((Path(__file__).parent / "fixtures" / "openui" / "cases.json").read_text())
+CASES = json.loads((Path(__file__).parent / "fixtures" / "openui" / "cases.json").read_text(encoding="utf-8"))
 PROGRAM = next(c["program"] for c in CASES if c["name"] == "example-dashboard")
 QUESTION = "What needs my attention this week?"
 
@@ -62,7 +62,7 @@ def test_switched_off_the_prompt_does_not_mention_it(monkeypatch):
 
 
 def test_the_chat_stream_and_chat_reruns_mark_their_turns():
-    src = (Path(__file__).parents[1] / "src" / "agents" / "orchestrator.py").read_text()
+    src = (Path(__file__).parents[1] / "src" / "agents" / "orchestrator.py").read_text(encoding="utf-8")
     stream = src[src.index("    async def stream("):]
     rerun = src[src.index("    async def rerun_turn("):]
     assert "openui_view.CHAT_TURN.set(True)" in stream[:6000]

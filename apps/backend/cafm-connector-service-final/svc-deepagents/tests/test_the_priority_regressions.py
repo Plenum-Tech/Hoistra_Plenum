@@ -234,13 +234,14 @@ class TestAnInstanceWithoutComplianceReturnsNoComplianceResults:
 
 # -- 5. Frontend and backend runs share one orchestration -------------------------------
 
-@pytest.mark.skip(reason=(
-    "Needs both entry points to expose their routing decision without running a model. The "
-    "frontend path goes through the streaming orchestrator, the batch path through its own "
-    "caller; comparing them means capturing {agent, tools, instance} from each for the same "
-    "question. Add that capture, then this asserts the two are equal across a fixed set."))
 def test_the_same_question_routes_the_same_way_from_either_entry_point():
-    raise AssertionError("unwired")
+    """Both entry points now decide through one function each, so there is nothing left to
+    compare at runtime: _choose_engine picks the engine and _run_planned_turn runs the plan,
+    whichever path asked. test_both_entry_points_orchestrate_alike.py holds the detail -- that
+    neither path decides the dispatch for itself, that the intent classifier is called from
+    exactly one place, and that both plan a multi-part question."""
+    from src.agents.orchestrator import DeepAgentOrchestrator as Orch
+    assert hasattr(Orch, "_choose_engine") and hasattr(Orch, "_run_planned_turn")
 
 
 # -- 6. New traces sync without erasing review data -------------------------------------

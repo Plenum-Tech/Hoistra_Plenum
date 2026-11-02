@@ -20,8 +20,8 @@ import pytest
 from src.agents import openui_view as ov
 
 FIXTURES = Path(__file__).parent / "fixtures" / "openui"
-CASES = json.loads((FIXTURES / "cases.json").read_text())
-SCHEMA = json.loads((FIXTURES / "schema.json").read_text())
+CASES = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))
+SCHEMA = json.loads((FIXTURES / "schema.json").read_text(encoding="utf-8"))
 PROGRAM = {c["name"]: c["program"] for c in CASES}
 
 
