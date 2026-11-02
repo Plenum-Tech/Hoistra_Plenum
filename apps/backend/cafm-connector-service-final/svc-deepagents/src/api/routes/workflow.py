@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from ...agents import spaces
 from ...config import settings
 from ...agents.single_door_flow import (
+    _file_kind,
     ensure_upload_dir,
     extract_chat_citations,
     format_single_door_chat_preface,
@@ -732,6 +733,22 @@ async def run_stateful_workflow_with_files(
                 _extracted = building_binding.extracted_fields_by_file(flow.tool_calls)
                 for _p in saved_paths:
                     _name = Path(_p).name
+                    # A spreadsheet is SOURCE DATA for the migration, not evidence filed
+                    # against one building, so the binding gate does not apply to it. It was
+                    # applied, and the question it asks of such a file has no answer:
+                    # bms_alarms.csv is 769 alarm rows whose building_id column spans the
+                    # portfolio, and "what connects it to Vasiliki tower 3" is the wrong
+                    # question to put to it -- the column is what connects its rows to
+                    # buildings. Worse, one held file suppressed binding for the whole batch
+                    # below, so an unanswerable question about a CSV kept the real documents
+                    # beside it from being bound (2 Nov 2026).
+                    #
+                    # _file_kind is the same routing the ingestion itself used: "structured"
+                    # went to the migration wizard, "document" to doc-RAG. Asking it, rather
+                    # than listing extensions here, is what keeps the two from disagreeing.
+                    if _file_kind(_p) == "structured":
+                        log.info("single_door.validation_skipped_structured", file=_name)
+                        continue
                     _case = await validation_gate.validate(
                         building_id=building, document_name=_name,
                         doc_type=building_binding.doc_type_for(_name, flow.tool_calls),
