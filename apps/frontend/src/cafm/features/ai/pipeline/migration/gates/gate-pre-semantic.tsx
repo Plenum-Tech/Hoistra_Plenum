@@ -2140,6 +2140,92 @@ export default function GatePreSemantic({ migrationId, payload, onSubmitted, onF
         </div>
       )}
 
+      {/* New lookup tables, with the columns they will be created with.
+          The screen above is the SOURCE sheets and their fields. A shared attribute that was
+          normalised at the classification gate becomes a table of its own that no source sheet
+          names, so it appeared nowhere here — a person confirming column matching could not see
+          that shared_buildings and shared_vendors were about to exist, nor what columns they
+          would have (reported 2 Nov 2026). Read-only: there is nothing to approve, the decision
+          was taken at Keys & shared attributes, and these columns are fixed by the writer
+          (write_node._write_shared_attribute_lookups), not matched from a source. */}
+      {(columnIntelligence?.shared_attribute_tables ?? []).length > 0 && (
+        <div className="mb-5 rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-2.5">
+            <div className="text-sm font-semibold text-slate-900">
+              New lookup tables · {(columnIntelligence?.shared_attribute_tables ?? []).length}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-500">
+              Created at the write step from shared attributes. Their columns are fixed, so there is
+              nothing to match here — shown so the schema you are confirming is the whole schema.
+            </div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {(columnIntelligence?.shared_attribute_tables ?? []).map((t) => (
+              <div key={t.table_name} className="px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[13px] font-medium text-slate-900">{t.table_name}</span>
+                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                    new
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    {t.distinct_count} distinct value{t.distinct_count === 1 ? "" : "s"}
+                  </span>
+                  {t.from_group ? (
+                    <span className="text-[11px] text-slate-400">group {t.from_group}</span>
+                  ) : null}
+                </div>
+
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="text-left text-slate-500">
+                        <th className="py-1 pr-4 font-medium">Column</th>
+                        <th className="py-1 pr-4 font-medium">Type</th>
+                        <th className="py-1 font-medium">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-700">
+                      {/* The service declares these (udr/column_intelligence.py) and renders
+                          create_ddl from the same list. Listing them here instead would be a
+                          second copy of the schema, free to drift from the one created. */}
+                      {(t.columns ?? []).map((c) => (
+                        <tr key={c.name} className="border-t border-slate-100">
+                          <td className="py-1 pr-4 font-mono">
+                            {c.name}
+                            {c.is_primary_key ? (
+                              <span className="ml-1.5 rounded bg-slate-100 px-1 text-[10px] text-slate-600">pk</span>
+                            ) : null}
+                          </td>
+                          <td className="py-1 pr-4 font-mono text-slate-500">{c.type}</td>
+                          <td className="py-1 text-slate-500">{c.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {(t.unique_on ?? []).length > 0 && (
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      unique ({(t.unique_on ?? []).join(", ")})
+                    </div>
+                  )}
+                </div>
+
+                {(t.source_columns ?? []).length > 0 && (
+                  <div className="mt-2 text-[11.5px] text-slate-600">
+                    <span className="text-slate-500">Holds the values of:</span>{" "}
+                    <span className="font-mono">{(t.source_columns ?? []).join(" · ")}</span>
+                  </div>
+                )}
+                {(t.sample_values ?? []).length > 0 && (
+                  <div className="mt-1 truncate text-[11.5px] text-slate-500" title={(t.sample_values ?? []).join(", ")}>
+                    e.g. <span className="font-mono">{(t.sample_values ?? []).slice(0, 6).join(", ")}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Bulk action */}
       {totalItems > 0 && (
         <div className="flex justify-end mb-4">

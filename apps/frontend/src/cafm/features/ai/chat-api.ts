@@ -1463,6 +1463,20 @@ export type UdrColumnIntelligence = {
   shared_attribute_tables?: Array<{
     table_name: string;
     pk_column: string;
+    /** The columns the table is created with, declared by the service (udr/column_intelligence.py)
+     *  and used to render create_ddl, so a screen showing them and the script that creates them
+     *  cannot disagree. A screen listing these from memory is how they drift. */
+    columns?: Array<{
+      name: string;
+      type: string;
+      sql: string;
+      is_primary_key: boolean;
+      nullable: boolean;
+      note: string;
+    }>;
+    /** The per-company unique that makes the lookup company-scoped. */
+    unique_on?: string[];
+    is_new?: boolean;
     from_group: string;
     source_columns: string[];
     distinct_count: number;

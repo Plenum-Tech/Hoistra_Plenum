@@ -138,6 +138,9 @@ function Wizard({ migrationId, fileName, sessionId, onDismiss, onMounted }: Prop
   const [versions, setVersions] = useState<UdrRunVersion[]>([]);
   const [savingVersion, setSavingVersion] = useState(false);
   const [pickedVersionId, setPickedVersionId] = useState("");
+  // The run/version panel at the foot of the card. The id chip in the header opens it, so the
+  // chip answers the question it looks like it should answer.
+  const [runOpen, setRunOpen] = useState(false);
   const reloadVersions = useCallback(async () => {
     if (!sessionId) return;
     try {
@@ -271,9 +274,15 @@ function Wizard({ migrationId, fileName, sessionId, onDismiss, onMounted }: Prop
             <span className="min-w-0 truncate text-[13px] font-semibold text-slate-900" title={name}>
               {name}
             </span>
-            <span className="shrink-0 font-mono text-[10.5px] text-slate-400" title={migrationId}>
+            <button
+              type="button"
+              onClick={() => setRunOpen((v) => !v)}
+              className="shrink-0 rounded px-1 font-mono text-[10.5px] text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              title={`${migrationId} — run and version details`}
+              aria-expanded={runOpen}
+            >
               {shortId}
-            </span>
+            </button>
             <StatusPill tone={model.status.tone} label={model.status.label} live={model.status.label === "Running" || model.status.label === "Starting"} />
             {elapsed ? (
               <span className="hidden shrink-0 text-[11px] tabular-nums text-slate-500 @lg:inline" title="Time since the run started">
@@ -395,7 +404,15 @@ function Wizard({ migrationId, fileName, sessionId, onDismiss, onMounted }: Prop
             ) : null}
           </div>
         </div>
-        <RunDetails engine={migration?.engine ?? null} steps={model.steps} />
+        <RunDetails
+          engine={migration?.engine ?? null}
+          steps={model.steps}
+          migrationId={migrationId}
+          versionLabel={pickedVersionId ? "saved version" : null}
+          elapsed={elapsed}
+          open={runOpen}
+          onToggle={setRunOpen}
+        />
       </section>
     </div>
   );
@@ -481,26 +498,96 @@ function StepRail({ steps, viewing, onPick }: { steps: WizardStep[]; viewing: nu
   );
 }
 
-/** Run details: which engine did the row work, and how long each finished step took. */
-function RunDetails({ engine, steps }: { engine: string | null; steps: WizardStep[] }) {
-  const timed = steps.filter((s) => s.durationMs != null);
+/** What each step of the run is: all ten of them, what state it is in, and how long a finished
+ *  one took.
+ *
+ *  It used to list only the steps with a duration, so a run paused at step 6 showed five lines
+ *  and nothing about the five still to come, and the version chip beside the filename was a
+ *  plain span that answered nothing when clicked (reported 2 Nov 2026). Every step is listed now
+ *  — done, running, waiting, failed or still to come — and the chip opens this. */
+function RunDetails({
+  engine,
+  steps,
+  migrationId,
+  versionLabel,
+  elapsed,
+  open,
+  onToggle,
+}: {
+  engine: string | null;
+  steps: WizardStep[];
+  migrationId?: string;
+  versionLabel?: string | null;
+  elapsed?: string | null;
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+}) {
+  const stateWord: Record<WizardStep["state"], string> = {
+    done: "done",
+    active: "running",
+    error: "failed",
+    pending: "to come",
+  };
+  const stateTone: Record<WizardStep["state"], string> = {
+    done: "text-emerald-700",
+    active: "text-amber-700",
+    error: "text-rose-700",
+    pending: "text-slate-400",
+  };
   return (
-    <details className="border-t border-slate-200 px-4 py-2.5 text-[12px] text-slate-600">
+    <details
+      className="border-t border-slate-200 px-4 py-2.5 text-[12px] text-slate-600"
+      open={open}
+      onToggle={(e) => onToggle?.((e.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary className="cursor-pointer select-none text-[11.5px] font-medium text-slate-500 hover:text-slate-700">
         Run details
       </summary>
+
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+        {migrationId ? (
+          <div className="contents">
+            <dt className="text-slate-500">Version</dt>
+            <dd className="font-mono text-[11.5px] text-slate-800" title={migrationId}>
+              {migrationId.slice(0, 8)}
+              {versionLabel ? <span className="ml-1.5 font-sans text-slate-500">· {versionLabel}</span> : null}
+            </dd>
+          </div>
+        ) : null}
         <dt className="text-slate-500">Engine</dt>
         <dd className="text-slate-800">{engine === "go" ? "High-speed engine" : "Standard engine"}</dd>
-        {timed.map((s) => (
-          <div key={s.n} className="contents">
-            <dt className="text-slate-500">
-              {s.n}. {s.title}
-            </dt>
-            <dd className="tabular-nums text-slate-800">{fmtDuration(s.durationMs)}</dd>
+        {elapsed ? (
+          <div className="contents">
+            <dt className="text-slate-500">Elapsed</dt>
+            <dd className="tabular-nums text-slate-800">{elapsed}</dd>
           </div>
-        ))}
+        ) : null}
       </dl>
+
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="text-left text-slate-500">
+              <th className="py-1 pr-3 font-medium">Step</th>
+              <th className="py-1 pr-3 font-medium">Covers</th>
+              <th className="py-1 pr-3 font-medium">State</th>
+              <th className="py-1 font-medium">Took</th>
+            </tr>
+          </thead>
+          <tbody>
+            {steps.map((s) => (
+              <tr key={s.n} className={`border-t border-slate-100 ${s.current ? "bg-amber-50/50" : ""}`}>
+                <td className="py-1 pr-3 tabular-nums text-slate-500">{s.n}</td>
+                <td className="py-1 pr-3 text-slate-800">{s.title}</td>
+                <td className={`py-1 pr-3 ${stateTone[s.state]}`}>{stateWord[s.state]}</td>
+                <td className="py-1 tabular-nums text-slate-600">
+                  {s.durationMs != null ? fmtDuration(s.durationMs) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </details>
   );
 }

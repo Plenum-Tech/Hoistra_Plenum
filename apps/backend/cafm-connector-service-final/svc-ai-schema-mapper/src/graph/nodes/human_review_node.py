@@ -287,6 +287,14 @@ async def human_review_node(state: MigrationState) -> MigrationState:
             # gate's comparison defaults to it instead of re-deriving the source name
             # (source_table → chosen destination UDR table).
             "table_routing": dict(state.get("table_routing") or {}),
+            # New tables this run will create, with the columns they are created with. The
+            # pre-semantic gate carried these inside column_intelligence and this one carried
+            # nothing, so a person reviewing field mappings could not see that shared_buildings
+            # and shared_vendors were about to exist (2 Nov 2026). Declared once by
+            # udr/column_intelligence.py and passed through, never rebuilt here.
+            "shared_attribute_tables": list(
+                (state.get("column_intelligence") or {}).get("shared_attribute_tables") or []
+            ),
             "instructions": (
                 "Review flagged mappings per table. For each field: "
                 "1) Accept suggestion, 2) Reject (unmappable), 3) Override with alternative. "

@@ -605,12 +605,26 @@ def synthesize_shared_attribute_table(
     # the database, so the gate showed a CREATE that is not run beside ALTERs that are not run
     # either (the writer says so: "FK constraints are not added"). A panel that predicts the
     # schema has to predict the one that is built.
+    # ONE declaration of the table's shape. The DDL is rendered from it and it is published
+    # as `columns`, so a screen showing the columns and the script that creates them cannot
+    # disagree -- which they could while the panel listed them from memory in the frontend
+    # (2 Nov 2026). Each entry is what the writer makes, in the order it makes it.
+    columns = [
+        {"name": "id", "type": "uuid", "sql": "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
+         "is_primary_key": True, "nullable": False, "note": "primary key, generated"},
+        {"name": "organization_id", "type": "uuid", "sql": "UUID NOT NULL",
+         "is_primary_key": False, "nullable": False, "note": "the company the row belongs to"},
+        {"name": pk, "type": "text", "sql": "TEXT NOT NULL",
+         "is_primary_key": False, "nullable": False, "note": "the shared value itself"},
+        {"name": "created_at", "type": "timestamptz",
+         "sql": "TIMESTAMPTZ NOT NULL DEFAULT now()",
+         "is_primary_key": False, "nullable": False, "note": "set on insert"},
+    ]
+    _col_sql = ",\n".join(
+        "    " + _q(c["name"]) + " " + c["sql"] for c in columns)
     create_ddl = (
         f"CREATE TABLE IF NOT EXISTS plenum_cafm.{_q(tname)} (\n"
-        f"    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n"
-        f"    organization_id UUID NOT NULL,\n"
-        f"    {_q(pk)} TEXT NOT NULL,\n"
-        f"    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n"
+        f"{_col_sql},\n"
         f"    UNIQUE (organization_id, {_q(pk)})\n"
         f");\n"
         f"COMMENT ON TABLE plenum_cafm.{_q(tname)} IS "
@@ -643,6 +657,12 @@ def synthesize_shared_attribute_table(
     return {
         "table_name": tname,
         "pk_column": pk,
+        # What the table is created with, so every step that shows a new table can show
+        # its columns without inventing them. create_ddl above is rendered from this same
+        # list, so the screen and the script cannot disagree.
+        "columns": columns,
+        "unique_on": ["organization_id", pk],
+        "is_new": True,
         "from_group": group_id,
         "source_columns": list(members_display) if members_display
         else [f"{t}.{c}" for (t, c) in member_pairs],
