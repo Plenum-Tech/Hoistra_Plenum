@@ -446,6 +446,7 @@ async def run_stateful_workflow_with_files(
     message: str = Form(...),
     session_id: str = Form(...),
     context: str | None = Form(None),
+    space: str | None = Form(None, max_length=40),
     organization_id: str | None = Form(None),
     building_id: str | None = Form(None),
     doc_type: str | None = Form(None),
@@ -494,6 +495,9 @@ async def run_stateful_workflow_with_files(
     # too, same as /run and /run-stateful, so a superadmin's named override (or a normal
     # caller's own org, resolved the same way it always was) actually reaches those calls.
     caller_organization_id.set(org)
+    # The role space this question is asked in, exactly as /run, /run-stateful and the
+    # socket do it. Asking with an attachment is still asking (agents/spaces.py).
+    spaces.active_space.set(space)
 
     # Whether this person may add data at all. Read-only users see their buildings and stop
     # there; the message says who can change that rather than just refusing.

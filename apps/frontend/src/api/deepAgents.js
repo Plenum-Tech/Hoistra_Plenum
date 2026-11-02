@@ -172,6 +172,10 @@ export const deepAgentsApi = {
     if (opts && opts.docType) form.append('doc_type', opts.docType);
     const org = getActingOrg();
     if (org) form.append('organization_id', org);
+    // Asking with an attachment is still asking, so it carries the role space like every
+    // other send does. Without it the server reads no space and allows every engine.
+    const sp = getActiveSpace();
+    if (sp) form.append('space', sp);
     (files || []).forEach((f) => form.append('files', f, f.name));
     return apiFetch(B, '/api/workflow/run-stateful-with-files', {
       method: 'POST',
@@ -300,7 +304,7 @@ export const deepAgentsApi = {
 
     ws.onopen = () => {
       try {
-        ws.send(JSON.stringify(Object.assign({ message: message, context: context || null }, orgOverride())));
+        ws.send(JSON.stringify(Object.assign({ message: message, context: context || null }, orgOverride(), spaceField())));
         if (h.onOpen) h.onOpen();
       } catch (e) { finish(e); }
     };
