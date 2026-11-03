@@ -88,6 +88,9 @@ export function runRow(r, now, own) {
   const set = r.set && !nil(r.set.version) ? (r.set.kind === 'regression' ? 'Regression cases' : 'Version ' + r.set.version) : '—';
   return {
     id: r.id, label: r.label || '—', set, purpose: PURPOSE_LABELS[r.purpose] || '—', k: 'k=' + (r.k || 1),
+    // Which engines could answer at all. Two runs of the same set in different spaces are two
+    // measurements, so the list has to say which one each was (3 Nov 2026).
+    space: SPACE_LABELS[(r.params && r.params.space) || ''] || 'Every module',
     cases: plural(Number(r.cases) || 0, 'case', 'cases'), pass: fmtRate(r.pass_rate), passTitle: rateTitle(r.pass_rate),
     cost: usd(r.usd_spent), status, progress: r.items_total ? (r.items_done || 0) + '/' + r.items_total : '—',
     when: fmtWhen(r.started_at, now), who: r.started_by_email || '—', mine: isOwn(r, own),
@@ -210,6 +213,15 @@ export function goldenSetView(s, now) {
 }
 
 // ── golden runs and the start dialog ──────────────────────────────────────────────────────────────────────────
+//: The role spaces a run can be asked in, as agents/spaces.py names them. '' is no space, which
+//: allows every engine -- right for a caller who has not picked an instance, and a deliberate
+//: choice for a run rather than an accident.
+export const SPACE_LABELS = {
+  '': 'Every module', ops: 'Ops Brain', comp: 'Compliance Engine',
+  assets: 'Assets Operating System', full: 'Full platform'
+};
+export const SPACE_KEYS = ['', 'ops', 'comp', 'assets', 'full'];
+
 export function dialogView(s) {
   const g = s.golden;
   const d = g.dialog;
@@ -224,6 +236,7 @@ export function dialogView(s) {
     purposes: ['adhoc', 'baseline'].map((p) => ({ key: p, label: PURPOSE_LABELS[p], on: d.purpose === p })),
     sets: versions.map((v) => ({ value: v.id, label: 'Version ' + v.version + (v.status === 'active' ? ' (active)' : '') })),
     setId: d.setId || '', note: d.note || '', usdCap: d.usdCap || '',
+    spaces: SPACE_KEYS.map((k) => ({ key: k, label: SPACE_LABELS[k], on: (d.space || '') === k })),
     estimating: !!d.estimating, lines: estimateLines(est), problems: (pre && pre.problems) || [],
     building: est && est.building_selected ? BUILDING_NOTE : '',
     noCases: !!est && Number(est.cases) === 0 ? 'The chosen version has no cases to ask.' : '',

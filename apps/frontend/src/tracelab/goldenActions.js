@@ -213,7 +213,7 @@ export function maybeLoop(run) {
 export function openStart() {
   const sets = G().sets.data;
   const active = sets && sets.active;
-  setG({ dialog: { k: 1, purpose: 'adhoc', setId: active ? active.id : null, note: '', usdCap: '', estimate: null,
+  setG({ dialog: { k: 1, purpose: 'adhoc', space: '', setId: active ? active.id : null, note: '', usdCap: '', estimate: null,
     estimating: false, starting: false, error: '', reason: '', problems: [] } });
   if (!sets) loadSets();
   return estimate();
@@ -258,7 +258,10 @@ export async function startRun() {
   if (!d || !d.estimate || d.starting || d.estimating) return null;
   const seq = get().seq;
   setG({ dialog: Object.assign({}, d, { starting: true, error: '', reason: '', problems: [] }) });
+  // The instance the batch is asked in. Omitted rather than sent empty: the service reads a
+  // missing space as 'every module', which is what a run that names none should get.
   const body = { set_id: d.setId || null, k: Number(d.k) || 1, purpose: d.purpose || 'adhoc', note: d.note ? String(d.note) : null };
+  if (d.space) body.space = String(d.space);
   const cap = Number(d.usdCap);
   if (isFinite(cap) && cap > 0) body.usd_cap = cap;
   try {

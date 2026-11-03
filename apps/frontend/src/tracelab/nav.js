@@ -6,7 +6,7 @@ import { ON } from './flag.js';
 
 export const VIEW = 'tracelab';
 // The tabs, in the order the tab bar shows them; a ?tl= link must name one of them.
-export const TABS = ['conversations', 'runs', 'golden', 'models', 'map', 'progress', 'labels', 'judges', 'watch'];
+export const TABS = ['conversations', 'runs', 'golden', 'scenarios', 'models', 'map', 'progress', 'labels', 'judges', 'watch'];
 
 export function traceLabActive(s) {
   return ON && !!(s && s.signedIn) && s.view === VIEW;

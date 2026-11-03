@@ -24,6 +24,14 @@ export default function StartDialog({ d }) {
               onClick={() => gact.setDialog({ k: k.k })}>{k.k === 1 ? 'once' : k.k + ' times'}</button>
           ))}
         </div>
+        <div className="tl-field" role="group" aria-label="Instance"><span>{'Ask in'}</span>
+          {d.spaces.map((sp) => (
+            <button key={sp.key || 'none'} type="button" className={'tl-chip-btn' + (sp.on ? ' tl-on' : '')}
+              aria-pressed={sp.on ? 'true' : 'false'}
+              onClick={() => gact.setDialog({ space: sp.key })}>{sp.label}</button>
+          ))}
+        </div>
+        <p className="tl-meta">{'The instance decides which engines may answer: a question asked in Ops Brain cannot reach compliance. The same set run in two instances is two measurements.'}</p>
         <div className="tl-field" role="group" aria-label="Purpose"><span>{'Purpose'}</span>
           {d.purposes.map((p) => (
             <button key={p.key} type="button" className={'tl-chip-btn' + (p.on ? ' tl-on' : '')} aria-pressed={p.on ? 'true' : 'false'}

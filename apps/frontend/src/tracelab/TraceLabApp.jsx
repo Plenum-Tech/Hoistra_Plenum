@@ -10,6 +10,7 @@ import { getActingOrg } from '../api/client.js';
 import { tlStore, useStore, resetForCompany } from './store.js';
 import * as act from './actions.js';
 import * as gact from './goldenActions.js';
+import Scenarios from './views/Scenarios.jsx';
 import * as tact from './taxonomyActions.js';
 import * as rw from './wiring.js';
 import { POLL_MS, RANGES, channelOptions, parseLink, tabsView, updateLine } from './logic/shell.js';
@@ -80,7 +81,7 @@ function FilterBar({ s }) {
 
 // Golden set, Map, Progress, Labels, Judges and Watch have their own controls: no conversation filters on them, and Map,
 // Progress, Labels, Judges and Watch refresh themselves, so the shared refresh line is for the other tabs.
-const UNFILTERED = ['golden', 'map', 'progress', 'labels', 'judges', 'watch'];
+const UNFILTERED = ['golden', 'scenarios', 'map', 'progress', 'labels', 'judges', 'watch'];
 const OWN_REFRESH = ['map', 'progress', 'labels', 'judges', 'watch'];
 
 // The page as drawn from one state: exported so the tests can render it without effects.
@@ -106,6 +107,7 @@ export function Shell({ s, now, company, chrome = true }) {
           {s.tab === 'runs' ? <Runs s={s} now={now} /> : null}
           {s.tab === 'models' ? <ModelCalls s={s} now={now} /> : null}
           {s.tab === 'golden' ? <GoldenSet s={s} now={now} /> : null}
+          {s.tab === 'scenarios' ? <Scenarios s={s} /> : null}
           {s.tab === 'map' ? <MapTab s={s} /> : null}
           {s.tab === 'progress' ? <Progress s={s} /> : null}
           {s.tab === 'labels' ? <Labels s={s} /> : null}

@@ -32,6 +32,15 @@ export function useStore(store, selector) {
 
 // Phase 3: what the Golden set tab, the golden runs, the step loop and the expected-outcome panel read, at its
 // default (goldenActions.js writes it). A fresh object every call; resetForCompany() resets it with the rest.
+export function scenariosInitial() {
+  return {
+    space: 'ops', count: 50, seed: 1, challenge: 0,
+    spaces: { rows: [], loading: false, error: '' },
+    batch: null, generating: false, error: '', downloading: false, downloaded: '',
+    runCount: 2, running: false, run: null, runError: ''
+  };
+}
+
 export function goldenInitial() {
   return {
     sets: { data: null, loading: false, error: '', reason: '', loadedAt: null },
@@ -73,7 +82,8 @@ export function initialState() {
     call: null,              // the model call open in the side panel: { spanId, loading, error, data, turnId, conversationKey }
     open: {},                // card and panel id -> true/false; a refresh never touches it
     poll: { updatedAt: null, newTurns: 0, error: '' },
-    golden: goldenInitial()
+    golden: goldenInitial(),
+    scenarios: scenariosInitial()
   };
 }
 

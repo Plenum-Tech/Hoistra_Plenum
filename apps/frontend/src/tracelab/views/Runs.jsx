@@ -48,13 +48,13 @@ function GoldenRuns({ g }) {
       {g.empty ? <div className="tl-meta">{'No golden runs yet.'}</div> : null}
       {g.rows.length ? (
         <table className="tl-table">
-          <thead><tr>{['', 'Run', 'Version', 'Purpose', 'Reps', 'Cases', 'Pass rate', 'Cost', 'Status', 'Progress', 'Started', 'By'].map((h, i) => <th key={i} scope="col">{h}</th>)}</tr></thead>
+          <thead><tr>{['', 'Run', 'Version', 'Asked in', 'Purpose', 'Reps', 'Cases', 'Pass rate', 'Cost', 'Status', 'Progress', 'Started', 'By'].map((h, i) => <th key={i} scope="col">{h}</th>)}</tr></thead>
           <tbody>
             {g.rows.map((r) => (
               <tr key={r.id} className={r.open ? 'tl-row-on' : ''}>
                 <td><input type="checkbox" checked={r.picked} aria-label={'Compare ' + r.label} onChange={() => gact.togglePick(r.id)} /></td>
                 <td><button type="button" className="tl-link" onClick={() => gact.openRun(r.id)}>{r.label}</button></td>
-                <td>{r.set}</td><td>{r.purpose}</td><td>{r.k}</td><td>{r.cases}</td>
+                <td>{r.set}</td><td>{r.space}</td><td>{r.purpose}</td><td>{r.k}</td><td>{r.cases}</td>
                 <td title={r.passTitle || undefined}>{r.pass}</td><td>{r.cost}</td>
                 <td>{r.status}{r.mine && r.running ? ' · this page' : ''}</td><td>{r.progress}</td><td>{r.when || '—'}</td><td>{r.who}</td>
               </tr>
