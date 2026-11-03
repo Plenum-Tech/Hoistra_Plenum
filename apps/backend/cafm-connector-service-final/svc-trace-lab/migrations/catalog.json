@@ -3448,6 +3448,256 @@
     "type": "text"
    }
   },
+  "scenario_results": {
+   "answer": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "asked_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "difficulty": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "engine": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "gate_ok": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "boolean"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "in_module": {
+    "default": "true",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "models": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "ms": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "question": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "role": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "scenario_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "seq_no": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "session_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "spans": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "style": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "tools": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "usd": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   }
+  },
+  "scenario_runs": {
+   "asked": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "challenge_ratio": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(4,3)"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "fingerprint": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "finished_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "ms": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "requested": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "run_no": {
+    "default": null,
+    "identity": "d",
+    "notnull": true,
+    "type": "integer"
+   },
+   "seed": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "source": {
+    "default": "'page'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "space": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "started_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "started_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "started_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "status": {
+    "default": "'done'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "usd_spent": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(12,6)"
+   }
+  },
   "schema_migrations": {
    "applied_at": {
     "default": "now()",
@@ -5028,6 +5278,146 @@
    "def": "UNIQUE (organization_id, turn_id)",
    "type": "u"
   },
+  "scenario_results.ck_tl_scenario_results_gate": {
+   "def": "CHECK ((in_module OR (gate_ok IS NOT NULL)))",
+   "type": "c"
+  },
+  "scenario_results.ck_tl_scenario_results_in_module_ungraded": {
+   "def": "CHECK (((NOT in_module) OR (gate_ok IS NULL)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_difficulty_check": {
+   "def": "CHECK (((difficulty IS NULL) OR (char_length(difficulty) <= 64)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_engine_check": {
+   "def": "CHECK (((engine IS NULL) OR (char_length(engine) <= 64)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_error_check": {
+   "def": "CHECK (((error IS NULL) OR (length(error) <= 2000)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_models_check": {
+   "def": "CHECK ((jsonb_typeof(models) = 'array'::text))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_ms_check": {
+   "def": "CHECK (((ms IS NULL) OR (ms >= 0)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "scenario_results.scenario_results_question_check": {
+   "def": "CHECK (((char_length(question) >= 1) AND (char_length(question) <= 4000)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_role_check": {
+   "def": "CHECK (((role IS NULL) OR (char_length(role) <= 64)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_run_id_fkey": {
+   "def": "FOREIGN KEY (run_id) REFERENCES tracelab.scenario_runs(id)",
+   "type": "f"
+  },
+  "scenario_results.scenario_results_scenario_id_check": {
+   "def": "CHECK (((char_length(scenario_id) >= 1) AND (char_length(scenario_id) <= 64)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_seq_no_check": {
+   "def": "CHECK ((seq_no >= 1))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_session_id_check": {
+   "def": "CHECK (((session_id IS NULL) OR ((char_length(session_id) >= 1) AND (char_length(session_id) <= 200))))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_spans_check": {
+   "def": "CHECK (((spans IS NULL) OR (spans >= 0)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_style_check": {
+   "def": "CHECK (((style IS NULL) OR (char_length(style) <= 64)))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_tools_check": {
+   "def": "CHECK ((jsonb_typeof(tools) = 'array'::text))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_turn_id_check": {
+   "def": "CHECK (((turn_id IS NULL) OR ((char_length(turn_id) >= 1) AND (char_length(turn_id) <= 200))))",
+   "type": "c"
+  },
+  "scenario_results.scenario_results_usd_check": {
+   "def": "CHECK (((usd IS NULL) OR (usd >= (0)::numeric)))",
+   "type": "c"
+  },
+  "scenario_results.ux_tl_scenario_results_seq": {
+   "def": "UNIQUE (run_id, seq_no)",
+   "type": "u"
+  },
+  "scenario_runs.ck_tl_scenario_runs_asked": {
+   "def": "CHECK ((asked <= requested))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_asked_check": {
+   "def": "CHECK ((asked >= 0))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_challenge_ratio_check": {
+   "def": "CHECK (((challenge_ratio >= (0)::numeric) AND (challenge_ratio <= (1)::numeric)))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_error_check": {
+   "def": "CHECK (((error IS NULL) OR (length(error) <= 2000)))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_fingerprint_check": {
+   "def": "CHECK (((fingerprint IS NULL) OR (fingerprint ~ '^[0-9a-f]{12}$'::text)))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_ms_check": {
+   "def": "CHECK (((ms IS NULL) OR (ms >= 0)))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "scenario_runs.scenario_runs_requested_check": {
+   "def": "CHECK ((requested >= 0))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_seed_check": {
+   "def": "CHECK ((seed >= 0))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['page'::text, 'coding_agent'::text, 'cli'::text])))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_space_check": {
+   "def": "CHECK ((space = ANY (ARRAY['ops'::text, 'comp'::text, 'assets'::text, 'full'::text])))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_started_by_email_check": {
+   "def": "CHECK (((started_by_email IS NULL) OR (char_length(started_by_email) <= 320)))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['running'::text, 'done'::text, 'failed'::text, 'cancelled'::text])))",
+   "type": "c"
+  },
+  "scenario_runs.scenario_runs_usd_spent_check": {
+   "def": "CHECK ((usd_spent >= (0)::numeric))",
+   "type": "c"
+  },
+  "scenario_runs.ux_tl_scenario_runs_no": {
+   "def": "UNIQUE (run_no)",
+   "type": "u"
+  },
   "schema_migrations.schema_migrations_applied_by_check": {
    "def": "CHECK (((length(applied_by) >= 1) AND (length(applied_by) <= 200)))",
    "type": "c"
@@ -5381,6 +5771,30 @@
    "def": "CREATE INDEX ix_tl_runs_job ON tracelab.proposal_runs USING btree (job_id)",
    "table": "proposal_runs"
   },
+  "ix_tl_scenario_results_gate_failed": {
+   "def": "CREATE INDEX ix_tl_scenario_results_gate_failed ON tracelab.scenario_results USING btree (run_id) WHERE (gate_ok IS FALSE)",
+   "table": "scenario_results"
+  },
+  "ix_tl_scenario_results_org": {
+   "def": "CREATE INDEX ix_tl_scenario_results_org ON tracelab.scenario_results USING btree (organization_id, asked_at DESC)",
+   "table": "scenario_results"
+  },
+  "ix_tl_scenario_results_run": {
+   "def": "CREATE INDEX ix_tl_scenario_results_run ON tracelab.scenario_results USING btree (run_id, seq_no)",
+   "table": "scenario_results"
+  },
+  "ix_tl_scenario_results_turn": {
+   "def": "CREATE INDEX ix_tl_scenario_results_turn ON tracelab.scenario_results USING btree (turn_id)",
+   "table": "scenario_results"
+  },
+  "ix_tl_scenario_runs_org": {
+   "def": "CREATE INDEX ix_tl_scenario_runs_org ON tracelab.scenario_runs USING btree (organization_id, started_at DESC)",
+   "table": "scenario_runs"
+  },
+  "ix_tl_scenario_runs_space": {
+   "def": "CREATE INDEX ix_tl_scenario_runs_space ON tracelab.scenario_runs USING btree (organization_id, space, started_at DESC)",
+   "table": "scenario_runs"
+  },
   "ix_tl_step_labels_group": {
    "def": "CREATE INDEX ix_tl_step_labels_group ON tracelab.step_labels USING btree (organization_id, group_id) WHERE ((group_id IS NOT NULL) AND (superseded_by IS NULL))",
    "table": "step_labels"
@@ -5496,6 +5910,14 @@
   "sample_items_pkey": {
    "def": "CREATE UNIQUE INDEX sample_items_pkey ON tracelab.sample_items USING btree (id)",
    "table": "sample_items"
+  },
+  "scenario_results_pkey": {
+   "def": "CREATE UNIQUE INDEX scenario_results_pkey ON tracelab.scenario_results USING btree (id)",
+   "table": "scenario_results"
+  },
+  "scenario_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX scenario_runs_pkey ON tracelab.scenario_runs USING btree (id)",
+   "table": "scenario_runs"
   },
   "schema_migrations_pkey": {
    "def": "CREATE UNIQUE INDEX schema_migrations_pkey ON tracelab.schema_migrations USING btree (version)",
@@ -5621,6 +6043,14 @@
    "def": "CREATE UNIQUE INDEX ux_tl_req_code_revision ON tracelab.requirements USING btree (code, revision)",
    "table": "requirements"
   },
+  "ux_tl_scenario_results_seq": {
+   "def": "CREATE UNIQUE INDEX ux_tl_scenario_results_seq ON tracelab.scenario_results USING btree (run_id, seq_no)",
+   "table": "scenario_results"
+  },
+  "ux_tl_scenario_runs_no": {
+   "def": "CREATE UNIQUE INDEX ux_tl_scenario_runs_no ON tracelab.scenario_runs USING btree (run_no)",
+   "table": "scenario_runs"
+  },
   "ux_tl_step_labels_lineage_head": {
    "def": "CREATE UNIQUE INDEX ux_tl_step_labels_lineage_head ON tracelab.step_labels USING btree (COALESCE(lineage_id, id)) WHERE (superseded_by IS NULL)",
    "table": "step_labels"
@@ -5667,6 +6097,8 @@
   "requirements",
   "sample_batches",
   "sample_items",
+  "scenario_results",
+  "scenario_runs",
   "schema_migrations",
   "step_labels"
  ],
@@ -5718,8 +6150,12 @@
   "monitor_verdicts.monitor_verdicts_no_truncate": "CREATE TRIGGER monitor_verdicts_no_truncate BEFORE TRUNCATE ON tracelab.monitor_verdicts FOR EACH STATEMENT EXECUTE FUNCTION tracelab.monitor_verdicts_guard()",
   "sample_items.sample_items_append_only": "CREATE TRIGGER sample_items_append_only BEFORE DELETE OR UPDATE ON tracelab.sample_items FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "sample_items.sample_items_no_truncate": "CREATE TRIGGER sample_items_no_truncate BEFORE TRUNCATE ON tracelab.sample_items FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "scenario_results.scenario_results_append_only": "CREATE TRIGGER scenario_results_append_only BEFORE DELETE OR UPDATE ON tracelab.scenario_results FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "scenario_results.scenario_results_no_truncate": "CREATE TRIGGER scenario_results_no_truncate BEFORE TRUNCATE ON tracelab.scenario_results FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "scenario_runs.scenario_runs_append_only": "CREATE TRIGGER scenario_runs_append_only BEFORE DELETE OR UPDATE ON tracelab.scenario_runs FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "scenario_runs.scenario_runs_no_truncate": "CREATE TRIGGER scenario_runs_no_truncate BEFORE TRUNCATE ON tracelab.scenario_runs FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "step_labels.step_labels_no_truncate": "CREATE TRIGGER step_labels_no_truncate BEFORE TRUNCATE ON tracelab.step_labels FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
   "step_labels.step_labels_supersede_only": "CREATE TRIGGER step_labels_supersede_only BEFORE DELETE OR UPDATE ON tracelab.step_labels FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()"
  },
- "version": 11
+ "version": 12
 }

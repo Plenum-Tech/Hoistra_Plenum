@@ -54,7 +54,8 @@ async def test_catalog_snapshot_matches_the_files(lab_scratch):
                                    "judge_splits", "judge_split_members", "judges", "judge_predictions", "judge_runs",
                                    "monitor_batches", "monitor_verdicts", "eval_cases", "eval_case_runs",
                                    "lab_members", "step_labels", "lab_platform_members", "lab_runs", "lab_questions",
-                                   "lab_question_traces", "lab_expected_answers", "lab_failure_modes", "lab_label_cells"}
+                                   "lab_question_traces", "lab_expected_answers", "lab_failure_modes", "lab_label_cells",
+                                   "scenario_runs", "scenario_results"}
     assert set(live["functions"]) == {"refuse_change()", "supersede_only()", "judge_splits_guard()", "judges_guard()",
                                       "judges_examples_from_train()", "judge_predictions_guard()",
                                       "judge_runs_guard()", "monitor_verdicts_guard()", "question_id(code text)"}
