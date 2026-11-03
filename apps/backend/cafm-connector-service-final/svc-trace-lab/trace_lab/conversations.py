@@ -550,6 +550,8 @@ async def get_turn(principal: Any, org: str, turn_id: str) -> dict[str, Any] | N
         return None
     if is_golden_turn(turn_id):
         return await golden_turn(org, turn_id)
+    if is_scenario_turn(turn_id):
+        return await scenario_turn(org, turn_id)
     scope, p = scope_sql(principal, org)
     p["tid"] = turn_id
     async with _read() as conn:
@@ -742,6 +744,36 @@ def is_golden_key(key: Any) -> bool:
 
 def is_golden_turn(turn_id: Any) -> bool:
     return isinstance(turn_id, str) and turn_id.startswith(GOLDEN_TURN_PREFIX) and len(turn_id) <= 80
+
+
+#: A synthetic batch's turn (scenario_store). Like a golden turn it was captured in Trace Lab's own
+#: process and never existed in the chat's tables, so it is read from the lab database; unlike one it
+#: has no expected answer and no grade, and must never be mistaken for either a golden or a live turn.
+SCENARIO_TURN_PREFIX = "scenario:"
+SCENARIO_KEY_PREFIX = "s:scenario-"
+
+
+def is_scenario_turn(turn_id: Any) -> bool:
+    return isinstance(turn_id, str) and turn_id.startswith(SCENARIO_TURN_PREFIX) and len(turn_id) <= 200
+
+
+def is_scenario_key(key: Any) -> bool:
+    return isinstance(key, str) and key.startswith(SCENARIO_KEY_PREFIX)
+
+
+def scenario_meta(turn: Mapping[str, Any], row: Mapping[str, Any]) -> dict[str, Any]:
+    """normalize_turn's provenance for a scenario turn. channel 'scenario', so a reader is never
+    told this was asked by a person; the instance and what the question was generated for ride
+    along in origin_params, because judging the answer needs them."""
+    sc = turn.get("scenario") if isinstance(turn.get("scenario"), Mapping) else {}
+    return {"channel": "scenario", "channel_source": "recorded", "classifier_version": None,
+            "origin": "scenario_run",
+            "origin_params": {"run_id": str(row["run_id"]), "scenario_id": row["scenario_id"],
+                              "space": sc.get("space"), "engine": sc.get("engine"),
+                              "in_module": sc.get("in_module"), "gate_ok": sc.get("gate_ok"),
+                              "role": sc.get("role"), "style": sc.get("style")},
+            "page": None, "context_text": None, "asker_role": sc.get("role"),
+            "asker_scope": None, "asker_question": row["question"] or ""}
 
 
 @asynccontextmanager
@@ -941,6 +973,65 @@ async def golden_turn(org: str, turn_id: str) -> dict[str, Any] | None:
     if not sid:
         return None
     conv = await golden_conversation(org, "s:" + str(sid), turn_id=turn_id)
+    return None if conv is None else {"trace": conv["active"], "conversation_key": conv["key"]}
+
+
+async def scenario_conversation(org: str, key: str, *, turn_id: str | None = None) -> dict[str, Any] | None:
+    """One asked synthetic question, read from the lab database and normalized by the same
+    normalize_turn as a live turn, so the review page draws its steps the usual way.
+
+    One question is one conversation here: a scenario run asks each question in a session of its
+    own so nothing carries context into the next, which is the point of a batch.
+    """
+    if not is_scenario_key(key):
+        return None
+    sid = key[len(SCENARIO_KEY_PREFIX):]
+    async with _lab_read() as conn:
+        rows = [dict(r) for r in (await conn.execute(text(
+            "SELECT r.run_id, r.scenario_id, r.seq_no, r.question, r.turn_id, e.turn"
+            " FROM tracelab.scenario_results r JOIN tracelab.evidence_turns e ON e.turn_id = r.turn_id"
+            " WHERE r.organization_id = CAST(:org AS uuid) AND r.session_id = :sid"
+            " ORDER BY r.seq_no LIMIT :limit"),
+            {"org": org, "sid": sid, "limit": MAX_TURN_HEADERS})).mappings().all()]
+        if not rows:
+            return None
+        active = next((r for r in rows if r["turn_id"] == turn_id), None) if turn_id else rows[0]
+        if active is None:
+            return None
+        spans = [_jsonb(sp) for (sp,) in (await conn.execute(text(
+            "SELECT span FROM tracelab.evidence_spans WHERE turn_id = :tid ORDER BY seq"),
+            {"tid": active["turn_id"]})).all()]
+    turns = [dict(_jsonb(r["turn"])) for r in rows]
+    metas = {r["turn_id"]: scenario_meta(t, r) for r, t in zip(rows, turns)}
+    att = normalize.attempts(turns, metas, None)
+    run_id = str(rows[0]["run_id"])
+    label = normalize.session_label("synthetic", sid, title=None, golden=None)
+    headers = [normalize.turn_header(t, metas[t["turn_id"]], turn_index=i + 1, attempt=att[t["turn_id"]])
+               for i, t in enumerate(turns)]
+    index = next(i for i, r in enumerate(rows) if r is active)
+    record = normalize.normalize_turn(turns[index], spans, meta=metas[active["turn_id"]],
+                                      conversation={"key": key, "session_kind": "synthetic",
+                                                    "session_label": label, "turn_index": index + 1,
+                                                    "turn_count": len(rows), **att[active["turn_id"]],
+                                                    "run_id": run_id, "thread_deleted": False})
+    return {"key": key, "session_id": sid, "session_kind": "synthetic", "session_label": label, "title": None,
+            "thread_deleted": False, "run": {"run_id": run_id, "kind": "scenario"},
+            "turn_count": len(rows), "turns_truncated": False, "turns": headers, "active": record,
+            "flags": ["synthetic_session"], "normalizer_version": normalize.NORMALIZER_VERSION}
+
+
+async def scenario_turn(org: str, turn_id: str) -> dict[str, Any] | None:
+    """A scenario turn by id: find the session it was asked in, then read that conversation."""
+    if not is_scenario_turn(turn_id):
+        return None
+    async with _lab_read() as conn:
+        sid = (await conn.execute(text(
+            "SELECT session_id FROM tracelab.scenario_results"
+            " WHERE turn_id = :t AND organization_id = CAST(:org AS uuid)"),
+            {"t": turn_id, "org": org})).scalar()
+    if not sid:
+        return None
+    conv = await scenario_conversation(org, SCENARIO_KEY_PREFIX + str(sid), turn_id=turn_id)
     return None if conv is None else {"trace": conv["active"], "conversation_key": conv["key"]}
 
 

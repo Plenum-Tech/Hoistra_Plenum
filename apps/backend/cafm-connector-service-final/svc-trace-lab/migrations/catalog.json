@@ -5783,6 +5783,10 @@
    "def": "CREATE INDEX ix_tl_scenario_results_run ON tracelab.scenario_results USING btree (run_id, seq_no)",
    "table": "scenario_results"
   },
+  "ix_tl_scenario_results_session": {
+   "def": "CREATE INDEX ix_tl_scenario_results_session ON tracelab.scenario_results USING btree (organization_id, session_id)",
+   "table": "scenario_results"
+  },
   "ix_tl_scenario_results_turn": {
    "def": "CREATE INDEX ix_tl_scenario_results_turn ON tracelab.scenario_results USING btree (turn_id)",
    "table": "scenario_results"

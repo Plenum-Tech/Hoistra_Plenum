@@ -93,7 +93,7 @@ test('Home: the company, the next step as one button, five stage cards', () => {
 test('Synthetic is a page of its own, and the lab app renders it', () => {
   const src = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes("import Synthetic from './Synthetic.jsx'"));
-  assert.ok(src.includes("current === 'synthetic' ? <Synthetic instance={instance} />"),
+  assert.ok(src.includes("current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} />"),
     'the menu names a page nothing draws, so opening it shows nothing');
 });
 
@@ -126,15 +126,20 @@ test('the lab api names the three scenario routes once', () => {
 test('the instance is chosen on its own page and carried to Synthetic', () => {
   const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(app.includes("current === 'instance' ? <Instances instance={instance} onPick={pickInstance} />"));
-  assert.ok(app.includes('<Synthetic instance={instance} />'),
+  assert.ok(app.includes('<Synthetic instance={instance} onPick={pickInstance} />'),
     'Synthetic would pick its own instance again, and the two controls would disagree');
 });
 
-test('Synthetic offers no second way to change the instance', () => {
+test('the instance is selectable on Synthetic, and it is the same setting', () => {
+  // Two VIEWS of one setting, not two settings: the select and the Instance page both call
+  // LabApp's pickInstance, so they cannot disagree. A local useState here would be a second
+  // setting, and that is the thing to keep out.
   const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
-  // setSpace, not setSpace: setSpaces is the list of instances read from the service.
-  assert.ok(!/setSpace\b|aria-label="Instance"/.test(src));
-  assert.ok(src.includes('const space = instance;'));
+  assert.ok(src.includes('onChange={(e) => onPick(e.target.value)}'),
+    'the select does not write back to the shared instance');
+  assert.ok(src.includes('const space = instance;'), 'the page keeps its own instance again');
+  assert.ok(!/useState\(['"](ops|comp|assets|full)['"]\)/.test(src),
+    'a second source of truth for the instance');
 });
 
 test('a batch is cleared when the instance changes', () => {

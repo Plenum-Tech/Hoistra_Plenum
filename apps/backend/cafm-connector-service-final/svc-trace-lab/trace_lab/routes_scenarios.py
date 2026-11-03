@@ -2,6 +2,8 @@
 
     POST /scenarios/generate     a batch of questions for one space, verified against the router
     POST /scenarios/run          ask a few of them for real and return the answers
+    GET  /learning/draft         what the reviews say, as markdown to carry to a skill document
+    GET  /learning/draft.md      the same, as a file
     GET  /scenarios/spaces       the spaces that can be generated for, and the engines each has
     GET  /scenarios/template.csv the batch as the golden-set upload takes it
 
@@ -27,7 +29,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
-from . import db, scenario_run, scenarios
+from . import db, learning, scenario_run, scenario_store, scenarios
 from .routes_golden import reader
 from .routes_conversations import Reviewer, reviewer
 
@@ -118,4 +120,41 @@ async def run_scenarios(request: Request, body: RunRequest,
                             problems=exc.problems)
     except ValueError as exc:
         raise db.http_error(400, "bad_request", str(exc))
+
+    # Written as one batch, into the tables the review page already reads: the run appears in Runs
+    # beside every other, and each question opens with its answer, its steps and a place to say
+    # what the answer should have been. A write that fails must not lose the answers, which cost
+    # real money to get, so it is reported beside them rather than raised.
+    captured = out.pop("captured", [])
+    if captured:
+        try:
+            out.update(await scenario_store.save({**out, "captured": captured},
+                                                 organization_id=who.org, principal=who.principal))
+            out["persisted"] = True
+        except Exception as exc:                  # noqa: BLE001 - the answers are still returned
+            out["persisted"] = False
+            out["save_error"] = str(exc)[:300]
     return {"ok": True, **out}
+
+
+@router.get("/learning/draft")
+async def learning_draft(run: str | None = None, who: Reviewer = Depends(reviewer)) -> dict[str, Any]:
+    """What reviewers have left, drafted into markdown with its evidence.
+
+    It applies nothing. The documents the agents read live in plenum_cafm, which this service may
+    never write (G0), so the draft is for a person to read and put into a skill document through
+    the Skill lab. That is also the right shape on its own merits: an annotation is one reviewer's
+    opinion, and a loop that taught the agents straight from opinions would drift with whoever
+    reviewed last.
+    """
+    found = await learning.gather(who.org, run_code=run)
+    return {"ok": True, "counts": found["counts"], "markdown": learning.draft(found),
+            "applies_anything": False}
+
+
+@router.get("/learning/draft.md")
+async def learning_draft_file(run: str | None = None, who: Reviewer = Depends(reviewer)) -> Response:
+    """The same draft as a file, so it can be opened beside the skill document it is about."""
+    found = await learning.gather(who.org, run_code=run)
+    return Response(content=learning.draft(found), media_type="text/markdown",
+                    headers={"Content-Disposition": 'attachment; filename="what-the-reviews-say.md"'})

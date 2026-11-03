@@ -35,7 +35,16 @@ class _Captured:
                  spans: list[dict] | None = None, error: str | None = None) -> None:
         self.answer = answer
         self.tool_names = tools if tools is not None else ["list_buildings", "count_work_orders"]
-        self.spans = spans if spans is not None else [{"model": "gpt-x"}, {"model": "gpt-x"}, {}]
+        self.spans = spans if spans is not None else [
+            {"id": "s0", "parent_id": None, "seq": 0, "kind": "orchestrator", "name": "routing by code",
+             "agent": "orchestrator", "model": None, "latency_ms": 12, "cost_usd": 0,
+             "input": {"working_set": None}, "output": "wo_engine", "ok": True, "error": None},
+            {"id": "s1", "parent_id": "s0", "seq": 1, "kind": "model", "name": "tool decision",
+             "agent": "sub-agent", "model": "gpt-x", "latency_ms": 1280, "cost_usd": 0.071,
+             "input": {"messages": 2}, "output": "list_buildings", "ok": True, "error": None},
+            {"id": "s2", "parent_id": "s0", "seq": 2, "kind": "output", "name": "answer",
+             "agent": None, "model": None, "latency_ms": 3, "cost_usd": 0,
+             "input": None, "output": "nine work orders", "ok": True, "error": None}]
         self.turn = {"turn_id": "t-1"}
         self.cost_usd = 0.01
         self.ms = 1234
@@ -236,3 +245,93 @@ async def test_an_answered_out_of_module_question_is_reported_as_a_gate_failure(
     out = await scenario_run.run("ops", count=4, seed=5, challenge_ratio=0.5)
     outside = [r for r in out["results"] if not r["in_module"]]
     assert outside and all(r["gate_ok"] is False for r in outside)
+
+
+# -- the blocks the review page draws -------------------------------------------------------
+#
+# These read source, not a database: they say which span fields the USER / ORCHESTRATOR /
+# MODEL / OUTPUT blocks are drawn from, so a capture that trimmed one is caught here rather
+# than as a blank step on screen. They live beside the run rather than beside the store
+# because importing capture pulls svc-deepagents in, which disturbs the scratch fixture.
+
+def test_a_captured_span_carries_what_the_blocks_are_drawn_from():
+    """The USER / ORCHESTRATOR / MODEL / OUTPUT blocks and their payloads come from the span
+    fields, so a capture that dropped one would give a question with blank steps. capture.py
+    builds these rows to the agent_trace_spans shape on purpose; this says which fields the
+    review page actually needs out of that shape, so a trim is caught here rather than on screen.
+    """
+    import inspect
+
+    from trace_lab import capture
+
+    src = inspect.getsource(capture.span_rows)
+    for field in ("kind", "name", "agent", "model", "parent_id", "seq",
+                  "input", "output", "latency_ms", "cost_usd", "ok", "error"):
+        assert f'"{field}"' in src, (
+            "a captured span has no %s, so the step block that shows it is blank" % field)
+
+
+def test_the_answer_itself_comes_from_the_orchestrator_chat():
+    """Not a replica of it: capture drives orchestrator.stream(), the path the chat UI uses."""
+    import inspect
+
+    from trace_lab import capture
+
+    src = inspect.getsource(capture)
+    assert "orchestrator.stream(" in src
+    assert "replay_guard.REPLAY is never set" in src or "replay_guard" in src
+
+
+# -- the steps the page draws ---------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_each_answer_carries_its_steps(no_model):
+    """So a batch can be read before it is saved: without them the page has an answer and no
+    account of how it was reached."""
+    out = await scenario_run.run("ops", count=1, seed=1)
+    steps = out["results"][0]["steps"]
+    assert [s["kind"] for s in steps] == ["orchestrator", "model", "output"]
+    assert steps[1]["model"] == "gpt-x" and steps[1]["ms"] == 1280
+
+
+@pytest.mark.asyncio
+async def test_a_step_says_what_it_was_given_and_what_it_returned(no_model):
+    out = await scenario_run.run("ops", count=1, seed=1)
+    model_step = next(s for s in out["results"][0]["steps"] if s["kind"] == "model")
+    assert "messages" in model_step["input"], "the model input is what 'prompt assembled' shows"
+    assert model_step["output"] == "list_buildings"
+
+
+@pytest.mark.asyncio
+async def test_the_tree_keeps_its_shape(no_model):
+    """parent_id is what makes a sub-step sit under the step that called it."""
+    out = await scenario_run.run("ops", count=1, seed=1)
+    steps = out["results"][0]["steps"]
+    assert steps[0]["parent_id"] is None
+    assert steps[1]["parent_id"] == steps[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_huge_payload_is_cut_rather_than_sent_whole(monkeypatch, no_model):
+    """A model input can be tens of thousands of characters and this travels in an HTTP reply."""
+    async def huge(orchestrator, **kw):
+        return _Captured(spans=[{"id": "s0", "parent_id": None, "seq": 0, "kind": "model",
+                                 "name": "big", "agent": None, "model": "gpt-x", "latency_ms": 1,
+                                 "cost_usd": 0, "input": "x" * 50000, "output": None,
+                                 "ok": True, "error": None}])
+    monkeypatch.setattr(scenario_run.capture, "run_message", huge)
+    out = await scenario_run.run("ops", count=1, seed=1)
+    given = out["results"][0]["steps"][0]["input"]
+    assert len(given) <= scenario_run.PAYLOAD_CHARS and given.endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_more_steps_than_fit_is_capped(monkeypatch, no_model):
+    async def many(orchestrator, **kw):
+        return _Captured(spans=[{"id": f"s{i}", "parent_id": None, "seq": i, "kind": "model",
+                                 "name": f"step {i}", "agent": None, "model": None,
+                                 "latency_ms": 1, "cost_usd": 0, "input": None, "output": None,
+                                 "ok": True, "error": None} for i in range(200)])
+    monkeypatch.setattr(scenario_run.capture, "run_message", many)
+    out = await scenario_run.run("ops", count=1, seed=1)
+    assert len(out["results"][0]["steps"]) == scenario_run.MAX_STEPS

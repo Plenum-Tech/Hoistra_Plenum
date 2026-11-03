@@ -12,7 +12,7 @@
 // needs a scenario table, and a Trace Lab migration is applied by a person.
 import React from 'react';
 import { labApi } from './labApi.js';
-import { instanceName } from './Instances.jsx';
+import { INSTANCES } from '../logic/instances.js';
 
 const COUNTS = [10, 25, 50, 100];
 const ASK = [1, 2, 3, 5];
@@ -21,15 +21,18 @@ const REFUSALS = [[0, 'none'], [0.1, '10%'], [0.25, '25%']];
 const secs = (ms) => Math.round((Number(ms) || 0) / 1000) + 's';
 const usd = (n) => '$' + Number(n || 0).toFixed(4);
 
-export default function Synthetic({ instance }) {
-  // The instance is chosen on its own page; this one works in it rather than offering a second
-  // place to change it, which is how two controls for one setting come to disagree.
+export default function Synthetic({ instance, onPick }) {
+  // The instance is chosen here and on the Instance page, and both write the same state in
+  // LabApp. Two VIEWS of one setting cannot disagree; two settings would.
   const space = instance;
   const [spaces, setSpaces] = React.useState([]);
   const [count, setCount] = React.useState(10);
   const [seed, setSeed] = React.useState(1);
   const [challenge, setChallenge] = React.useState(0);
   const [askCount, setAskCount] = React.useState(2);
+  // Off by default: a batch should differ from the one before unless somebody asks
+  // for the same one back.
+  const [pinned, setPinned] = React.useState(false);
 
   const [batch, setBatch] = React.useState(null);
   const [busy, setBusy] = React.useState('');
@@ -57,8 +60,13 @@ export default function Synthetic({ instance }) {
     setError('');
     setBatch(null);
     setRun(null);
+    // A new seed each time, so pressing Generate twice does not hand back the same ten questions.
+    // The seed stays on screen and editable: typing one back reproduces that batch exactly, which
+    // is how a failure is re-run.
+    const next = pinned ? Number(seed) || 0 : Math.floor(Math.random() * 1000000);
+    if (!pinned) setSeed(next);
     try {
-      setBatch(await labApi.generate({ space, count: Number(count), seed: Number(seed) || 0, challenge_ratio: Number(challenge) }));
+      setBatch(await labApi.generate({ space, count: Number(count), seed: next, challenge_ratio: Number(challenge) }));
     } catch (e) {
       setError((e && e.message) || String(e));
     } finally {
@@ -93,9 +101,12 @@ export default function Synthetic({ instance }) {
 
       <div className="lab-card">
         <div className="lab-row">
-          <span className="lab-small">{'Instance'}</span>
-          <strong>{instanceName(space)}</strong>
-          <span className="lab-note">{'Chosen on the Instance page. Everything below is generated and asked there.'}</span>
+          <label className="lab-small" htmlFor="synthetic-instance">{'Instance'}</label>
+          <select id="synthetic-instance" className="lab-input" value={space}
+            onChange={(e) => onPick(e.target.value)}>
+            {INSTANCES.map((i) => <option key={i.key} value={i.key}>{i.name}</option>)}
+          </select>
+          <span className="lab-note">{'Which modules may answer. The Instance page says what each one is for.'}</span>
         </div>
         {chosen && chosen.engines && chosen.engines.length ? (
           <p className="lab-note">{'Answers can come from: ' + chosen.engines.join(', ') + '.'}</p>
@@ -115,8 +126,16 @@ export default function Synthetic({ instance }) {
         <div className="lab-row">
           <span className="lab-small">{'Seed'}</span>
           <input type="number" min="0" value={seed} className="lab-input"
-            onChange={(e) => change(setSeed)(e.target.value)} />
-          <span className="lab-note">{'The same seed gives the same batch, so a failure can be re-run exactly.'}</span>
+            onChange={(e) => { change(setSeed)(e.target.value); setPinned(true); }} />
+          <label className="lab-small">
+            <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} />
+            {' keep this seed'}
+          </label>
+          <span className="lab-note">
+            {pinned
+              ? 'Pinned: Generate gives the same batch back, which is how a failure is re-run exactly.'
+              : 'A new seed each time, so every batch differs. Pin it to get this one back.'}
+          </span>
         </div>
 
         <div className="lab-row">
@@ -173,6 +192,42 @@ export default function Synthetic({ instance }) {
                   + ' · Models: ' + ((r.models || []).length ? r.models.join(', ') : '—')
                   + ' · ' + (r.spans || 0) + ' spans · ' + secs(r.ms) + ' · ' + usd(r.cost_usd)}
               </p>
+              {/* Every step, as the Runs page draws them: what ran, what it was given and what
+                  it returned. Shown here so a batch can be read before it is saved -- the saved
+                  one opens in Runs with notes beside each block. */}
+              {(r.steps || []).length ? (
+                <details className="lab-steps">
+                  <summary className="lab-small">{'Steps · ' + r.steps.length}</summary>
+                  <ol className="lab-steplist">
+                    <li className="lab-step">
+                      <span className="lab-stepkind">{'USER'}</span>
+                      <span>{r.question}</span>
+                    </li>
+                    {r.steps.map((st, i) => (
+                      <li key={st.id || i} className="lab-step"
+                        style={{ marginLeft: st.parent_id ? '16px' : 0 }}>
+                        <span className="lab-stepkind">{(st.kind || 'step').toUpperCase()}</span>
+                        <span>
+                          <strong>{st.name || '—'}</strong>
+                          {st.agent ? ' · ' + st.agent : ''}
+                          {st.model ? ' · ' + st.model : ''}
+                          {st.ms != null ? ' · ' + (st.ms / 1000).toFixed(2) + ' s' : ''}
+                          {st.cost_usd ? ' · $' + Number(st.cost_usd).toFixed(4) : ''}
+                          {st.ok === false ? ' · failed' : ''}
+                        </span>
+                        {st.input ? <div className="lab-steppayload">{'Given: ' + st.input}</div> : null}
+                        {st.output ? <div className="lab-steppayload">{'Returned: ' + st.output}</div> : null}
+                        {st.error ? <div className="lab-bad">{st.error}</div> : null}
+                      </li>
+                    ))}
+                    <li className="lab-step">
+                      <span className="lab-stepkind">{'FINAL ANSWER'}</span>
+                      <span>{r.answer || '(no answer)'}</span>
+                    </li>
+                  </ol>
+                </details>
+              ) : null}
+
               {r.refusal_expected ? (
                 <p className={r.gate_ok ? 'lab-note' : 'lab-bad'}>
                   {r.gate_ok

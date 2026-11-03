@@ -246,7 +246,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion} /> : null}
         {current === 'instance' ? <Instances instance={instance} onPick={pickInstance} /> : null}
-        {current === 'synthetic' ? <Synthetic instance={instance} /> : null}
+        {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} /> : null}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}

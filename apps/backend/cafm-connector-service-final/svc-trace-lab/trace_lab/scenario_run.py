@@ -24,6 +24,7 @@ is asked), and each question is captured by capture.run_message in the space the
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import datetime, timezone
@@ -31,7 +32,7 @@ from typing import Any
 
 import structlog
 
-from . import capture, orchestrator_host, scenarios
+from . import capture, orchestrator_host, scenario_store, scenarios
 
 log = structlog.get_logger(__name__)
 
@@ -68,6 +69,7 @@ async def run(space: str, *, count: int = 2, seed: int = 0, challenge_ratio: flo
     started = datetime.now(timezone.utc)
     t0 = time.perf_counter()
     out: list[dict[str, Any]] = []
+    captured: list[dict[str, Any]] = []
 
     for s in rows:
         sid = f"scenario-{space}-{uuid.uuid4().hex[:12]}"
@@ -76,7 +78,16 @@ async def run(space: str, *, count: int = 2, seed: int = 0, challenge_ratio: flo
                 orchestrator, question=s.question, session_id=sid, page_context=None,
                 principal=principal, organization_id=organization_id,
                 authorization=authorization, space=space)
-            out.append(_result(s, ct, sid, space))
+            tid = scenario_store.turn_id_for(sid, str(getattr(ct, "turn_id", "") or sid))
+            row = _result(s, ct, sid, space)
+            row["turn_id"] = tid
+            out.append(row)
+            # The turn and its spans travel beside the row: they are the record of this answer,
+            # and without them the review page has a question with no steps behind it.
+            captured.append({"turn_id": tid, "result": row, "turn": getattr(ct, "turn", None) or {},
+                             "spans": list(getattr(ct, "spans", None) or []),
+                             "cards": list(getattr(ct, "cards", None) or []),
+                             "refused": list(getattr(ct, "refused", None) or [])})
         except Exception as exc:                      # noqa: BLE001 - one question must not end the run
             log.warning("scenario_run.question_failed", scenario=s.scenario_id, error=str(exc)[:300])
             out.append({"scenario_id": s.scenario_id, "question": s.question, "space": space,
@@ -89,9 +100,44 @@ async def run(space: str, *, count: int = 2, seed: int = 0, challenge_ratio: flo
         "space": space, "seed": seed, "asked": len(out),
         "started_at": started.isoformat(), "ms": int((time.perf_counter() - t0) * 1000),
         "cost_usd": round(sum(float(r.get("cost_usd") or 0) for r in out), 6),
+        "requested": count,
+        "challenge_ratio": challenge_ratio,
+        "fingerprint": scenarios.fingerprint(rows),
+        # Filled in by the caller once the batch is written; False until then, so a reply never
+        # claims a run is somewhere to come back to when it is not.
         "persisted": False,
         "results": out,
+        # Not part of the reply: the store takes it and the route drops it.
+        "captured": captured,
     }
+
+
+#: How many steps travel back with one answer, and how much of each payload.
+MAX_STEPS = 60
+PAYLOAD_CHARS = 1200
+
+
+def _steps(spans: list) -> list[dict[str, Any]]:
+    """The span tree as the page draws it: in sequence, with the payloads trimmed."""
+    out = []
+    for sp in spans[:MAX_STEPS]:
+        out.append({
+            "id": sp.get("id"), "parent_id": sp.get("parent_id"), "seq": sp.get("seq"),
+            "kind": sp.get("kind"), "name": sp.get("name"), "agent": sp.get("agent"),
+            "model": sp.get("model"), "ms": sp.get("latency_ms"), "cost_usd": sp.get("cost_usd"),
+            "input": _trim(sp.get("input")), "output": _trim(sp.get("output")),
+            "ok": sp.get("ok"), "error": sp.get("error"),
+        })
+    return out
+
+
+def _trim(value: Any) -> str:
+    """A payload as the page shows it: one string, cut, never the whole prompt."""
+    if value is None:
+        return ""
+    s = value if isinstance(value, str) else json.dumps(value, default=str)
+    s = " ".join(s.split())
+    return s if len(s) <= PAYLOAD_CHARS else s[:PAYLOAD_CHARS - 1] + "…"
 
 
 def _now() -> str:
@@ -115,6 +161,11 @@ def _result(s: scenarios.Scenario, ct: Any, sid: str, space: str) -> dict[str, A
         "tool_count": len(tools),
         "models": models,
         "spans": len(spans),
+        # The steps themselves, so the page can show the trace without the batch having been
+        # saved first: USER / ORCHESTRATOR / MODEL / OUTPUT, what each was given and what it
+        # returned. Capped and trimmed -- a model input can be tens of thousands of characters,
+        # and this travels in an HTTP reply.
+        "steps": _steps(spans),
         "turn_id": turn.get("turn_id") or turn.get("id"),
         "session_id": sid,
         # The instance context, which is the whole reason the batch belongs to one space.

@@ -100,6 +100,9 @@ CREATE TABLE tracelab.scenario_results (
 CREATE INDEX ix_tl_scenario_results_run ON tracelab.scenario_results (run_id, seq_no);
 CREATE INDEX ix_tl_scenario_results_turn ON tracelab.scenario_results (turn_id);
 CREATE INDEX ix_tl_scenario_results_org ON tracelab.scenario_results (organization_id, asked_at DESC);
+-- The conversation lookup: a scenario turn is not in the chat's tables, so the review page resolves it from here by
+-- session, exactly as a golden turn is resolved from golden_results (conversations.golden_conversation).
+CREATE INDEX ix_tl_scenario_results_session ON tracelab.scenario_results (organization_id, session_id);
 -- The failure worth finding: a question outside its instance that was answered anyway.
 CREATE INDEX ix_tl_scenario_results_gate_failed ON tracelab.scenario_results (run_id)
     WHERE gate_ok IS FALSE;
