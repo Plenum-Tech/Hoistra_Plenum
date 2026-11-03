@@ -17,6 +17,7 @@ import Instances, { readInstance, writeInstance } from './Instances.jsx';
 import LabelsView from './LabelsView.jsx';
 import ProgressView from './ProgressView.jsx';
 import Notes from './Notes.jsx';
+import Learning from './Learning.jsx';
 import People from './People.jsx';
 
 const COMPANY_KEY = 'tracelab.company.v1';
@@ -25,7 +26,10 @@ const locks = () => { try { return navigator.locks || null; } catch (e) { return
 
 // The workspace menu. People is for company admins (and the platform team).
 export function navFor(me) {
-  const items = [['runs', 'Runs'], ['instance', 'Instance'], ['synthetic', 'Synthetic'], ['labels', 'Labels'], ['progress', 'Progress'], ['notes', 'Notes']];
+  // Learning sits after Notes because that is the order the work happens in: read a run, leave
+  // notes on it, then see what the notes add up to.
+  const items = [['runs', 'Runs'], ['instance', 'Instance'], ['synthetic', 'Synthetic'], ['labels', 'Labels'],
+    ['progress', 'Progress'], ['notes', 'Notes'], ['learning', 'Learning']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
 }
@@ -257,6 +261,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}
+        {current === 'learning' ? <Learning /> : null}
         {current === 'people' ? <People me={me} /> : null}
       </main>
     </div>

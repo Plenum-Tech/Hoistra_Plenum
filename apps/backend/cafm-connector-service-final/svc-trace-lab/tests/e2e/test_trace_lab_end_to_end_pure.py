@@ -202,6 +202,16 @@ NOT_DRIVEN = {
     "/lab/progress": "same", "/lab/q/{code}": "same", "/lab/q/{code}/expected": "same", "/lab/q/{code}/traces": "same", "/lab/q/{code}/candidates": "same",
     "/lab/q/{code}/cells": "same", "/lab/modes": "same", "/lab/modes/{lineage_id}": "same",
     "/lab/platform-members": "same",
+    # Synthetic batches (3 Nov): generation is deterministic and touches no database, and
+    # asking a question calls a model, so the SQL story cannot drive either. Covered by
+    # test_the_scenarios_route_generates_for_one_space, test_a_scenario_run_asks_for_real
+    # and test_a_saved_batch_is_reviewable, the last against a real Postgres.
+    "/scenarios/spaces": "synthetic batches (3 Nov): covered by test_the_scenarios_route_generates_for_one_space",
+    "/scenarios/generate": "same", "/scenarios/template.csv": "same",
+    "/scenarios/run": "calls a model: covered by test_a_scenario_run_asks_for_real",
+    "/lab/companies": "reads the application database, not Trace Lab's: covered by test_the_scenarios_route_generates_for_one_space",
+    "/learning/draft": "drafts the annotations (3 Nov): covered by test_the_learning_draft_is_built_from_what_reviewers_left",
+    "/learning/draft.md": "same",
 }
 
 
@@ -219,7 +229,7 @@ def _route_patterns() -> dict[str, re.Pattern]:
 
 
 def test_every_route_is_driven_by_the_story_or_named_as_not_driven():
-    source = SQL_STORY.read_text()
+    source = SQL_STORY.read_text(encoding="utf-8")
     uncovered = sorted(t for t, rx in _route_patterns().items() if not rx.search(source))
     assert set(uncovered) <= set(NOT_DRIVEN), f"routes the story neither drives nor names: {sorted(set(uncovered) - set(NOT_DRIVEN))}"
     stale = sorted(t for t in NOT_DRIVEN if t not in uncovered)

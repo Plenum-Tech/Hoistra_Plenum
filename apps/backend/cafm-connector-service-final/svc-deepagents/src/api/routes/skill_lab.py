@@ -4,6 +4,7 @@
     GET  /api/skill-lab/runs                         this company's runs, newest first
     GET  /api/skill-lab/runs/{run_id}                one run with every replayed answer and its score
     GET  /api/skill-lab/proposals                    instruction rewrites waiting for review, and active ones
+    POST /api/skill-lab/proposals                    an admin writes a rewrite themselves
     POST /api/skill-lab/proposals/{id}/approve       the rewrite becomes what the agents read
     POST /api/skill-lab/proposals/{id}/reject
     POST /api/skill-lab/docs/{skill}/{doc}/revert    back to the shipped file
@@ -29,6 +30,27 @@ class StartRun(BaseModel):
     kind: str = Field("compare", pattern="^(compare|optimise)$")
     sample: int = Field(6, ge=1, le=skill_lab.MAX_SAMPLE)
     organization_id: str | None = None
+
+
+class WriteProposal(BaseModel):
+    """A rewrite an admin writes, rather than one the optimiser produced.
+
+    The lab proposes rewrites by measuring them on replayed questions. A person reading what
+    reviewers actually said has no replay behind them, and should not need one: they are allowed
+    to say "the instructions should mention this" and have an admin approve it, which is the same
+    decision an admin already makes on a measured proposal.
+
+    `content` replaces the document. `append` adds to what it says now, which is the shape a
+    drafted lesson arrives in -- a paragraph to add, not a rewritten document. Exactly one.
+    """
+
+    skill: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    doc: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    content: str | None = Field(None, min_length=1, max_length=120_000)
+    append: str | None = Field(None, min_length=1, max_length=40_000)
+    #: Why, in the proposer's words. It is kept with the proposal so the approver is not asked to
+    #: judge a diff with no account of where it came from.
+    note: str | None = Field(None, max_length=2_000)
 
 
 def _admin(principal: Principal) -> None:
@@ -81,6 +103,55 @@ async def proposals(principal: Principal = Depends(current_principal)) -> dict[s
     shipped = {f"{s}/{d}": skill_overlays.doc(s, d) for s, d in skill_lab.TUNABLE}
     return {"ok": True, "proposals": rows, "tunable": sorted(f"{s}/{d}" for s, d in skill_lab.TUNABLE),
             "current": shipped}
+
+
+@router.post("/proposals")
+async def write_proposal(body: WriteProposal,
+                         principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """An admin proposes a rewrite they wrote themselves. It waits for approval like any other.
+
+    Refused for a document an overlay cannot reach. Only documents the agents read AT CALL TIME
+    can be overlaid: a prompt assembled once at import keeps its shipped text until the process
+    restarts, so a proposal against one of those would be approved and change nothing, and the
+    person who wrote it would have no way of telling. `skill_lab.TUNABLE` is that list, and the
+    refusal names it rather than leaving the caller to guess.
+    """
+    _admin(principal)
+    if (body.content is None) == (body.append is None):
+        raise HTTPException(status_code=400,
+                            detail="Send either content (the whole document) or append (a section to add), not both.")
+    if (body.skill, body.doc) not in skill_lab.TUNABLE:
+        raise HTTPException(status_code=400, detail={
+            "error": f"{body.skill}/{body.doc} cannot be overlaid, so approving a rewrite of it "
+                     f"would change nothing the agents read.",
+            "reason": "not_tunable",
+            "tunable": sorted(f"{s}/{d}" for s, d in skill_lab.TUNABLE),
+        })
+
+    current = skill_overlays.doc(body.skill, body.doc)
+    if body.append is not None and not current:
+        # Appending to nothing would silently propose a document consisting only of the addition,
+        # losing every instruction the agents run on today.
+        raise HTTPException(status_code=409,
+                            detail=f"{body.skill}/{body.doc} reads as empty right now, so there is nothing to "
+                                   f"append to. Send the whole document as content instead.")
+    content = body.content if body.content is not None else (current.rstrip() + "\n\n" + body.append.strip() + "\n")
+    if content.strip() == (current or "").strip():
+        raise HTTPException(status_code=409, detail="That is what the document already says.")
+
+    oid = await skill_overlays.propose(
+        skill=body.skill, doc_name=body.doc, content=content,
+        # Said in the evidence so the approver can see this was written, not measured: there is no
+        # score behind it and the screen must not imply there is.
+        evidence={"source": "written", "written_by": principal.email, "note": body.note,
+                  "mode": "append" if body.append is not None else "replace",
+                  "was_chars": len(current or ""), "now_chars": len(content)},
+        run_id=None, by=principal.email)
+    if not oid:
+        raise HTTPException(status_code=503, detail="The skill-overlay table is unavailable.")
+    return {"ok": True, "id": oid, "status": "proposed", "skill": body.skill, "doc": body.doc,
+            "measured": False,
+            "next": "It changes nothing until an admin approves it on this page."}
 
 
 @router.post("/proposals/{overlay_id}/approve")

@@ -47,10 +47,12 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Runs, Instance, Synthetic, Labels, Progress and Notes, plus People for admins; a question code names its run', () => {
-  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes']);
-  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes', 'people']);
-  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Notes']);
+test('the menu: Runs, Instance, Synthetic, Labels, Progress, Notes and Learning, plus People for admins; a question code names its run', () => {
+  const WORK = ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes', 'learning'];
+  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), WORK);
+  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), WORK.concat(['people']));
+  assert.deepEqual(L.navFor(null).map((x) => x[1]),
+    ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Notes', 'Learning']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -247,4 +249,77 @@ test('a saved batch says where to go and annotate it', () => {
     'the page still says the answers are not kept, which has not been true since they are saved as a run');
   assert.ok(/run\.persisted === false/.test(src),
     'a failed write must be reported as a failure, not inferred from a missing flag');
+});
+
+
+// Learning (3 Nov 2026): what the annotations add up to, and where it goes. The loop the feedback
+// asked for is annotate -> learn -> the skill document the agents read. This page is the middle of
+// it, and the part that matters most is that it never claims to be the end.
+test('Learning is a page of its own, and the lab app renders it', () => {
+  const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.ok(app.includes("import Learning from './Learning.jsx'"));
+  assert.ok(app.includes("current === 'learning' ? <Learning />"),
+    'the menu names a page nothing draws, so opening it shows nothing');
+  assert.deepEqual(L.navFor(null).map((x) => x[1]),
+    ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Notes', 'Learning']);
+});
+
+test('the draft comes from the service, not from the browser', () => {
+  const src = readFileSync(new URL('../Learning.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('labApi.learningDraft('), 'the page does not ask for the draft');
+  const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
+  assert.equal(api.split('/learning/draft').length - 1, 1, 'the route is named more than once, or not at all');
+});
+
+test('a draft can be narrowed to one run', () => {
+  const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
+  assert.ok(/learningDraft: \(run\) =>.*run \? \{ run \}/.test(api),
+    'every draft covers every run, so one run cannot be read on its own');
+});
+
+test('the page says it applies nothing, and where the draft has to go', () => {
+  // The whole risk of this page is somebody annotating a run, reading a tidy draft and believing
+  // the agents have been taught something. They have not: Trace Lab may never write the documents
+  // the agents read.
+  const src = readFileSync(new URL('../Learning.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('This page applies nothing'), 'the page never says it applies nothing');
+  assert.ok(src.includes('Skill lab'), 'it does not say where the draft is applied');
+  assert.ok(!/applies_anything.*true/.test(src));
+});
+
+test('the grouping by skill document is labelled as a suggestion', () => {
+  const src = readFileSync(new URL('../Learning.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('suggested'), 'a guessed document shown as a decision files lessons against the wrong agent');
+  assert.ok(src.includes('by_skill'), 'the page never shows the per-document grouping');
+});
+
+test('the .md is saved from what is already on the page', () => {
+  // An <a href> cannot carry the lab's bearer, so a link to the file route would download a 401.
+  const src = readFileSync(new URL('../Learning.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('URL.createObjectURL'), 'the download does not come from the loaded markdown');
+  assert.ok(!src.includes('learningDraftFileUrl'), 'a plain link to the file route downloads a 401');
+});
+
+
+// Cross-domain questions (3 Nov 2026). One question, three lookups — the shape an answer fails
+// quietly, by covering the first part well and dropping the rest. A reviewer cannot catch that
+// without knowing what the parts were, so the page has to carry them.
+test('a question that needs more than one area shows which, and what to cover', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes("'Needs ' + r.needs.join(' + ')"), 'the batch table never says a question has parts');
+  assert.ok(src.includes("Must cover: "), 'a reviewer is shown a three-part question with nothing to judge it against');
+});
+
+test('the batch summary counts them', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('batch.cross_domain'),
+    'a batch with none of these measures only the easy half of what people ask, and says nothing');
+});
+
+test('the answers carry the parts too, not just the batch table', () => {
+  // The answer is where the dropped part actually shows, so this is where it matters most.
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  const answers = src.slice(src.indexOf("{'Answers'}"));
+  assert.ok(answers.includes("' · needs ' + r.needs.join(' + ')"));
+  assert.ok(answers.includes("'Must cover: ' + r.covers"));
 });

@@ -54,8 +54,83 @@ def _skill_for(step_kind: str | None) -> str:
     return _STEP_TO_SKILL.get(str(step_kind or "").lower(), "general")
 
 
+#: The real skill folders in svc-deepagents, by the engine a step ran in. The reviewer picks the
+#: document in the end -- only they know what it already says -- but a draft that does not even
+#: name a candidate leaves them hunting through nine folders for the one the note is about.
+_ENGINE_TO_SKILL = {
+    "wo_engine": "wo-engine",
+    "compliance": "compliance",
+    "contract_performance": "contract-performance",
+    "energy_intelligence": "energy-intelligence",
+    "udr": "udr",
+    "doc_rag": "doc-rag",
+    "migration": "migration",
+}
+
+#: Which document inside that folder a note of this kind is usually about.
+_KIND_TO_DOC = {
+    "tool": "tool-selection.md",
+    "output": "answering.md",
+    "model": "answering.md",
+}
+
+#: Notes that are not about one engine. Routing and the way an answer is written are shared, and
+#: query-builder is where the shared instructions live (fm-lens is read by every answer writer).
+_SHARED = ("query-builder", "SKILL.md")
+
+
+def suggest(step_kind: str | None, step_title: str | None) -> tuple[str, str]:
+    """A candidate (skill, doc) for a note. A SUGGESTION, and labelled as one everywhere it is
+    shown: filing a lesson against the wrong document teaches the wrong agent."""
+    title = str(step_title or "").strip().lower().replace("-", "_").replace(" ", "_")
+    skill = None
+    for engine, folder in _ENGINE_TO_SKILL.items():
+        if engine in title:
+            skill = folder
+            break
+    if skill is None:
+        return _SHARED
+    return skill, _KIND_TO_DOC.get(str(step_kind or "").lower(), "SKILL.md")
+
+
+def by_skill(found: dict[str, Any]) -> list[dict[str, Any]]:
+    """The notes grouped by the document each one is probably about, with its own markdown.
+
+    One document at a time is how a skill document is actually edited, and how the Skill lab takes
+    a proposal: one (skill, doc) and the text it should have. A single draft of everything reads
+    well and cannot be applied.
+    """
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for n in found.get("notes") or []:
+        groups.setdefault(suggest(n.get("step_kind"), n.get("step_title")), []).append(n)
+    out = []
+    for (skill, doc_name), rows in sorted(groups.items()):
+        lines = [f"## What reviewers said about {skill}/{doc_name}", ""]
+        for n in rows:
+            who = n.get("reviewer_email") or n.get("reviewer_role") or "a reviewer"
+            lines += [f"- _{n.get('label') or 'noted'}_ on **{n.get('step_title') or n.get('step_kind')}** - {who}",
+                      f"  - > {_one_line(n['note'], 400)}"]
+            if n.get("question"):
+                lines += [f"  - Asked: {_one_line(n['question'])}"]
+            lines += [f"  - Turn: `{n['turn_id']}`", ""]
+        out.append({"skill": skill, "doc": doc_name, "notes": len(rows),
+                    "suggested": True, "markdown": "\n".join(lines).rstrip() + "\n"})
+    return out
+
+
 async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
-    """Everything reviewers have left that a draft can be built from, newest first."""
+    """Everything reviewers have left that a draft can be built from, newest first.
+
+    `run_code` narrows all three sources to one run, not just the expected answers. A draft headed
+    "R32" that carried every note the company has ever written would be read as what R32 showed.
+    A note reaches its run through the turn its step belongs to: step_labels knows the turn,
+    lab_question_traces knows which question that turn answered, and the question knows its run.
+    """
+    rn = _run_no(run_code) if run_code else None
+    in_run = (
+        " AND turn_id IN (SELECT t.turn_id FROM tracelab.lab_question_traces t"
+        "   JOIN tracelab.lab_questions q ON q.id = t.question_id"
+        "   JOIN tracelab.lab_runs r ON r.id = q.run_id WHERE r.run_no = :rn)")
     async with db.lab_engine().connect() as conn:
         notes = [dict(r) for r in (await conn.execute(text(
             "SELECT turn_id, step_kind, step_title, question, label, note, reviewer_email,"
@@ -63,8 +138,10 @@ async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
             " FROM tracelab.step_labels"
             " WHERE organization_id = CAST(:org AS uuid) AND NOT tombstone AND superseded_by IS NULL"
             "   AND note IS NOT NULL"
+            + (in_run if rn is not None else "") +
             " ORDER BY created_at DESC LIMIT :lim"),
-            {"org": org, "lim": MAX_PER_SOURCE})).mappings().all()]
+            {"org": org, "lim": MAX_PER_SOURCE,
+             **({"rn": rn} if rn is not None else {})})).mappings().all()]
 
         expected = [dict(r) for r in (await conn.execute(text(
             "SELECT q.question, e.expected, e.author_email, e.created_at, r.title AS run_title"
@@ -77,15 +154,29 @@ async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
             {"org": org, "lim": MAX_PER_SOURCE,
              **({"rn": _run_no(run_code)} if run_code else {})})).mappings().all()]
 
+        # The gate verdicts live in the 0012 tables, which a person applies and which are not
+        # applied everywhere yet. Asking for them unconditionally made the whole draft 500 where
+        # they are absent -- the notes and expected answers, which need nothing from 0012, were
+        # lost with them. Missing means "no gate failures to report", not "no draft".
+        has_scenarios = (await conn.execute(text(
+            "SELECT to_regclass('tracelab.scenario_results')"))).scalar() is not None
         gates = [dict(r) for r in (await conn.execute(text(
             "SELECT s.question, s.engine, s.answer, r.space, s.scenario_id, s.asked_at"
             " FROM tracelab.scenario_results s"
             " JOIN tracelab.scenario_runs r ON r.id = s.run_id"
             " WHERE s.organization_id = CAST(:org AS uuid) AND s.gate_ok IS FALSE"
+            + (" AND s.turn_id IN (SELECT t.turn_id FROM tracelab.lab_question_traces t"
+               "   JOIN tracelab.lab_questions q ON q.id = t.question_id"
+               "   JOIN tracelab.lab_runs r2 ON r2.id = q.run_id WHERE r2.run_no = :rn)"
+               if rn is not None else "") +
             " ORDER BY s.asked_at DESC LIMIT :lim"),
-            {"org": org, "lim": MAX_PER_SOURCE})).mappings().all()]
+            {"org": org, "lim": MAX_PER_SOURCE,
+             **({"rn": rn} if rn is not None else {})})).mappings().all()] if has_scenarios else []
 
-    return {"notes": notes, "expected": expected, "gates": gates,
+    return {"notes": notes, "expected": expected, "gates": gates, "run_code": run_code,
+            # False means gate failures could not be looked for, which is not the same as there
+            # being none. Said in the reply rather than left to be inferred from a zero.
+            "gates_available": has_scenarios,
             "counts": {"notes": len(notes), "expected": len(expected), "gates": len(gates)}}
 
 

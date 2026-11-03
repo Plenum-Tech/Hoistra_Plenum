@@ -43,7 +43,11 @@ export const skillLabMethods = {
     try {
       const [runs, props] = await Promise.all([deepAgentsApi.skillLabRuns(), deepAgentsApi.skillLabProposals()]);
       this.setState({ slLoading: false, slLoadedAt: Date.now(), slRuns: (runs && runs.runs) || [], slRunning: !!(runs && runs.running),
-        slProposals: (props && props.proposals) || [], slCurrent: (props && props.current) || {} });
+        slProposals: (props && props.proposals) || [], slCurrent: (props && props.current) || {},
+        // Which documents an overlay actually reaches. The service decides this, not the page:
+        // a rewrite of anything else would be approved and change nothing the agents read.
+        slTunable: (props && props.tunable) || [],
+        slDoc: this.state.slDoc || ((props && props.tunable) || [])[0] || '' });
       // A run in progress is polled until it finishes.
       clearTimeout(this._slPoll);
       if (runs && runs.running) this._slPoll = setTimeout(() => { if (this.state.view === 'skilllab') this.slLoad(); }, 15000);
@@ -79,6 +83,33 @@ export const skillLabMethods = {
       this.flash('Could not read the run: ' + ((e && e.message) || e));
     }
   },
+  slSetDoc(e) { this.setState({ slDoc: (e && e.target ? e.target.value : e) || '' }); },
+  slSetAppend(e) { this.setState({ slAppend: (e && e.target ? e.target.value : e) || '' }); },
+  slSetNote(e) { this.setState({ slNote: (e && e.target ? e.target.value : e) || '' }); },
+
+  // A rewrite written from what reviewers said. It is sent as an APPEND, because that is the
+  // shape a drafted lesson arrives in -- a paragraph to add, not a rewritten document -- and
+  // because replacing the whole text by hand is how instructions get silently dropped.
+  async slWrite() {
+    const doc = String(this.state.slDoc || '');
+    const append = String(this.state.slAppend || '').trim();
+    const at = doc.indexOf('/');
+    if (at < 1) return this.flash('Choose the document to add this to.');
+    if (!append) return this.flash('Write what the instructions should say.');
+    this.setState({ slWriting: true });
+    try {
+      await deepAgentsApi.skillLabWrite({ skill: doc.slice(0, at), doc: doc.slice(at + 1), append: append,
+        note: String(this.state.slNote || '').trim() || undefined });
+      this.setState({ slWriting: false, slAppend: '', slNote: '' });
+      this.flash('Proposed. It changes nothing until it is approved below.');
+      this.slLoad();
+    } catch (e) {
+      this.setState({ slWriting: false });
+      const d = e && e.body && e.body.detail;
+      this.flash('Could not propose it: ' + ((d && d.error) || (typeof d === 'string' ? d : '') || (e && e.message) || e));
+    }
+  },
+
   async slReview(id, decision) {
     try {
       if (decision === 'revert') await deepAgentsApi.skillLabRevert('query-builder', 'context-budget');
@@ -133,8 +164,23 @@ export function skillLabVals(c, now) {
       error: x.error || ''
     })) : [],
     slRunLoading: !!s.slRunId && !run,
+    // Writing a rewrite by hand. Only the documents the service says an overlay reaches.
+    slTunable: s.slTunable || [],
+    slDoc: s.slDoc || '',
+    slSetDoc: (e) => c.slSetDoc(e),
+    slAppend: s.slAppend || '',
+    slSetAppend: (e) => c.slSetAppend(e),
+    slNote: s.slNote || '',
+    slSetNote: (e) => c.slSetNote(e),
+    slWrite: () => c.slWrite(),
+    slWriting: !!s.slWriting,
     slProposals: props.filter((p) => p.status === 'proposed').map((p) => ({
       id: p.id, doc: p.skill + '/' + p.doc, when: fmtAgo(p.created_at, now),
+      // A written rewrite has no score behind it. Saying so is the point: these sit beside
+      // proposals that won a measured comparison and must not read as if they had.
+      written: !!(p.evidence && p.evidence.source === 'written'),
+      writtenBy: (p.evidence && p.evidence.written_by) || '',
+      note: (p.evidence && p.evidence.note) || '',
       verdict: (p.evidence && p.evidence.verdict) || '', rationale: (p.evidence && p.evidence.rationale) || '',
       content: p.content, current: (s.slCurrent || {})[p.skill + '/' + p.doc] || '',
       approve: () => c.slReview(p.id, 'approve'), reject: () => c.slReview(p.id, 'reject')
