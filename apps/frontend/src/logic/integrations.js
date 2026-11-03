@@ -1,7 +1,6 @@
 // integrations — integrations admin view model.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { t } from './constants.js';
-import { traceLabActive, traceLabNav } from '../tracelab/nav.js';
 
 // The source types the connector service implements — one per plugin in
 // cafm-connector-service/src/cafm_connector/connectors/plugins, described by that plugin's own
@@ -61,10 +60,6 @@ export const integrationsMethods = {
 
     return {
       isInteg: s.signedIn && s.view === "integ",
-      // Trace Lab (attachment A2). Its own module decides whether it shows: with the build flag
-      // off traceLabNav returns nothing and traceLabActive is false, so the app gains no item,
-      // never renders the page, and never requests its chunk.
-      isTraceLab: traceLabActive(s),
       navAdmin: s.role !== "admin" ? [] : [{
         label: "Integrations", icon: "ph-plugs-connected", badge: String(conn.length),
         color: s.view === "integ" ? "var(--color-accent)" : "var(--color-neutral-300)",
@@ -115,7 +110,7 @@ export const integrationsMethods = {
           // Coming back to the page is a visit to the tab it is on (pre-push review, 29 Sep 2026).
           if (this.state.auTab === "vendors") this.vaLoad();
         }
-      }].concat(traceLabNav(s, this)),
+      }],
 
       intTiles: [
         { value: conn.length, label: "Connected", hint: "sources landing rows", color: "var(--color-accent)", click: () => this.setState({ intTab: 0, intQ: "" }) },

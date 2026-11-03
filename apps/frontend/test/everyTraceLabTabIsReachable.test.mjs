@@ -44,13 +44,14 @@ test('the bar names each tab in order', () => {
 });
 
 test('exactly one tab is marked current', () => {
-  const view = tabsView({ tab: 'scenarios' });
-  assert.deepEqual(view.filter((t) => t.on).map((t) => t.key), ['scenarios']);
+  const view = tabsView({ tab: 'golden' });
+  assert.deepEqual(view.filter((t) => t.on).map((t) => t.key), ['golden']);
 });
 
-test('the synthetic questions tab is there, named, and drawn', () => {
-  // The reported one, pinned by name so a rename has to be deliberate.
-  assert.ok(TABS.includes('scenarios'));
-  assert.equal(TAB_LABELS.scenarios, 'Synthetic questions');
-  assert.ok(APP.includes("s.tab === 'scenarios'"));
+test('synthetic question generation is not in this Trace Lab', () => {
+  // It lives in the lab app at /lab/ (src/lab/Synthetic.jsx), which is the Trace Lab a reviewer
+  // signs into. It was built here first by mistake; a tab here would be a second copy of the
+  // same page, and the two would drift.
+  assert.ok(!TABS.includes('scenarios'), 'the admin Trace Lab grew a synthetic tab again');
+  assert.ok(!APP.includes('Scenarios'), 'TraceLabApp still renders the removed page');
 });

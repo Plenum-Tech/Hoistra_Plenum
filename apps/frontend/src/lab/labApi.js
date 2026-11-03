@@ -19,6 +19,12 @@ function call(method, path, opts) {
 
 export const labApi = {
   me: () => call('GET', '/lab/me'),
+  // Synthetic batches: the instances a batch can be generated for, the batch itself, and asking
+  // a few of them for real. Generation calls no model; the run calls one per question, which is
+  // why it waits minutes rather than seconds.
+  spaces: () => call('GET', '/scenarios/spaces'),
+  generate: (body) => call('POST', '/scenarios/generate', { body, timeoutMs: 30000 }),
+  runScenarios: (body) => call('POST', '/scenarios/run', { body, timeoutMs: 600000 }),
   members: () => call('GET', '/lab/members'),
   member: (userId) => call('GET', '/lab/members/' + enc(userId)),
   decide: (userId, body) => call('PUT', '/lab/members/' + enc(userId), { body }),

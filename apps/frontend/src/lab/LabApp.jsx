@@ -12,6 +12,7 @@ import { createLabAuth } from './authFlow.js';
 import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
 import RunsPage from './Runs.jsx';
+import Synthetic from './Synthetic.jsx';
 import LabelsView from './LabelsView.jsx';
 import ProgressView from './ProgressView.jsx';
 import Notes from './Notes.jsx';
@@ -23,7 +24,7 @@ const locks = () => { try { return navigator.locks || null; } catch (e) { return
 
 // The workspace menu. People is for company admins (and the platform team).
 export function navFor(me) {
-  const items = [['runs', 'Runs'], ['labels', 'Labels'], ['progress', 'Progress'], ['notes', 'Notes']];
+  const items = [['runs', 'Runs'], ['synthetic', 'Synthetic'], ['labels', 'Labels'], ['progress', 'Progress'], ['notes', 'Notes']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
 }
@@ -239,6 +240,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
       </div>
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion} /> : null}
+        {current === 'synthetic' ? <Synthetic /> : null}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}

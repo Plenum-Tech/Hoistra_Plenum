@@ -4,6 +4,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { bundle, cleanBundles } from '../../tracelab/__tests__/esbuild-helper.mjs';
+import { readFileSync } from 'node:fs';
 
 globalThis.window = globalThis.window || { location: { origin: 'http://test.local', pathname: '/lab/', search: '' }, history: { replaceState: () => {} } };
 after(cleanBundles);
@@ -46,10 +47,10 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Runs, Labels, Progress and Notes, plus People for admins; a question code names its run', () => {
-  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'labels', 'progress', 'notes']);
-  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'labels', 'progress', 'notes', 'people']);
-  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Labels', 'Progress', 'Notes']);
+test('the menu: Runs, Synthetic, Labels, Progress and Notes, plus People for admins; a question code names its run', () => {
+  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'synthetic', 'labels', 'progress', 'notes']);
+  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'synthetic', 'labels', 'progress', 'notes', 'people']);
+  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Synthetic', 'Labels', 'Progress', 'Notes']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -84,4 +85,38 @@ test('Home: the company, the next step as one button, five stage cards', () => {
   assert.ok(out.includes('Start reviewing'));
   assert.equal((out.match(/class="lab-card"/g) || []).length, 5);
   assert.ok(out.includes('13 reviewed'));
+});
+
+
+// Synthetic question generation lives in the lab app, not the tab embedded in Hoistra: this is
+// the Trace Lab a reviewer actually opens (3 Nov 2026).
+test('Synthetic is a page of its own, and the lab app renders it', () => {
+  const src = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes("import Synthetic from './Synthetic.jsx'"));
+  assert.ok(src.includes("current === 'synthetic' ? <Synthetic />"),
+    'the menu names a page nothing draws, so opening it shows nothing');
+});
+
+test('it asks the service rather than making questions up in the browser', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  for (const call of ['labApi.spaces(', 'labApi.generate(', 'labApi.runScenarios(']) {
+    assert.ok(src.includes(call), 'the page does not call ' + call);
+  }
+  assert.ok(!/BY_ENGINE|const QUESTIONS/.test(src),
+    'a question list in the browser is a second copy of the generator, free to drift from the '
+    + 'one the service verifies against the real router');
+});
+
+test('the instance is sent with every call', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  const calls = src.split(String.fromCharCode(10)).filter((l) => l.includes('labApi.generate(') || l.includes('labApi.runScenarios('));
+  assert.ok(calls.length >= 2);
+  for (const c of calls) assert.ok(c.includes('space') || src.includes('{ space,'), c);
+});
+
+test('the lab api names the three scenario routes once', () => {
+  const src = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
+  for (const path of ['/scenarios/spaces', '/scenarios/generate', '/scenarios/run']) {
+    assert.equal(src.split(path).length - 1, 1, path + ' is named more than once, or not at all');
+  }
 });
