@@ -169,22 +169,34 @@ def _close(t: Any, *, answer: str, error: str | None) -> None:
 
 
 async def run_message(orchestrator: Any, *, question: str, session_id: str, page_context: str | None,
-                      principal: Any, organization_id: str | None, authorization: str | None) -> CapturedTurn:
+                      principal: Any, organization_id: str | None, authorization: str | None,
+                      space: str | None = None) -> CapturedTurn:
     """Answer one golden message for real and capture it. Never raises for a chat failure: errors,
-    timeouts and exceptions come back in the CapturedTurn."""
+    timeouts and exceptions come back in the CapturedTurn.
+
+    `space` is the role space to ask in (agents/spaces.py), set here exactly as the chat's own
+    WebSocket route sets it. Without it a batch is asked with no space, which allows every engine
+    -- right for a caller who has not picked an instance, wrong for a run that is supposed to be
+    measuring one."""
     return await asyncio.create_task(_run(orchestrator, question=question, session_id=session_id,
                                           page_context=page_context, principal=principal,
-                                          organization_id=organization_id, authorization=authorization))
+                                          organization_id=organization_id, authorization=authorization,
+                                          space=space))
 
 
 async def _run(orchestrator: Any, *, question: str, session_id: str, page_context: str | None, principal: Any,
-               organization_id: str | None, authorization: str | None) -> CapturedTurn:
+               organization_id: str | None, authorization: str | None,
+               space: str | None = None) -> CapturedTurn:
     from src.agents import activity_log, context_budget, llm_cost, trace
     from src.http_client import caller_authorization, caller_organization_id
     from src.services import skill_overlays
+    from src.agents import spaces
     from src.services.principal import caller_principal
 
     caller_principal.set(principal)
+    # The instance this batch is asked in. A ContextVar, set in this task like the caller vars
+    # above, so it dies with the task and never leaks into the next question.
+    spaces.active_space.set(space or None)
     caller_organization_id.set(acting_org_for(principal, organization_id))
     caller_authorization.set(authorization)
     context_budget.MODE.set(None)

@@ -109,8 +109,12 @@ def _git(*args: str) -> str:
     """Read-only git in the repository; the test skips when git or the base commit is not there."""
     assert ROOT is not None
     try:
+        # encoding, not just text=True: git hands back the blob's bytes, and text=True decodes
+        # them with the LOCALE encoding -- cp1252 on Windows. The deploy files are UTF-8 and the
+        # comments in them use em-dashes, so every non-ASCII character came back mangled and a
+        # file identical to its committed blob compared as changed (2 Nov 2026).
         done = subprocess.run(["git", "--no-optional-locks", "-C", str(ROOT), *args], capture_output=True, text=True,
-                              timeout=30)
+                              encoding="utf-8", errors="replace", timeout=30)
     except FileNotFoundError:
         pytest.skip("git is not installed")
     if done.returncode != 0:

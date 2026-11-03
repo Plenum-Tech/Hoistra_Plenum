@@ -52,6 +52,12 @@ class GoldenRunEstimate(BaseModel):
     k: int = Field(1, ge=1, le=20)                           # repetitions; runner.max_k() may lower the ceiling
     purpose: Literal["adhoc", "baseline", "release_check", "repeat"] = "adhoc"
     context_default: str = Field("", max_length=4000)        # the page context for cases that name none
+    # The role space the batch is asked in (agents/spaces.py). It decides which engines may
+    # answer at all -- compliance is not reachable from Ops Brain -- so a run that does not name
+    # one is measuring an undefined configuration, and two runs of the same question in
+    # different spaces are indistinguishable afterwards. None means every engine, which is what
+    # a caller who names no space already gets.
+    space: Literal["ops", "comp", "assets", "full"] | None = None
 
 
 class GoldenRunStart(GoldenRunEstimate):

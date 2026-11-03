@@ -377,7 +377,8 @@ def _sha12(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
-def like_for_like(*, context_default: str, set_hash: str, model: str) -> dict[str, Any]:
+def like_for_like(*, context_default: str, set_hash: str, model: str,
+                  space: str | None = None) -> dict[str, Any]:
     """What can change answers between runs, kept on the run so Compare says why two runs differ."""
     from src.config import settings
     from src.services import skill_overlays
@@ -387,7 +388,11 @@ def like_for_like(*, context_default: str, set_hash: str, model: str) -> dict[st
                                                          "COMPLIANCE_SELECTIVE_SKILLS", "CONTEXT_SELF_MANAGE")},
             "git_sha": os.getenv("GIT_SHA") or os.getenv("IMAGE_TAG") or None,
             "overlays_sha": _sha12({f"{s}/{d}": c for (s, d), c in sorted(skill_overlays._active.items())}),
-            "context_default_sha": _sha12(context_default), "set_hash": set_hash}
+            "context_default_sha": _sha12(context_default), "set_hash": set_hash,
+            # Which engines could answer at all. Belongs here by the definition above: a question
+            # asked in Ops Brain cannot reach the compliance engine, so the same set run in two
+            # spaces is two different measurements (2 Nov 2026).
+            "space": space}
 
 
 async def start_run(*, org: str, principal: Any, authorization: str | None, body: Any) -> dict[str, Any]:
@@ -415,12 +420,15 @@ async def start_run(*, org: str, principal: Any, authorization: str | None, body
     await orchestrator_host.ensure_overlays_readonly()
     run_id = str(uuid.uuid4())
     context_default = str(_field(body, "context_default", "") or "")[:4000]
+    space = _field(body, "space", None) or None
     set_hash = golden.set_hash([(c["case_key"], str(c.get("case_version") or "")) for c in kept])
     params = {"case_keys": est["case_keys"], "skipped": est["skipped"], "flagged": est["flagged"],
               "context_default": context_default, "acting_org": org, "per_answer_usd": est["per_answer_usd"],
               "per_grade_usd": est["per_grade_usd"], "note": str(_field(body, "note", "") or "")[:500] or None,
               "started_by_role": getattr(principal, "role", None),
-              **like_for_like(context_default=context_default, set_hash=set_hash, model=est["grader_model"])}
+              "space": space,
+              **like_for_like(context_default=context_default, set_hash=set_hash,
+                              model=est["grader_model"], space=space)}
     try:
         job = await jobs.create(kind="golden_run", scope_key=f"golden_run:{org}", organization_id=org,
                                 params={"run_id": run_id, "set_id": est["set_id"], "k": est["k"],
@@ -743,7 +751,8 @@ async def _run_item(run: dict[str, Any], case: dict[str, Any], rep: int, attempt
                         break
                     ct = await capture.run_message(orchestrator, question=question, session_id=sid, page_context=page,
                                                    principal=principal, organization_id=org,
-                                                   authorization=authorization)
+                                                   authorization=authorization,
+                                                   space=(run.get("params") or {}).get("space"))
                     ct.history = [{"question": c.question, "answer": c.answer} for c in captured]
                     captured.append(ct)
                     await jobs.heartbeat(run["job_id"], progress_patch={"current": {
