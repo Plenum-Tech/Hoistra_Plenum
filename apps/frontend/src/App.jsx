@@ -1,4 +1,5 @@
 import React from 'react';
+import TraceLabMount from './tracelab/Mount.jsx';
 import { useHoistra } from './logic/useHoistra.js';
 import Gate from './screens/Gate.jsx';
 import Navigator from './components/shell/Navigator.jsx';
@@ -73,6 +74,10 @@ export default function App() {
           {vals.orchOpen ? <OrchestratorDock vals={vals} /> : null}
         </>
       ) : null}
+      {/* Trace Lab (attachment A1). The mount is a lazy chunk behind its own error
+          boundary: with the build flag off it renders nothing and the chunk is never
+          requested, and a failure inside it does not take the rest of the app down. */}
+      {vals.isTraceLab ? <TraceLabMount vals={vals} /> : null}
       {vals.isHome ? <Home vals={vals} /> : null}
       {vals.isAnswer ? <Answer vals={vals} /> : null}
       {vals.isChat ? <Chat vals={vals} /> : null}
