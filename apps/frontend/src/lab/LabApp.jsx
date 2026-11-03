@@ -13,6 +13,7 @@ import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
 import RunsPage from './Runs.jsx';
 import Synthetic from './Synthetic.jsx';
+import Instances, { readInstance, writeInstance } from './Instances.jsx';
 import LabelsView from './LabelsView.jsx';
 import ProgressView from './ProgressView.jsx';
 import Notes from './Notes.jsx';
@@ -24,7 +25,7 @@ const locks = () => { try { return navigator.locks || null; } catch (e) { return
 
 // The workspace menu. People is for company admins (and the platform team).
 export function navFor(me) {
-  const items = [['runs', 'Runs'], ['synthetic', 'Synthetic'], ['labels', 'Labels'], ['progress', 'Progress'], ['notes', 'Notes']];
+  const items = [['runs', 'Runs'], ['instance', 'Instance'], ['synthetic', 'Synthetic'], ['labels', 'Labels'], ['progress', 'Progress'], ['notes', 'Notes']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
 }
@@ -194,6 +195,10 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const [run, setRun] = React.useState(start.current.run);
   const [question, setQuestion] = React.useState(start.current.question);
   const [runs, setRuns] = React.useState(null);
+  // The instance everything in the lab is asked in. Kept for this browser tab, so a reload
+  // does not quietly move a batch to a different set of engines.
+  const [instance, setInstance] = React.useState(readInstance);
+  const pickInstance = React.useCallback((k) => { setInstance(k); writeInstance(k); }, []);
   const [syncing, setSyncing] = React.useState(false);
   const [synced, setSynced] = React.useState('');
   const [stamp, setStamp] = React.useState(0);
@@ -240,7 +245,8 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
       </div>
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion} /> : null}
-        {current === 'synthetic' ? <Synthetic /> : null}
+        {current === 'instance' ? <Instances instance={instance} onPick={pickInstance} /> : null}
+        {current === 'synthetic' ? <Synthetic instance={instance} /> : null}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}

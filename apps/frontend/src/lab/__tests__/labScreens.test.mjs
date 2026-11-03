@@ -47,10 +47,10 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Runs, Synthetic, Labels, Progress and Notes, plus People for admins; a question code names its run', () => {
-  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'synthetic', 'labels', 'progress', 'notes']);
-  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'synthetic', 'labels', 'progress', 'notes', 'people']);
-  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Synthetic', 'Labels', 'Progress', 'Notes']);
+test('the menu: Runs, Instance, Synthetic, Labels, Progress and Notes, plus People for admins; a question code names its run', () => {
+  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes']);
+  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes', 'people']);
+  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Notes']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -93,7 +93,7 @@ test('Home: the company, the next step as one button, five stage cards', () => {
 test('Synthetic is a page of its own, and the lab app renders it', () => {
   const src = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes("import Synthetic from './Synthetic.jsx'"));
-  assert.ok(src.includes("current === 'synthetic' ? <Synthetic />"),
+  assert.ok(src.includes("current === 'synthetic' ? <Synthetic instance={instance} />"),
     'the menu names a page nothing draws, so opening it shows nothing');
 });
 
@@ -119,4 +119,39 @@ test('the lab api names the three scenario routes once', () => {
   for (const path of ['/scenarios/spaces', '/scenarios/generate', '/scenarios/run']) {
     assert.equal(src.split(path).length - 1, 1, path + ' is named more than once, or not at all');
   }
+});
+
+
+// The instance is one setting with one place to change it (3 Nov 2026).
+test('the instance is chosen on its own page and carried to Synthetic', () => {
+  const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.ok(app.includes("current === 'instance' ? <Instances instance={instance} onPick={pickInstance} />"));
+  assert.ok(app.includes('<Synthetic instance={instance} />'),
+    'Synthetic would pick its own instance again, and the two controls would disagree');
+});
+
+test('Synthetic offers no second way to change the instance', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  // setSpace, not setSpace: setSpaces is the list of instances read from the service.
+  assert.ok(!/setSpace\b|aria-label="Instance"/.test(src));
+  assert.ok(src.includes('const space = instance;'));
+});
+
+test('a batch is cleared when the instance changes', () => {
+  // Ops Brain questions must not sit under a Compliance Engine heading.
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(/setBatch\(null\); setRun\(null\); setError\(''\); \}, \[instance\]\)/.test(src));
+});
+
+test('the instance cards come from the product, not a copy in the lab', () => {
+  const src = readFileSync(new URL('../Instances.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes("from '../logic/instances.js'"),
+    'a copy of the card text here could describe an instance the product no longer has');
+  assert.ok(!/Ops Brain'[,:]/.test(src.replace(/DEFAULT_INSTANCE[\s\S]*?;/, '')));
+});
+
+test('an unknown stored instance falls back rather than generating for nothing', () => {
+  const src = readFileSync(new URL('../Instances.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('INSTANCES.some((i) => i.key === v)'));
+  assert.ok(src.includes('catch'), 'sessionStorage throws in a private window');
 });

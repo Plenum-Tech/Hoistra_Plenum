@@ -99,7 +99,7 @@ export const INSTANCES = [
 ];
 export const INSTANCE_KEYS = INSTANCES.map((i) => i.key);
 
-const REPORT_LABEL = { buildings: 'Buildings & Hoist Graph', graph: 'Compliance Graph', compliance: 'Compliance', vendors: 'Vendors', energy: 'Energy', assets: 'Assets', ops: 'Maintenance' };
+export const REPORT_LABEL = { buildings: 'Buildings & Hoist Graph', graph: 'Compliance Graph', compliance: 'Compliance', vendors: 'Vendors', energy: 'Energy', assets: 'Assets', ops: 'Maintenance' };
 // The navigator's report keys (renderVals navSections) → the instance's report keys.
 const NAV_REPORT = { buildings_user: 'buildings', compliance: 'compliance', vendors: 'vendors', energy: 'energy', assets: 'assets', ops: 'ops' };
 // The built-in spaces (spacesLive.js BUILTIN_SPACES) → the report each one belongs to.

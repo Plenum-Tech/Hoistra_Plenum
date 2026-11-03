@@ -12,6 +12,7 @@
 // needs a scenario table, and a Trace Lab migration is applied by a person.
 import React from 'react';
 import { labApi } from './labApi.js';
+import { instanceName } from './Instances.jsx';
 
 const COUNTS = [10, 25, 50, 100];
 const ASK = [1, 2, 3, 5];
@@ -20,9 +21,11 @@ const REFUSALS = [[0, 'none'], [0.1, '10%'], [0.25, '25%']];
 const secs = (ms) => Math.round((Number(ms) || 0) / 1000) + 's';
 const usd = (n) => '$' + Number(n || 0).toFixed(4);
 
-export default function Synthetic() {
+export default function Synthetic({ instance }) {
+  // The instance is chosen on its own page; this one works in it rather than offering a second
+  // place to change it, which is how two controls for one setting come to disagree.
+  const space = instance;
   const [spaces, setSpaces] = React.useState([]);
-  const [space, setSpace] = React.useState('ops');
   const [count, setCount] = React.useState(10);
   const [seed, setSeed] = React.useState(1);
   const [challenge, setChallenge] = React.useState(0);
@@ -32,6 +35,10 @@ export default function Synthetic() {
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [run, setRun] = React.useState(null);
+
+  // A batch on screen belongs to the instance it was generated in. Switching instance elsewhere
+  // must not leave Ops Brain questions sitting under a Compliance Engine heading.
+  React.useEffect(() => { setBatch(null); setRun(null); setError(''); }, [instance]);
 
   React.useEffect(() => {
     let gone = false;
@@ -74,7 +81,6 @@ export default function Synthetic() {
   }
 
   const chosen = spaces.find((s) => s.key === space);
-  const chips = spaces.length ? spaces : [{ key: 'ops', name: 'Ops Brain', engines: [] }];
 
   return (
     <div className="lab-page-body lab-page-full">
@@ -88,13 +94,8 @@ export default function Synthetic() {
       <div className="lab-card">
         <div className="lab-row">
           <span className="lab-small">{'Instance'}</span>
-          <div className="lab-seg" role="radiogroup" aria-label="Instance">
-          {chips.map((s) => (
-            <button key={s.key} type="button" className={'lab-seg-btn' + (s.key === space ? ' lab-on' : '')}
-              aria-pressed={s.key === space ? 'true' : 'false'}
-              onClick={() => change(setSpace)(s.key)}>{s.name}</button>
-          ))}
-          </div>
+          <strong>{instanceName(space)}</strong>
+          <span className="lab-note">{'Chosen on the Instance page. Everything below is generated and asked there.'}</span>
         </div>
         {chosen && chosen.engines && chosen.engines.length ? (
           <p className="lab-note">{'Answers can come from: ' + chosen.engines.join(', ') + '.'}</p>
