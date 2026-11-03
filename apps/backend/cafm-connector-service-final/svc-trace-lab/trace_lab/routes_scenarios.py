@@ -5,10 +5,12 @@
     GET  /scenarios/spaces       the spaces that can be generated for, and the engines each has
     GET  /scenarios/template.csv the batch as the golden-set upload takes it
 
-Who: a reviewer of the company (routes_conversations.reviewer), the same gate as every other
-golden route -- plain users never open Trace Lab. Generation calls no model and touches no
-database: it is deterministic from (space, seed), so the same batch can be produced again to
-re-run a failure exactly.
+Who: generating reads NO company data -- it is deterministic from (space, seed), calls no model
+and touches no database -- so it asks for a reader (a company admin, or any superadmin), the same
+gate /golden/grader uses. Requiring a company for it refused the platform view with "Choose a
+company to view as first" for a batch that does not belong to a company anyway (3 Nov 2026).
+Asking the questions is different: it reads one company's data through the chat, so /scenarios/run
+keeps the reviewer gate and the company that comes with it.
 
 The expected-answer column of the CSV is deliberately EMPTY. A golden case needs a known right
 answer, and an expected answer has to be grounded in a real row and then read by a person --
@@ -26,6 +28,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
 from . import db, scenario_run, scenarios
+from .routes_golden import reader
 from .routes_conversations import Reviewer, reviewer
 
 router = APIRouter(tags=["Trace Lab scenarios"])
@@ -46,7 +49,7 @@ class GenerateRequest(BaseModel):
 
 
 @router.get("/scenarios/spaces")
-async def list_spaces(who: Reviewer = Depends(reviewer)) -> dict[str, Any]:
+async def list_spaces(who: Any = Depends(reader)) -> dict[str, Any]:
     """Each space, what it is called, and which engines a batch for it can use."""
     from src.agents.spaces import SPACE_NAMES
 
@@ -57,7 +60,7 @@ async def list_spaces(who: Reviewer = Depends(reviewer)) -> dict[str, Any]:
 
 
 @router.post("/scenarios/generate")
-async def generate(body: GenerateRequest, who: Reviewer = Depends(reviewer)) -> dict[str, Any]:
+async def generate(body: GenerateRequest, who: Any = Depends(reader)) -> dict[str, Any]:
     """A batch for one space. Every question is put to the real router before it is returned, and
     one that would route outside its own space is dropped rather than shipped."""
     out = scenarios.batch(body.space, count=body.count, seed=body.seed,
@@ -68,7 +71,7 @@ async def generate(body: GenerateRequest, who: Reviewer = Depends(reviewer)) -> 
 
 
 @router.post("/scenarios/template.csv")
-async def template_csv(body: GenerateRequest, who: Reviewer = Depends(reviewer)) -> Response:
+async def template_csv(body: GenerateRequest, who: Any = Depends(reader)) -> Response:
     """The batch in the golden-set upload's shape, for a person to add expected answers to."""
     rows = scenarios.generate(body.space, count=body.count, seed=body.seed,
                               challenge_ratio=body.challenge_ratio)

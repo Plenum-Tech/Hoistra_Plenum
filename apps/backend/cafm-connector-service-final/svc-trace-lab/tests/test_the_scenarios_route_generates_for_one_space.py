@@ -62,19 +62,34 @@ def test_a_refusal_share_over_half_is_refused(ratio):
 
 # -- who may ask ----------------------------------------------------------------------------------
 
-def test_every_route_is_behind_the_reviewer_gate():
+def test_generating_does_not_demand_a_company():
+    """Generation reads no company data: it is deterministic from (space, seed) and touches no
+    database. Requiring a company refused the platform view with "Choose a company to view as
+    first" for a batch that does not belong to a company (3 Nov 2026)."""
+    from trace_lab.routes_golden import reader
+
+    for path in ("/scenarios/spaces", "/scenarios/generate", "/scenarios/template.csv"):
+        route = next(r for r in rs.router.routes if getattr(r, "path", "") == path)
+        calls = [sub.call for sub in route.dependant.dependencies]
+        assert any(c is reader or getattr(c, "__name__", "") == "reader" for c in calls), (
+            "%s still demands a company" % path)
+
+
+def test_asking_the_questions_does_demand_one():
+    """A run reads one company's data through the chat, so it keeps the reviewer gate and the
+    company that comes with it. Loosening this one would ask questions of whoever answered last."""
     from trace_lab.routes_conversations import reviewer
 
-    assert isinstance(rs.router, APIRouter)
-    assert rs.router.routes, "the router has no routes"
+    route = next(r for r in rs.router.routes if getattr(r, "path", "") == "/scenarios/run")
+    calls = [sub.call for sub in route.dependant.dependencies]
+    assert any(c is reviewer or getattr(c, "__name__", "") == "reviewer" for c in calls)
+
+
+def test_no_route_is_open():
+    """Whichever gate each one takes, none of them is ungated."""
     for route in rs.router.routes:
-        dependant = getattr(route, "dependant", None)
-        # FastAPI records a `= Depends(reviewer)` parameter as a sub-dependency, and the callable
-        # is on .call -- .dependency is a different attribute and reads as empty here.
-        calls = [sub.call for sub in (dependant.dependencies if dependant else [])]
-        assert any(c is reviewer or getattr(c, "__name__", "") == "reviewer" for c in calls), (
-            "%s is not behind the reviewer gate; a batch aimed at a company's own data is not "
-            "something a plain user asks for" % getattr(route, "path", route))
+        calls = [getattr(sub.call, "__name__", "") for sub in route.dependant.dependencies]
+        assert "reader" in calls or "reviewer" in calls, getattr(route, "path", route)
 
 
 def test_the_router_is_mounted():
