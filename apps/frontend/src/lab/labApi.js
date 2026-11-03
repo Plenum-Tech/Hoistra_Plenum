@@ -22,9 +22,11 @@ export const labApi = {
   // Synthetic batches: the instances a batch can be generated for, the batch itself, and asking
   // a few of them for real. Generation calls no model; the run calls one per question, which is
   // why it waits minutes rather than seconds.
+  companies: () => call('GET', '/lab/companies'),
   spaces: () => call('GET', '/scenarios/spaces'),
   generate: (body) => call('POST', '/scenarios/generate', { body, timeoutMs: 30000 }),
-  runScenarios: (body) => call('POST', '/scenarios/run', { body, timeoutMs: 600000 }),
+  // org: asking reads one company's records, so the company travels with the request.
+  runScenarios: (body, org) => call('POST', '/scenarios/run', { body, org, timeoutMs: 600000 }),
   members: () => call('GET', '/lab/members'),
   member: (userId) => call('GET', '/lab/members/' + enc(userId)),
   decide: (userId, body) => call('PUT', '/lab/members/' + enc(userId), { body }),

@@ -93,7 +93,7 @@ test('Home: the company, the next step as one button, five stage cards', () => {
 test('Synthetic is a page of its own, and the lab app renders it', () => {
   const src = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes("import Synthetic from './Synthetic.jsx'"));
-  assert.ok(src.includes("current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} />"),
+  assert.ok(src.includes("current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} />"),
     'the menu names a page nothing draws, so opening it shows nothing');
 });
 
@@ -126,7 +126,7 @@ test('the lab api names the three scenario routes once', () => {
 test('the instance is chosen on its own page and carried to Synthetic', () => {
   const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(app.includes("current === 'instance' ? <Instances instance={instance} onPick={pickInstance} />"));
-  assert.ok(app.includes('<Synthetic instance={instance} onPick={pickInstance} />'),
+  assert.ok(app.includes('<Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} />'),
     'Synthetic would pick its own instance again, and the two controls would disagree');
 });
 
@@ -159,4 +159,92 @@ test('an unknown stored instance falls back rather than generating for nothing',
   const src = readFileSync(new URL('../Instances.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes('INSTANCES.some((i) => i.key === v)'));
   assert.ok(src.includes('catch'), 'sessionStorage throws in a private window');
+});
+
+
+// Asking reads one company's records, so it cannot be pressed without one (3 Nov 2026). Before
+// this the button posted, the service refused, and "Choose a company to view as first" appeared
+// at the top of the page, away from the button and worded like a display setting.
+test('Ask them for real is refused in the page, not by the service', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  // Matched loosely: the button grew a second reason to be disabled (the batch running out),
+  // and the point of this test is the company, not the exact expression.
+  assert.ok(/disabled=\{!!busy \|\| !asking/.test(src), 'the button can still be pressed with no company');
+  assert.ok(src.includes('Choose a company above first'), 'the reason is not said beside the button');
+});
+
+test('Generate is not blocked by the same thing', () => {
+  // Generation reads no company data; the service lets the platform view do it, and so must this.
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  const gen = src.slice(src.indexOf('onClick={generate}') - 200, src.indexOf('onClick={generate}'));
+  assert.ok(!gen.includes('!org'), 'Generate was blocked on a company it does not need');
+});
+
+test('the company travels with the ask', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(/labApi\.runScenarios\(\{[^;]*\}, asking\)/s.test(src),
+    'the request is sent without the company');
+  const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
+  assert.ok(api.includes('runScenarios: (body, org)'), 'labApi drops the company');
+});
+
+test('the company comes from the run that is open', () => {
+  const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.ok(app.includes('orgOfRun'), 'nothing works out which company the lab is in');
+  assert.ok(app.includes('org={orgOfRun}'), 'Synthetic is never told the company');
+});
+
+
+// The company is chosen on the page, because asking is not about a run (3 Nov 2026).
+test('the company is picked on the page, not inherited from whichever run is open', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('labApi.companies()'), 'nothing reads the companies');
+  assert.ok(src.includes("id=\"synthetic-company\""), 'there is no company control');
+  assert.ok(src.includes('const asking = company || org'),
+    'the picked company must win, with the open run as the fallback');
+});
+
+test('one company is chosen for you rather than offered as a choice', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('if (rows.length === 1) setCompany(rows[0].id)'));
+  assert.ok(src.includes('companies.length > 1 ?'), 'a company admin should not see a one-item picker');
+});
+
+
+// Working a batch through a few at a time (3 Nov 2026). A batch is 10 or 50 questions and one
+// ask is capped at 5, so the only way through one is in slices -- and the slices have to behave
+// as one batch, both on screen and in the database, or a reviewer annotates what looks like
+// several small unrelated runs.
+test('the next slice is asked from where the last one stopped', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(/offset:\s*from/.test(src), 'every ask starts at the top of the batch again');
+  assert.ok(/batch:\s*Number\(count\)/.test(src),
+    'without the batch size the service generates a SHORTER batch, which is a different batch: '
+    + 'the refusal share is a fraction of the total');
+  assert.ok(src.includes('setAsked(0)'), 'Generate must put the position back to the start');
+});
+
+test('the answers already on screen are not thrown away by the next ask', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('if (!asked) setRun(null);'),
+    'clearing on every ask hides the questions the next few are meant to be added under');
+  assert.ok(/results:\s*\(prev\.results \|\| \[\]\)\.concat/.test(src),
+    'the new answers replace the old ones instead of being added below them');
+});
+
+test('the button says where in the batch it has got to, and stops at the end', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes("'Ask the next '"), 'it still offers to ask the FIRST few after some were asked');
+  assert.ok(/left === 0/.test(src), 'asking past the end returns nothing and reads as a failure');
+  assert.ok(/const take = asked \? Math\.min\(Number\(askCount\), left\)/.test(src),
+    'the last slice must ask only what is left of the batch');
+});
+
+test('a saved batch says where to go and annotate it', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('run.run_code'), 'the page never names the run the answers were saved as');
+  assert.ok(!src.includes('Answers are shown here and not stored'),
+    'the page still says the answers are not kept, which has not been true since they are saved as a run');
+  assert.ok(/run\.persisted === false/.test(src),
+    'a failed write must be reported as a failure, not inferred from a missing flag');
 });

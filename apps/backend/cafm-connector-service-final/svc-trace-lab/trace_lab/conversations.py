@@ -977,21 +977,26 @@ async def golden_turn(org: str, turn_id: str) -> dict[str, Any] | None:
 
 
 async def scenario_conversation(org: str, key: str, *, turn_id: str | None = None) -> dict[str, Any] | None:
-    """One asked synthetic question, read from the lab database and normalized by the same
+    """One asked synthetic question, read from Trace Lab's own evidence and normalized by the same
     normalize_turn as a live turn, so the review page draws its steps the usual way.
 
-    One question is one conversation here: a scenario run asks each question in a session of its
-    own so nothing carries context into the next, which is the point of a batch.
+    It reads the EVIDENCE tables only. Those hold the turn and its spans, which is everything the
+    page draws; the scenario tables add the batch's own metadata (seed, gate verdicts, the tool
+    array) and are not needed to show an answer. Keeping the read off them is what lets a batch be
+    reviewed on a schema that has not had 0012 applied yet.
+
+    One question is one session here: a scenario run asks each in a session of its own, so nothing
+    carries context into the next. That is why this is a single turn rather than a thread.
     """
     if not is_scenario_key(key):
         return None
     sid = key[len(SCENARIO_KEY_PREFIX):]
     async with _lab_read() as conn:
         rows = [dict(r) for r in (await conn.execute(text(
-            "SELECT r.run_id, r.scenario_id, r.seq_no, r.question, r.turn_id, e.turn"
-            " FROM tracelab.scenario_results r JOIN tracelab.evidence_turns e ON e.turn_id = r.turn_id"
-            " WHERE r.organization_id = CAST(:org AS uuid) AND r.session_id = :sid"
-            " ORDER BY r.seq_no LIMIT :limit"),
+            "SELECT turn_id, turn FROM tracelab.evidence_turns"
+            " WHERE organization_id = CAST(:org AS uuid) AND reason = 'scenario'"
+            "   AND turn ->> 'session_id' = :sid"
+            " ORDER BY turn_id LIMIT :limit"),
             {"org": org, "sid": sid, "limit": MAX_TURN_HEADERS})).mappings().all()]
         if not rows:
             return None
@@ -1002,9 +1007,11 @@ async def scenario_conversation(org: str, key: str, *, turn_id: str | None = Non
             "SELECT span FROM tracelab.evidence_spans WHERE turn_id = :tid ORDER BY seq"),
             {"tid": active["turn_id"]})).all()]
     turns = [dict(_jsonb(r["turn"])) for r in rows]
-    metas = {r["turn_id"]: scenario_meta(t, r) for r, t in zip(rows, turns)}
+    metas = {r["turn_id"]: scenario_meta(t, {"run_id": (t.get("scenario") or {}).get("run_id") or sid,
+                                             "scenario_id": (t.get("scenario") or {}).get("scenario_id") or "",
+                                             "question": t.get("question") or ""})
+             for r, t in zip(rows, turns)}
     att = normalize.attempts(turns, metas, None)
-    run_id = str(rows[0]["run_id"])
     label = normalize.session_label("synthetic", sid, title=None, golden=None)
     headers = [normalize.turn_header(t, metas[t["turn_id"]], turn_index=i + 1, attempt=att[t["turn_id"]])
                for i, t in enumerate(turns)]
@@ -1013,25 +1020,26 @@ async def scenario_conversation(org: str, key: str, *, turn_id: str | None = Non
                                       conversation={"key": key, "session_kind": "synthetic",
                                                     "session_label": label, "turn_index": index + 1,
                                                     "turn_count": len(rows), **att[active["turn_id"]],
-                                                    "run_id": run_id, "thread_deleted": False})
+                                                    "thread_deleted": False})
     return {"key": key, "session_id": sid, "session_kind": "synthetic", "session_label": label, "title": None,
-            "thread_deleted": False, "run": {"run_id": run_id, "kind": "scenario"},
+            "thread_deleted": False, "run": {"kind": "scenario"},
             "turn_count": len(rows), "turns_truncated": False, "turns": headers, "active": record,
             "flags": ["synthetic_session"], "normalizer_version": normalize.NORMALIZER_VERSION}
 
 
 async def scenario_turn(org: str, turn_id: str) -> dict[str, Any] | None:
-    """A scenario turn by id: find the session it was asked in, then read that conversation."""
+    """A scenario turn by id, from the evidence tables: the session it was asked in is on the
+    stored turn itself, so nothing else has to exist for the page to show it."""
     if not is_scenario_turn(turn_id):
         return None
     async with _lab_read() as conn:
-        sid = (await conn.execute(text(
-            "SELECT session_id FROM tracelab.scenario_results"
-            " WHERE turn_id = :t AND organization_id = CAST(:org AS uuid)"),
-            {"t": turn_id, "org": org})).scalar()
-    if not sid:
+        row = (await conn.execute(text(
+            "SELECT turn ->> 'session_id' AS sid FROM tracelab.evidence_turns"
+            " WHERE turn_id = :t AND organization_id = CAST(:org AS uuid) AND reason = 'scenario'"),
+            {"t": turn_id, "org": org})).mappings().first()
+    if not row or not row["sid"]:
         return None
-    conv = await scenario_conversation(org, SCENARIO_KEY_PREFIX + str(sid), turn_id=turn_id)
+    conv = await scenario_conversation(org, SCENARIO_KEY_PREFIX + str(row["sid"]), turn_id=turn_id)
     return None if conv is None else {"trace": conv["active"], "conversation_key": conv["key"]}
 
 

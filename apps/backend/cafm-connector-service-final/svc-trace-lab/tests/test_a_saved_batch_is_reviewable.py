@@ -154,3 +154,59 @@ async def test_a_real_shaped_span_tree_survives_the_write(lab_scratch):
     assert spans[1]["model"] == "gpt-5.6-terra" and spans[1]["cost_usd"] == 0.071
     assert spans[1]["input"] == {"messages": 2}, "the model input is what 'prompt assembled' shows"
     assert spans[1]["parent_id"] == spans[0]["id"], "the tree is flattened; the blocks would not nest"
+
+
+@pytest.mark.asyncio
+async def test_the_next_few_questions_land_under_the_ones_already_there(lab_scratch):
+    """A batch is asked a few at a time, and the whole batch is one run.
+
+    Asked for on 3 Nov 2026: "it should add below these one". A second run of five would split one
+    batch across two pages of the Runs list, and a reviewer annotating questions 6-10 would be
+    annotating a run that looks like a different measurement. So the slice is appended to the run
+    the earlier slice made, numbered from where that one stopped, which is also what makes the
+    question codes (R32-6) mean the sixth question OF THE BATCH.
+    """
+    first = _batch(n=2)
+    first["offset"] = 0
+    out1 = await scenario_store.save(first, organization_id=ORG)
+
+    second = _batch(n=2)
+    second["offset"] = 2
+    for i, item in enumerate(second["captured"], start=3):
+        item["result"]["question"] = f"question {i} about work orders"
+    out2 = await scenario_store.save(second, organization_id=ORG)
+
+    assert out2["run_code"] == out1["run_code"], "the second slice started a run of its own"
+    assert out2["appended"] is True and out1["appended"] is False
+    assert (out2["seq_from"], out2["seq_to"]) == (3, 4)
+
+    async with db.lab_engine().connect() as conn:
+        rows = (await conn.execute(text(
+            "SELECT seq_no, question FROM tracelab.lab_questions"
+            " WHERE run_id = CAST(:id AS uuid) ORDER BY seq_no"),
+            {"id": out1["lab_run_id"]})).all()
+        runs = (await conn.execute(text(
+            "SELECT count(*) FROM tracelab.lab_runs WHERE kind = 'synthetic'"
+            " AND organization_id = CAST(:o AS uuid)"), {"o": ORG})).scalar()
+
+    assert runs == 1, "one batch became two runs"
+    assert [r[0] for r in rows] == [1, 2, 3, 4], (
+        "the second slice renumbered from one, so the batch reads 1,2,1,2")
+    assert [r[1] for r in rows] == [f"question {i} about work orders" for i in (1, 2, 3, 4)], (
+        "the order on the page has to be the order the batch was generated in")
+
+
+@pytest.mark.asyncio
+async def test_another_company_asking_the_same_batch_gets_its_own_run(lab_scratch):
+    """The run is found by its title, which says the instance and the seed but not the company.
+    Without the company in the lookup, one company's questions would land in another's run."""
+    mine = _batch(n=1)
+    mine["offset"] = 0
+    out1 = await scenario_store.save(mine, organization_id=ORG)
+
+    theirs = _batch(n=1)
+    theirs["offset"] = 1
+    out2 = await scenario_store.save(theirs, organization_id=OTHER)
+
+    assert out2["run_code"] != out1["run_code"]
+    assert out2["appended"] is False

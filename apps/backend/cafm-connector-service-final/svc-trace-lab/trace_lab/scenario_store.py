@@ -7,6 +7,12 @@ shape (R32-1, R32-2), and each answer is linked to its question as a trace. The 
 lists the batch beside every other run, and opening a question shows the answer, its step tree,
 the notes and the expected-answer slot -- the same screens, because it is the same tables.
 
+A batch is asked a few questions at a time -- one ask is capped at five, a batch is ten or fifty
+-- and the whole batch is ONE run. The first slice makes the run; every later slice is found by
+the run's title (the instance and the seed, which name exactly one batch) and appended to it,
+numbered from where the last slice stopped. So R32-6 is the sixth question of the batch, sitting
+under the first five on the same page, rather than the first question of a second run of five.
+
 The one thing that needs explaining is the turn. A scenario turn was never in the chat's own
 tables: capture.py builds it in this process with the trace store switched off, so nothing was
 recorded there and nothing could be. Golden runs have the same problem and solve it by writing
@@ -60,11 +66,22 @@ async def save(result: dict[str, Any], *, organization_id: str, principal: Any =
     captured = result.get("captured") or []
     space = str(result.get("space") or "")
     seed = int(result.get("seed") or 0)
+    # Where in the batch this slice starts. A batch is asked a few questions at a time, and the
+    # whole batch is ONE run: the second five are questions 6 to 10 of the run the first five
+    # made, listed under them in the order they were generated, not a second run of five.
+    offset = int(result.get("offset") or 0)
     email = getattr(principal, "email", None)
     user_id = getattr(principal, "user_id", None)
     now = datetime.now(timezone.utc)
 
     async with db.lab_engine().begin() as conn:
+        # The scenario tables (0012) carry the batch's own metadata -- the seed, the gate
+        # verdicts, the tool array. The answers themselves need none of it: they live in the lab
+        # run, its questions and the evidence, all of which exist without 0012. So a batch is
+        # saved either way, and is richer once the migration is applied, rather than being lost
+        # until somebody runs it.
+        extras = (await conn.execute(text(
+            "SELECT to_regclass('tracelab.scenario_runs')"))).scalar() is not None
         run = (await conn.execute(text(
             "INSERT INTO tracelab.scenario_runs (organization_id, space, seed, challenge_ratio, fingerprint,"
             " requested, asked, status, source, usd_spent, ms, started_by, started_by_email, finished_at)"
@@ -75,20 +92,35 @@ async def save(result: dict[str, Any], *, organization_id: str, principal: Any =
              "ratio": float(result.get("challenge_ratio") or 0), "fp": result.get("fingerprint"),
              "req": int(result.get("requested") or len(captured)), "asked": len(captured),
              "usd": float(result.get("cost_usd") or 0), "ms": int(result.get("ms") or 0),
-             "by": str(user_id) if user_id else None, "email": email, "fin": now})).mappings().one()
+             "by": str(user_id) if user_id else None, "email": email, "fin": now})).mappings().one()             if extras else {"id": None, "run_no": None}
 
-        lab = (await conn.execute(text(
-            "INSERT INTO tracelab.lab_runs (kind, title, organization_id, source, created_by, created_by_email)"
-            " VALUES ('synthetic', :title, CAST(:org AS uuid), 'coding_agent', CAST(:by AS uuid), :email)"
-            " RETURNING id::text AS id, run_no"),
-            {"title": TITLE.format(space=space, seed=seed)[:200], "org": organization_id,
-             "by": str(user_id) if user_id else None, "email": email})).mappings().one()
+        title = TITLE.format(space=space, seed=seed)[:200]
+        # offset 0 is a fresh batch -- Generate resets it -- so it always starts a new run. Past
+        # the start, the slice belongs to the run the earlier slices are in, found by the title,
+        # which carries the instance and the seed and so names exactly one batch.
+        lab = None
+        if offset:
+            lab = (await conn.execute(text(
+                "SELECT id::text AS id, run_no FROM tracelab.lab_runs"
+                " WHERE kind = 'synthetic' AND title = :title"
+                "   AND organization_id IS NOT DISTINCT FROM CAST(:org AS uuid)"
+                " ORDER BY run_no DESC LIMIT 1"),
+                {"title": title, "org": organization_id})).mappings().first()
+        appended = lab is not None
+        if lab is None:
+            lab = (await conn.execute(text(
+                "INSERT INTO tracelab.lab_runs (kind, title, organization_id, source, created_by, created_by_email)"
+                " VALUES ('synthetic', :title, CAST(:org AS uuid), 'coding_agent', CAST(:by AS uuid), :email)"
+                " RETURNING id::text AS id, run_no"),
+                {"title": title, "org": organization_id,
+                 "by": str(user_id) if user_id else None, "email": email})).mappings().one()
 
-        for seq, item in enumerate(captured, start=1):
+        for seq, item in enumerate(captured, start=offset + 1):
             row = item["result"]
             tid = item["turn_id"]
             await _evidence(conn, organization_id, tid, item)
-            await conn.execute(text(
+            if extras:
+                await conn.execute(text(
                 "INSERT INTO tracelab.scenario_results (run_id, organization_id, seq_no, scenario_id, question,"
                 " answer, engine, role, style, difficulty, in_module, gate_ok, tools, models, spans, session_id,"
                 " turn_id, usd, ms, error, asked_at)"
@@ -123,9 +155,16 @@ async def save(result: dict[str, Any], *, organization_id: str, principal: Any =
                 {"qid": qid, "tid": tid, "org": organization_id,
                  "by": str(user_id) if user_id else None, "email": email})
 
-    log.info("scenario_store.saved", run_no=run["run_no"], lab_run=lab["run_no"], asked=len(captured), space=space)
+    log.info("scenario_store.saved", run_no=run["run_no"], lab_run=lab["run_no"],
+             asked=len(captured), space=space, extras=extras, offset=offset, appended=appended)
     return {"scenario_run_no": run["run_no"], "run_code": "R" + str(lab["run_no"]),
-            "lab_run_id": lab["id"], "questions": len(captured)}
+            "lab_run_id": lab["id"], "questions": len(captured),
+            # Which questions of the run these are, so the page can say R32-6 rather than
+            # numbering the slice from one again.
+            "seq_from": offset + 1, "seq_to": offset + len(captured), "appended": appended,
+            # False means the answers are in Runs but the batch metadata is not: 0012 is not
+            # applied. Said plainly rather than implied by a missing field.
+            "batch_metadata": extras}
 
 
 def _intent(row: dict[str, Any]) -> str:

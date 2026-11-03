@@ -51,11 +51,20 @@ class NotSafe(RuntimeError):
 
 
 async def run(space: str, *, count: int = 2, seed: int = 0, challenge_ratio: float = 0.0,
+              offset: int = 0, batch: int = 0,
               principal: Any = None, organization_id: str | None = None,
               authorization: str | None = None) -> dict[str, Any]:
-    """Generate `count` questions for `space`, ask each one, and return what came back."""
+    """Ask `count` questions of the batch for `space`, starting at `offset`.
+
+    `batch` is how many the batch holds -- the number on screen. The whole batch is generated
+    from the seed and then sliced, so asking questions 6 to 10 asks THOSE questions rather than
+    regenerating a shorter batch, which would be a different five: the challenge share is a
+    fraction of the total, so generate(5) and generate(10) do not share a prefix.
+    """
     if count > MAX_QUESTIONS:
         raise ValueError(f"at most {MAX_QUESTIONS} questions in one run")
+    if offset < 0:
+        raise ValueError("offset cannot be negative")
 
     problems = orchestrator_host.assert_isolated()
     if problems:
@@ -64,7 +73,14 @@ async def run(space: str, *, count: int = 2, seed: int = 0, challenge_ratio: flo
         raise NotSafe(problems)
     await orchestrator_host.ensure_overlays_readonly()
 
-    rows = scenarios.generate(space, count=count, seed=seed, challenge_ratio=challenge_ratio)
+    # `batch` is the batch's declared size, so it is a ceiling as well as a floor: asking past
+    # the end of a batch of ten must come back with nothing rather than generating an
+    # eleventh question nobody listed. Without one, the batch is just this slice.
+    whole = int(batch) if batch else offset + count
+    rows = scenarios.generate(space, count=whole, seed=seed, challenge_ratio=challenge_ratio)
+    # The slice the caller asked for. A batch the generator could not fill is short, so this can
+    # come back with fewer than `count` or empty; `asked` says what actually happened.
+    rows = rows[offset:offset + count]
     orchestrator = orchestrator_host.get_orchestrator()
     started = datetime.now(timezone.utc)
     t0 = time.perf_counter()
@@ -101,6 +117,8 @@ async def run(space: str, *, count: int = 2, seed: int = 0, challenge_ratio: flo
         "started_at": started.isoformat(), "ms": int((time.perf_counter() - t0) * 1000),
         "cost_usd": round(sum(float(r.get("cost_usd") or 0) for r in out), 6),
         "requested": count,
+        "offset": offset,
+        "batch": whole,
         "challenge_ratio": challenge_ratio,
         "fingerprint": scenarios.fingerprint(rows),
         # Filled in by the caller once the batch is written; False until then, so a reply never

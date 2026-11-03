@@ -174,3 +174,35 @@ async def test_the_file_is_offered_as_a_download_named_for_the_batch():
     res = await rs.template_csv(rs.GenerateRequest(space="assets", count=5, seed=9), who=None)
     assert res.media_type == "text/csv"
     assert "scenarios-assets-9.csv" in res.headers["content-disposition"]
+
+
+# -- the companies route ---------------------------------------------------------------------
+
+def test_listing_companies_only_ever_reads():
+    """It answers with every company's name to the platform team, from the application database,
+    which this service reads and never writes (G0)."""
+    import inspect
+
+    src = inspect.getsource(rs.list_companies)
+    assert "conversations._read()" in src, "it must go through the read-only engine"
+    upper = src.upper()
+    for word in ("INSERT ", "UPDATE ", "DELETE ", "CREATE ", "ALTER "):
+        assert word not in upper, "the companies route writes: " + word.strip()
+
+
+def test_a_company_admin_is_given_only_their_own():
+    """Listing every company to somebody who may work in one would be a leak of the customer
+    list, whatever they could do with it afterwards."""
+    import inspect
+
+    src = inspect.getsource(rs.list_companies)
+    assert 'role", "")) != "superadmin"' in src
+    assert "WHERE id = CAST(:o AS uuid)" in src, "a non-superadmin must be asked for by id"
+
+
+def test_the_companies_route_is_behind_a_gate():
+    from trace_lab.routes_golden import reader
+
+    route = next(r for r in rs.router.routes if getattr(r, "path", "") == "/lab/companies")
+    calls = [sub.call for sub in route.dependant.dependencies]
+    assert any(c is reader or getattr(c, "__name__", "") == "reader" for c in calls)

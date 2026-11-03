@@ -2,6 +2,7 @@
 
     POST /scenarios/generate     a batch of questions for one space, verified against the router
     POST /scenarios/run          ask a few of them for real and return the answers
+    GET  /lab/companies          the companies this caller may act for, for the picker
     GET  /learning/draft         what the reviews say, as markdown to carry to a skill document
     GET  /learning/draft.md      the same, as a file
     GET  /scenarios/spaces       the spaces that can be generated for, and the engines each has
@@ -96,6 +97,12 @@ class RunRequest(BaseModel):
     count: int = Field(2, ge=1, le=scenario_run.MAX_QUESTIONS)
     seed: int = Field(0, ge=0, le=10_000_000)
     challenge_ratio: float = Field(0.0, ge=0.0, le=0.5)
+    #: Where in the batch to start, so a batch can be worked through a few at a time rather than
+    #: the same first few being asked again.
+    offset: int = Field(0, ge=0, le=1000)
+    #: How many the batch holds. The whole batch is generated and then sliced, because a shorter
+    #: batch is a different batch when any of it is challenge questions.
+    batch: int = Field(0, ge=0, le=100)
 
 
 @router.post("/scenarios/run")
@@ -104,13 +111,18 @@ async def run_scenarios(request: Request, body: RunRequest,
     """Ask the generated questions for real, in the instance the batch names.
 
     Each one is a real chat turn: a model is called and it costs money, which is why the count is
-    capped. The results are returned, NOT stored -- keeping them needs a scenario table, and a
-    Trace Lab migration is applied by a person. `persisted` says so in every reply rather than
-    leaving the caller to assume.
+    capped. What came back is written to the tables the review page already reads, so the batch
+    appears in Runs with its answers and steps. A write that fails does not lose the answers --
+    `persisted` says so in every reply rather than leaving the caller to assume.
+
+    `offset` and `batch` are how a batch is worked through a few at a time: the whole batch is
+    generated from the seed and then sliced, so asking 6 to 10 asks THOSE questions rather than
+    regenerating a shorter batch, which would be a different five.
     """
     try:
         out = await scenario_run.run(
             body.space, count=body.count, seed=body.seed, challenge_ratio=body.challenge_ratio,
+            offset=body.offset, batch=body.batch,
             principal=who.principal, organization_id=who.org,
             authorization=request.headers.get("authorization"))
     except scenario_run.NotSafe as exc:
@@ -158,3 +170,38 @@ async def learning_draft_file(run: str | None = None, who: Reviewer = Depends(re
     found = await learning.gather(who.org, run_code=run)
     return Response(content=learning.draft(found), media_type="text/markdown",
                     headers={"Content-Disposition": 'attachment; filename="what-the-reviews-say.md"'})
+
+
+@router.get("/lab/companies")
+async def list_companies(who: Any = Depends(reader)) -> dict[str, Any]:
+    """The companies this caller may work in, for the picker.
+
+    The lab had no way to choose one: the company was taken from whichever run happened to be
+    open, so the platform view -- which opens on "All runs" -- had none, and asking a question was
+    refused with a sentence about viewing (3 Nov 2026).
+
+    A company admin gets their own and nothing else. The platform team and a consultant get every
+    company, read from plenum_cafm through the read-only engine: Trace Lab reads that database and
+    never writes it (G0).
+    """
+    from sqlalchemy import text as _text
+
+    from . import conversations
+
+    principal, org = who
+    own = getattr(principal, "organization_id", None)
+    if str(getattr(principal, "role", "")) != "superadmin":
+        # Not a superadmin: their own company, whatever they asked for.
+        if not own:
+            return {"ok": True, "companies": []}
+        async with conversations._read() as conn:
+            name = (await conn.execute(_text(
+                "SELECT name FROM plenum_cafm.organizations WHERE id = CAST(:o AS uuid)"),
+                {"o": str(own)})).scalar()
+        return {"ok": True, "companies": [{"id": str(own), "name": name or "Your company"}]}
+
+    async with conversations._read() as conn:
+        rows = (await conn.execute(_text(
+            "SELECT id::text AS id, name FROM plenum_cafm.organizations"
+            " WHERE name IS NOT NULL ORDER BY lower(name) LIMIT 500"))).mappings().all()
+    return {"ok": True, "companies": [{"id": r["id"], "name": r["name"]} for r in rows]}

@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from trace_lab import scenario_run
+from trace_lab import scenario_run, scenarios
 
 
 class _Captured:
@@ -335,3 +335,78 @@ async def test_a_run_with_more_steps_than_fit_is_capped(monkeypatch, no_model):
     monkeypatch.setattr(scenario_run.capture, "run_message", many)
     out = await scenario_run.run("ops", count=1, seed=1)
     assert len(out["results"][0]["steps"]) == scenario_run.MAX_STEPS
+
+
+# -- working through a batch a few at a time ----------------------------------------------------
+#
+# A batch is 10 or 50 questions and the cap on one ask is 5, so the only way to get through one is
+# to ask it in slices. The slice has to be taken from the WHOLE batch rather than by generating a
+# shorter one, and the tests below are what say so.
+
+@pytest.mark.asyncio
+async def test_asking_again_asks_the_ones_that_have_not_been_asked(no_model):
+    first = await scenario_run.run("ops", count=2, seed=7, batch=10)
+    second = await scenario_run.run("ops", count=2, seed=7, batch=10, offset=2)
+    asked_first = [r["scenario_id"] for r in first["results"]]
+    asked_again = [r["scenario_id"] for r in second["results"]]
+    assert not set(asked_first) & set(asked_again), (
+        "asking twice put the same questions again, so the batch never gets worked through")
+
+
+@pytest.mark.asyncio
+async def test_a_shorter_batch_is_a_different_batch(no_model):
+    """The premise the slice rests on. Refusal cases are a share of the TOTAL, so the generator
+    places them differently in ten questions than in six: a batch of six is NOT the first six of
+    a batch of ten. Without this, slicing could be replaced by generating a shorter batch."""
+    six = [r.question for r in scenarios.generate("ops", count=6, seed=7, challenge_ratio=0.25)]
+    ten = [r.question for r in scenarios.generate("ops", count=10, seed=7, challenge_ratio=0.25)]
+    assert six != ten[:6]
+
+
+@pytest.mark.asyncio
+async def test_a_slice_is_taken_from_the_whole_batch_not_from_a_shorter_one(no_model):
+    """So questions 5 and 6 are the ones the page listed as 5 and 6, not two questions that only
+    exist in a batch of six nobody asked for. Compared by question text: the scenario id is the
+    POSITION in the batch, so ids match either way and prove nothing."""
+    whole = scenarios.generate("ops", count=10, seed=7, challenge_ratio=0.25)
+    out = await scenario_run.run("ops", count=2, seed=7, challenge_ratio=0.25, batch=10, offset=4)
+    assert [r["question"] for r in out["results"]] == [r.question for r in whole[4:6]]
+
+
+@pytest.mark.asyncio
+async def test_the_whole_batch_can_be_worked_through_without_a_gap(no_model):
+    seen = []
+    for offset in (0, 2, 4):
+        out = await scenario_run.run("ops", count=2, seed=7, batch=6, offset=offset)
+        seen += [r["question"] for r in out["results"]]
+    assert seen == [r.question for r in scenarios.generate("ops", count=6, seed=7)]
+
+
+@pytest.mark.asyncio
+async def test_asking_past_the_end_of_the_batch_returns_nothing_rather_than_new_questions(no_model):
+    out = await scenario_run.run("ops", count=2, seed=7, batch=4, offset=4)
+    assert out["asked"] == 0 and out["results"] == [], (
+        "running off the end generated fresh questions, which quietly grows the batch")
+
+
+@pytest.mark.asyncio
+async def test_a_negative_offset_is_refused(no_model):
+    with pytest.raises(ValueError):
+        await scenario_run.run("ops", count=1, seed=7, offset=-1)
+
+
+@pytest.mark.asyncio
+async def test_the_result_says_where_in_the_batch_it_was(no_model):
+    """The page tracks its own position, but a saved run has to carry it: "5 answers" means
+    nothing without which five."""
+    out = await scenario_run.run("ops", count=2, seed=7, batch=10, offset=6)
+    assert out["offset"] == 6 and out["batch"] == 10
+
+
+@pytest.mark.asyncio
+async def test_a_batch_smaller_than_the_slice_is_taken_as_the_slice(no_model):
+    """batch=0 is the old call with no batch at all: it must behave exactly as before."""
+    out = await scenario_run.run("ops", count=2, seed=7)
+    assert out["asked"] == 2
+    assert [r["scenario_id"] for r in out["results"]] == [
+        r.scenario_id for r in scenarios.generate("ops", count=2, seed=7)]

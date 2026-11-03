@@ -198,6 +198,13 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   // The instance everything in the lab is asked in. Kept for this browser tab, so a reload
   // does not quietly move a batch to a different set of engines.
   const [instance, setInstance] = React.useState(readInstance);
+  // Asking a question reads one company's records, so it needs a company. The lab has no
+  // company picker of its own: it takes the company of the run that is open (labApi), which
+  // is why Synthetic has to be told it rather than working it out.
+  const orgOfRun = React.useMemo(() => {
+    const r = (runs || []).find((x) => x && x.code === run);
+    return (r && r.organization_id) || null;
+  }, [runs, run]);
   const pickInstance = React.useCallback((k) => { setInstance(k); writeInstance(k); }, []);
   const [syncing, setSyncing] = React.useState(false);
   const [synced, setSynced] = React.useState('');
@@ -246,7 +253,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion} /> : null}
         {current === 'instance' ? <Instances instance={instance} onPick={pickInstance} /> : null}
-        {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} /> : null}
+        {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}
