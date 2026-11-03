@@ -46,6 +46,29 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "how many jobs did we close last month",
         "which building raises the most reactive work",
         "what is still open from last quarter",
+    # Added 3 Nov 2026 because a batch of 25 for Ops came back with 9. A batch never asks the
+    # same question twice, so it is capped by how many DISTINCT questions route to the instance,
+    # and 13 of the 32 written before this route NOWHERE at all. Every question below was put
+    # through the real router before it was added and kept only if it reached this engine --
+    # which is why the contract ones are worded as they are. "how much have we spent against
+    # each contract this year" routes nowhere: the router's vocabulary for this engine is sla,
+    # contractor, scorecard, first fix, invoice, day rate, ppm compliance and the rest, and not
+    # the bare word "contract".
+        "which work orders are overdue right now",
+        "how many work orders are open at each building",
+        "which work orders have been reopened",
+        "what is the average time to close a work order",
+        "which work orders are waiting on a part",
+        "how many work orders did each vendor complete",
+        "which planned maintenance tasks were missed last month",
+        "what maintenance is due in the next 30 days",
+        "which work orders have no vendor assigned",
+        "which assets raise the most work orders",
+        "how long are work orders sitting before anyone attends",
+        "which work orders were closed without a completion note",
+        "which work orders breached their fix sla",
+        "how much reactive maintenance did we do last month",
+        "which buildings have the oldest open work orders",
     ),
     "contract_performance": (
         "which vendor is costing me money",
@@ -56,6 +79,34 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "which contracts come up for renewal",
         "what did we spend with each contractor this year",
         "which vendor misses its response times most",
+    # Added 3 Nov 2026 because a batch of 25 for Ops came back with 9. A batch never asks the
+    # same question twice, so it is capped by how many DISTINCT questions route to the instance,
+    # and 13 of the 32 written before this route NOWHERE at all. Every question below was put
+    # through the real router before it was added and kept only if it reached this engine --
+    # which is why the contract ones are worded as they are. "how much have we spent against
+    # each contract this year" routes nowhere: the router's vocabulary for this engine is sla,
+    # contractor, scorecard, first fix, invoice, day rate, ppm compliance and the rest, and not
+    # the bare word "contract".
+        "which contractor has the worst sla performance",
+        "show me each vendor scorecard for last month",
+        "which contractor is overcharging us",
+        "what is each contractor first fix rate",
+        "which vendors have a recall on recent work",
+        "what is our ppm compliance by contractor",
+        "which contractor overran on cost last quarter",
+        "are any invoices above the capped day rate",
+        "what is the labour rate we agreed with each contractor",
+        "which vendor scorecard dropped the most this quarter",
+        "how is each contractor performing against its kpi",
+        "which contractor has the most sla breaches",
+        "is anyone overbilling us on hourly rate",
+        "what is the cost variance against contract terms this year",
+        "which contractor is performing best on ppm compliance",
+        "show the sla performance for every contractor this month",
+        "which invoices look like overbilling",
+        "what is the first fix rate by contractor and building",
+        "which contractor had the most recalls last year",
+        "has any contractor breached its contract terms",
     ),
     "compliance": (
         "which buildings are out of compliance today",
@@ -66,6 +117,21 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "which approvals expire this month",
         "when is the next loler inspection due",
         "show the eicr certificate for each building",
+    # Added 3 Nov 2026 because a batch of 25 for Ops came back with 9. A batch never asks the
+    # same question twice, so it is capped by how many DISTINCT questions route to the instance,
+    # and 13 of the 32 written before this route NOWHERE at all. Every question below was put
+    # through the real router before it was added and kept only if it reached this engine --
+    # which is why the contract ones are worded as they are. "how much have we spent against
+    # each contract this year" routes nowhere: the router's vocabulary for this engine is sla,
+    # contractor, scorecard, first fix, invoice, day rate, ppm compliance and the rest, and not
+    # the bare word "contract".
+        "which certificates expire in the next 60 days",
+        "what is our compliance rate by building",
+        "which buildings have no fire risk assessment",
+        "which statutory inspections are overdue",
+        "what compliance documents are missing for each building",
+        "which certificates were issued by an unverified body",
+        "how many certificates lapsed last quarter",
     ),
     "energy_intelligence": (
         "which assets are losing value",
@@ -74,6 +140,20 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "what will break in the next 90 days",
         "which building uses the most energy per square metre",
         "where is consumption rising fastest",
+    # Added 3 Nov 2026 because a batch of 25 for Ops came back with 9. A batch never asks the
+    # same question twice, so it is capped by how many DISTINCT questions route to the instance,
+    # and 13 of the 32 written before this route NOWHERE at all. Every question below was put
+    # through the real router before it was added and kept only if it reached this engine --
+    # which is why the contract ones are worded as they are. "how much have we spent against
+    # each contract this year" routes nowhere: the router's vocabulary for this engine is sla,
+    # contractor, scorecard, first fix, invoice, day rate, ppm compliance and the rest, and not
+    # the bare word "contract".
+        "what did we spend on energy last month",
+        "which buildings use the most energy overall",
+        "how does energy use compare year on year",
+        "which meters show an unexpected jump",
+        "what is the energy intensity of each building",
+        "which buildings have the worst energy rating",
     ),
 }
 
@@ -179,11 +259,35 @@ class Scenario:
         return asdict(self)
 
 
+#: Question stems a person in a hurry drops. Longest first, so "what is the" wins over "what is".
+_SHORT_STEMS: tuple[str, ...] = (
+    "which of the", "what is the", "how many of the", "how much of the", "tell me which",
+    "show me the", "show me", "what are the", "what is", "what are", "how many", "how much",
+    "how long are", "how long", "which", "what", "who can", "who", "where is", "where", "when is",
+    "when", "is each", "are any", "is any", "has any", "have any", "list", "do we", "did we",
+)
+
+#: Words that carry nothing once the stem is gone.
+_SHORT_FILLER = frozenset({"is", "are", "was", "were", "do", "does", "did", "the", "a", "an",
+                           "right", "now", "us", "we", "our", "my", "me"})
+
+
 def _rough(question: str, style: str, rng: random.Random) -> str:
     """The same question as somebody would really type it."""
     if style == "short":
+        # Clipped, not truncated. Taking the first four words turned "which contractor overran on
+        # cost last quarter" into "which contractor overran on" and "how many work orders are open
+        # at each building" into "how many work orders" -- questions that mean nothing, which
+        # measure the engine's handling of nonsense rather than of terseness. Somebody in a hurry
+        # drops the question stem and keeps the subject, so that is what this does.
         words = question.split()
-        return " ".join(words[:4]) if len(words) > 4 else question
+        for stem in _SHORT_STEMS:
+            parts = stem.split()
+            if [w.lower() for w in words[:len(parts)]] == parts:
+                words = words[len(parts):]
+                break
+        words = [w for w in words if w.lower() not in _SHORT_FILLER]
+        return " ".join(words) if len(words) >= 2 else question
     if style == "typos":
         out = list(question)
         for _ in range(max(1, len(out) // 25)):

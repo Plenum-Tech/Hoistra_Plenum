@@ -22,6 +22,10 @@ const REFUSALS = [[0, 'none'], [0.1, '10%'], [0.25, '25%']];
 
 const secs = (ms) => Math.round((Number(ms) || 0) / 1000) + 's';
 const usd = (n) => '$' + Number(n || 0).toFixed(4);
+// When the batch on screen was made. A batch does not refresh on its own -- deliberately, so
+// one being read does not change under the reader -- which means a batch generated before a
+// deploy sits there looking current. The seed and the time are what tell the two apart.
+const at = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 export default function Synthetic({ instance, onPick, org }) {
   // The company the questions are asked against. The lab takes it from whichever run is
@@ -89,7 +93,10 @@ export default function Synthetic({ instance, onPick, org }) {
     const next = pinned ? Number(seed) || 0 : Math.floor(Math.random() * 1000000);
     if (!pinned) setSeed(next);
     try {
-      setBatch(await labApi.generate({ space, count: Number(count), seed: next, challenge_ratio: Number(challenge) }));
+      const made = await labApi.generate({ space, count: Number(count), seed: next, challenge_ratio: Number(challenge) });
+      // Stamped here rather than taken from the reply: it is the moment THIS page got it,
+      // which is what somebody looking at a stale table needs to know.
+      setBatch(Object.assign({}, made, { made_at: Date.now() }));
     } catch (e) {
       setError((e && e.message) || String(e));
     } finally {
@@ -341,6 +348,8 @@ export default function Synthetic({ instance, onPick, org }) {
               + (batch.short ? ' — ' + (batch.short_reason || 'the router could not place the rest inside this instance') : '')
               + (batch.out_of_module ? ' · ' + batch.out_of_module + ' the instance must refuse' : '')
               + (batch.cross_domain ? ' · ' + batch.cross_domain + ' need more than one area' : '')
+              + ' · seed ' + batch.seed
+              + (batch.made_at ? ' · generated ' + at(batch.made_at) : '')
               + ' · batch ' + batch.fingerprint}
           </p>
           <table className="lab-table">

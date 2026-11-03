@@ -323,3 +323,21 @@ test('the answers carry the parts too, not just the batch table', () => {
   assert.ok(answers.includes("' · needs ' + r.needs.join(' + ')"));
   assert.ok(answers.includes("'Must cover: ' + r.covers"));
 });
+
+
+// A batch does not refresh on its own — deliberately, so one being read does not change under the
+// reader. That means a batch generated before a deploy sits on screen looking current, which is
+// exactly what happened on 3 Nov: the same batch was read as the new one three times over.
+test('the batch line says which batch it is and when it was made', () => {
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes("' · seed ' + batch.seed"), 'the seed is what reproduces a batch and names it');
+  assert.ok(src.includes('batch.made_at'), 'nothing on screen says when the batch was made');
+  assert.ok(src.includes('batch.fingerprint'));
+});
+
+test('the time is stamped when the page receives the batch, not read from the reply', () => {
+  // It is the moment THIS page got it, which is what somebody looking at a stale table needs.
+  const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
+  assert.ok(/Object\.assign\(\{\}, made, \{ made_at: Date\.now\(\) \}\)/.test(src),
+    'the stamp must be the page\'s own, and must not be overwritten by the reply');
+});

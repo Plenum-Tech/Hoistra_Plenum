@@ -135,3 +135,59 @@ async def test_what_it_must_cover_is_never_put_in_the_expected_answer_column():
     out = await rs.template_csv(rs.GenerateRequest(space="full", count=10, seed=359375), who=None)
     rows = list(csv.DictReader(io.StringIO(out.body.decode("utf-8"))))
     assert all(r["expected_answer"] == "" for r in rows)
+
+
+# -- the pool, and the shapes it is asked in (3 Nov 2026) ----------------------------------------
+#
+# "9 of 25" for Ops: a batch never asks the same question twice, so it is capped by how many
+# DISTINCT questions route to the instance, and 13 of the 32 originally written route nowhere at
+# all. The pool was grown, with every question put through the real router before it was added.
+
+@pytest.mark.parametrize("space", ["ops", "comp", "assets", "full"])
+def test_a_batch_of_twenty_five_is_a_batch_of_twenty_five(space):
+    rows = scenarios.generate(space, count=25, seed=197499)
+    assert len(rows) == 25, f"{space} can only make {len(rows)}"
+    assert len({r.question for r in rows}) == 25
+
+
+def test_every_written_question_routes_to_the_engine_it_is_filed_under():
+    """A question filed under an engine the router will not send it to is dead weight: the
+    generator drops it, the batch comes back short, and nothing says why. Thirteen of the
+    originals are like this -- they are left in place deliberately, because they are ordinary
+    things a facilities manager types and the gap is the ROUTER's, not the generator's. This test
+    holds the line at that number rather than at zero, so a new one is noticed."""
+    unplaceable = [(eng, q) for eng, qs in scenarios.BY_ENGINE.items()
+                   for q in qs if scenarios.routes_to(q) != eng]
+    assert len(unplaceable) <= 16, [q for _, q in unplaceable]
+
+
+@pytest.mark.parametrize("space", ["ops", "comp", "assets", "full"])
+def test_the_short_style_keeps_the_question_a_question(space):
+    """It used to take the first four words, which turned "which contractor overran on cost last
+    quarter" into "which contractor overran on". That measures how an engine handles nonsense,
+    not how it handles terseness."""
+    rows = scenarios.generate(space, count=25, seed=197499)
+    for r in rows:
+        if r.style != "short":
+            continue
+        words = r.question.split()
+        # Two is enough when both carry meaning -- "contractor overcharging" is how somebody in a
+        # hurry types it. What must not happen is a sentence cut off mid-clause.
+        assert len(words) >= 2, r.question
+        assert words[-1].lower() not in {"on", "at", "in", "the", "a", "an", "of", "to", "are",
+                                         "is", "and", "with", "for", "by"}, (
+            "it ends on a word that was leading somewhere: " + r.question)
+
+
+def test_a_shortened_question_still_reaches_its_engine():
+    """Dropping the stem must not move it. One that no longer routes is dropped by the generator,
+    so this is where it would be noticed."""
+    moved = []
+    for engine, questions in scenarios.BY_ENGINE.items():
+        for q in questions:
+            if scenarios.routes_to(q) != engine:
+                continue
+            short = scenarios._rough(q, "short", None)
+            if scenarios.routes_to(short) != engine:
+                moved.append((q, short))
+    assert not moved, moved
