@@ -10,7 +10,9 @@ import { join, resolve } from 'node:path';
 import { FRONTEND } from './esbuild-helper.mjs';
 
 const REPO = resolve(FRONTEND, '..', '..');
-const read = (...p) => readFileSync(join(...p), 'utf8');
+// Normalised to LF: a Windows clone has CRLF in the working copy, and these anchors are about
+// WHICH lines are there and in what order, not which bytes end them.
+const read = (...p) => readFileSync(join(...p), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
 // Exactly addendum A4: two lines, no comment.
 const A4_LINES = 'ARG VITE_TRACE_LAB=0\n'
   + 'ENV VITE_TRACE_LAB=$VITE_TRACE_LAB\n';
@@ -29,7 +31,15 @@ test('A4: the all-in-one Dockerfile takes it in the frontend stage, and nowhere 
   assert.ok(start > -1);
   const end = src.indexOf('\nFROM ', start + 1);
   const stage = src.slice(start, end);
-  assert.equal(count(stage, A4_ANCHOR), 1);
+  // Not A4_ANCHOR here: the build-id block (VITE_BUILD_ID, version.json) was later added between
+  // these two lines and `RUN npm run build`, which is nothing to do with Trace Lab. What A4
+  // requires is that the two lines are exactly these two, adjacent, in the frontend stage and
+  // after the env block -- not that nothing else may ever be added below them.
+  assert.equal(count(stage, A4_LINES), 1, 'the two approved lines, adjacent and unchanged');
+  assert.ok(stage.indexOf(A4_LINES) > stage.indexOf('VITE_ORGANIZATION_ID'),
+    'they belong with the build env, not at the top of the stage');
+  assert.ok(stage.indexOf('RUN npm run build') > stage.indexOf(A4_LINES),
+    'inert unless the stage still builds after them');
   assert.equal(count(src, 'VITE_TRACE_LAB'), 3, 'only the frontend stage names it');
 });
 

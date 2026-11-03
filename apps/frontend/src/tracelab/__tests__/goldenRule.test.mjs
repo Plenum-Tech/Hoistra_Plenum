@@ -7,12 +7,16 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { join, relative, extname, sep } from 'node:path';
 import { transformSync } from 'esbuild';
 import { FRONTEND, SRC } from './esbuild-helper.mjs';
 
 const MODULE = join(SRC, 'tracelab');
 const LAB = join(SRC, 'lab');
+// Both sides of this comparison are OS paths, so the separator has to be the OS one: with a
+// hardcoded '/' the skip never fired on Windows, and the lab's own tree was scanned as if it
+// were the Hoistra app attaching to Trace Lab.
+const inside = (p, dir) => p === dir || p.startsWith(dir + sep);
 const LOADER = { '.js': 'jsx', '.jsx': 'jsx', '.ts': 'ts', '.tsx': 'tsx', '.mjs': 'js' };
 const rel = (p) => relative(FRONTEND, p).split('\\').join('/');
 function walk(dir, out) {
@@ -38,7 +42,7 @@ const intoModule = (spec) => /(^|\/)tracelab(\/|$)/.test(spec);
 function moduleImports() {
   const found = [];
   for (const file of walk(SRC, [])) {
-    if (file === MODULE || file.startsWith(MODULE + '/') || file.startsWith(LAB + '/')) continue;
+    if (inside(file, MODULE) || inside(file, LAB)) continue;
     const code = stripComments(file);
     let m;
     SPEC.lastIndex = 0;

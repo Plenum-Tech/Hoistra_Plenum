@@ -15,6 +15,34 @@ globalThis.window = {
   sessionStorage: { getItem: (k) => (k in tabMem ? tabMem[k] : null), setItem: (k, v) => { tabMem[k] = String(v); }, removeItem: (k) => { delete tabMem[k]; } }
 };
 globalThis.WebSocket = class { constructor() { throw new Error('no sockets in tests'); } };
+// Web Locks, which the refresh lock is built on. Node has no navigator.locks (it does have a
+// `navigator`, so the code's feature check passes the object and then finds no request method),
+// and without it withRefreshLock falls straight through to the unlocked path -- so the three
+// tests about two tabs refreshing at once were testing nothing, and two of them could not even
+// run. This is the part of the API those tests need: exclusive, FIFO per name, the lock held
+// until the callback's promise settles, and `signal` aborting the WAIT rather than the holder.
+const lockQueues = new Map();
+navigator.locks = {
+  request(name, optionsOrFn, maybeFn) {
+    const fn = typeof optionsOrFn === 'function' ? optionsOrFn : maybeFn;
+    const signal = typeof optionsOrFn === 'function' ? null : (optionsOrFn || {}).signal;
+    const held = lockQueues.get(name) || Promise.resolve();
+    let release;
+    const mine = new Promise((r) => { release = r; });
+    lockQueues.set(name, held.then(() => mine));
+    const waited = signal
+      ? Promise.race([held, new Promise((_, reject) => {
+          if (signal.aborted) return reject(signal.reason || new Error('AbortError'));
+          signal.addEventListener('abort', () => reject(signal.reason || new Error('AbortError')));
+        })])
+      : held;
+    return waited.then(
+      () => Promise.resolve().then(fn).finally(release),
+      // The wait was abandoned: let go of the place in the queue, or the next waiter hangs
+      // behind a lock nobody holds.
+      (err) => { release(); throw err; });
+  }
+};
 globalThis.fetch = async (url, opts) => {
   const u = new URL(String(url));
   const method = (opts && opts.method) || 'GET';
@@ -1688,7 +1716,12 @@ test('a refresh never waits forever behind a tab that stopped while holding the 
   let release;
   const stuck = navigator.locks.request('hoistra.refresh.u-stuck', () => new Promise((r) => { release = r; }));
   const started = Date.now();
-  const out = await withRefreshLock('u-stuck', async () => 'exchanged', 150);
+  // AbortSignal.timeout's timer is unref'd in Node, and the only other thing pending here is a
+  // promise nobody will settle, so without something holding the loop open Node decides the
+  // program is finished before the wait runs out and the await never returns. A browser tab is
+  // never idle in that sense; this stands in for it.
+  const awake = setInterval(() => {}, 20);
+  const out = await withRefreshLock('u-stuck', async () => 'exchanged', 150).finally(() => clearInterval(awake));
   assert.equal(out, 'exchanged', 'the exchange goes ahead unlocked once the wait runs out');
   assert.ok(Date.now() - started < 2000);
   release(); await stuck;

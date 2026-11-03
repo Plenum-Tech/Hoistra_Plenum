@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/check-bundle.mjs",
     "preview": "vite preview",
-    "test": "node --test \"test/**/*.test.mjs\"",
+    "test": "node --test \"test/**/*.test.mjs\" \"src/**/__tests__/*.test.mjs\"",
     "check:bundle": "node scripts/check-bundle.mjs"
   },
   "dependencies": {

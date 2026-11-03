@@ -14,10 +14,13 @@ import { makeLibrary, promptOptions, ROOT, BLOCKS, EXAMPLES } from '../src/openu
 
 const library = makeLibrary(core, z);
 const prompt = library.prompt(promptOptions) + '\n';
+// Read with LF endings whatever the checkout uses. The generator emits LF; a Windows clone has
+// CRLF in the working copy, so the comparison failed on every line of a file that is correct,
+// and told whoever cloned it to regenerate a prompt that needed nothing.
 const committed = readFileSync(
   new URL('../../backend/cafm-connector-service-final/svc-deepagents/src/agents/openui_prompt.md', import.meta.url),
   'utf8'
-);
+).split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
 
 const NAMES = [
   'Answer', 'Headline', 'Text', 'Metrics', 'Metric', 'Table', 'BarChart', 'LineChart', 'Series',

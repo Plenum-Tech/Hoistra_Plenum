@@ -29,6 +29,10 @@ const PAGE = join(SRC, 'components', 'shell', 'PlatformCostPage.jsx');
 const A3_IMPORT = "import EvalSpendLine from '../../tracelab/EvalSpendLine.jsx';\n";
 const A3_LINE = '      <EvalSpendLine monthLabel={st.showing || month.label} />\n';
 const count = (s, sub) => s.split(sub).length - 1;
+// Read with LF endings whatever the checkout uses: a Windows clone has CRLF in the working
+// copy, and these two anchors end in a newline, so every one of them missed on Windows and
+// the guard reported A3 as absent from a file that has it.
+const readLF = (f) => readFileSync(f, 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
 
 // Bundles page source text as if it sat in components/shell (so its own imports resolve), and imports it.
 async function bundleSource(contents, flagOn) {
@@ -59,7 +63,7 @@ const VALS = pcVals(ctl, new Date(Date.UTC(2026, 9, 5, 10, 12)));
 const render = (Page) => renderToStaticMarkup(React.createElement(Page, { vals: VALS }));
 
 test('A3 is exactly the two approved lines, in their approved places', () => {
-  const src = readFileSync(PAGE, 'utf8');
+  const src = readLF(PAGE);
   assert.equal(count(src, A3_IMPORT), 1);
   assert.equal(count(src, A3_LINE), 1);
   assert.ok(src.includes("import PlatformCostPanel, { ToneIcon } from './PlatformCostPanel.jsx';\n" + A3_IMPORT));
@@ -69,7 +73,7 @@ test('A3 is exactly the two approved lines, in their approved places', () => {
 });
 
 test('with the flag off the Platform cost page renders exactly what it rendered without A3', async () => {
-  const src = readFileSync(PAGE, 'utf8');
+  const src = readLF(PAGE);
   const without = src.replace(A3_IMPORT, '').replace(A3_LINE, '');
   assert.equal(without.length, src.length - A3_IMPORT.length - A3_LINE.length);
   const before = render((await bundleSource(without, false)).default);
