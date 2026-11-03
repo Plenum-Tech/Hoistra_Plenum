@@ -164,7 +164,14 @@ def test_the_private_touch_points_still_hold():
     assert isinstance(trace._turn.get(None), (type(None), trace.Turn)) and trace._turn.name == "hoist_trace_turn"
     assert list(inspect.signature(trace.Turn.__init__).parameters) == ["self", "turn_id", "session_id"]
     from src.agents.orchestrator import DeepAgentOrchestrator
+    # stream() opened the turn itself until b0a93fe (the OpenUI answer work) split it: the body
+    # moved to _stream_turn and stream() now delegates. The touch point is the same one, in the
+    # method that does the work, so the guard follows it there instead of reading an empty
+    # wrapper and passing -- or, as it did on 3 Nov 2026, failing for the wrong reason.
     stream_src = inspect.getsource(DeepAgentOrchestrator.stream)
+    if "activity_log.ensure_turn()" not in stream_src:
+        assert "_stream_turn" in stream_src, "stream() no longer opens the turn nor delegates to it"
+        stream_src = inspect.getsource(DeepAgentOrchestrator._stream_turn)
     assert "activity_log.ensure_turn()" in stream_src and "llm_cost.begin_turn(sid)" in stream_src
     assert list(inspect.signature(DeepAgentOrchestrator.stream).parameters) == [
         "self", "user_message", "session_id", "extra_context"]
