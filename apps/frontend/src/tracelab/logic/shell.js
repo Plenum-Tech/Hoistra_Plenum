@@ -6,7 +6,7 @@ import { FILTER_DEFAULTS } from '../store.js';
 import { humanize } from './timeline.js';
 
 export { RANGES, TABS };
-export const TAB_LABELS = Object.freeze({ conversations: 'Conversations', runs: 'Runs', golden: 'Golden set', models: 'Model calls', map: 'Map', progress: 'Progress', labels: 'Labels', judges: 'Judges', watch: 'Watch' });
+export const TAB_LABELS = Object.freeze({ conversations: 'Conversations', runs: 'Runs', golden: 'Golden set', scenarios: 'Synthetic questions', models: 'Model calls', map: 'Map', progress: 'Progress', labels: 'Labels', judges: 'Judges', watch: 'Watch' });
 export const POLL_MS = 45000;
 export const POLLED_TABS = ['conversations', 'runs'];
 export const PAGE_SIZE = 25;

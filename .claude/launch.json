@@ -55,6 +55,15 @@
         "C:/CMMS/Plenum-CAFM/apps/frontend"
       ],
       "port": 3000
+    },
+    {
+      "name": "frontend-tracelab",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set VITE_TRACE_LAB=1 && npm run dev --prefix apps/frontend -- --port 5176 --strictPort"
+      ],
+      "port": 5176
     }
   ]
 }
