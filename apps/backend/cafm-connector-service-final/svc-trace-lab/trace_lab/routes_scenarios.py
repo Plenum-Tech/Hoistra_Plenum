@@ -68,8 +68,15 @@ async def generate(body: GenerateRequest, who: Any = Depends(reader)) -> dict[st
     one that would route outside its own space is dropped rather than shipped."""
     out = scenarios.batch(body.space, count=body.count, seed=body.seed,
                           challenge_ratio=body.challenge_ratio)
-    # Says so when the router could not fill the batch, instead of quietly returning fewer.
+    # Says so when the batch could not be filled, instead of quietly returning fewer. A question
+    # is used once per batch -- the same question asked twice in different words is one answer to
+    # grade twice -- so the batch is capped by how many distinct questions route to this instance.
     out["short"] = out["generated"] < out["requested"]
+    if out["short"]:
+        out["short_reason"] = (
+            f"{out['generated']} is every distinct question that routes to this instance today "
+            f"(of {out['pool']} written for its engines). A batch never asks the same question "
+            f"twice, so this is the largest batch it can make.")
     return {"ok": True, **out}
 
 
@@ -84,6 +91,12 @@ async def template_csv(body: GenerateRequest, who: Any = Depends(reader)) -> Res
     for s in rows:
         note = (f"space={s.space} engine={s.engine} role={s.role} style={s.style} "
                 f"difficulty={s.difficulty}" + ("" if s.in_module else " OUT-OF-MODULE: must be refused"))
+        if s.needs:
+            # What the answer has to address, in the notes and NOT in expected_answer: an expected
+            # answer has to be grounded in real rows and written by a person, and a generated one
+            # would turn the set into a way of agreeing with itself.
+            note += (" CROSS-DOMAIN needs=" + "+".join(s.needs)
+                     + " MUST COVER: " + s.covers)
         w.writerow([s.scenario_id, s.question, "", "judgment", "", note])
     name = f"scenarios-{body.space}-{body.seed}.csv"
     return Response(content=buf.getvalue(), media_type="text/csv",
@@ -161,6 +174,12 @@ async def learning_draft(run: str | None = None, who: Reviewer = Depends(reviewe
     """
     found = await learning.gather(who.org, run_code=run)
     return {"ok": True, "counts": found["counts"], "markdown": learning.draft(found),
+            # Grouped by the skill document each note is probably about, because that is the unit
+            # a skill document is edited in and the unit the Skill lab takes a proposal in. The
+            # grouping is a suggestion and says so; the reviewer picks the document.
+            "by_skill": learning.by_skill(found),
+            "run_code": found.get("run_code"),
+            "gates_available": found.get("gates_available", True),
             "applies_anything": False}
 
 

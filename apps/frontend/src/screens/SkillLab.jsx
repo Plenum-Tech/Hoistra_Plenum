@@ -53,13 +53,56 @@ export default function SkillLab({ vals }) {
         ))}
       </div>
 
+      {/* A rewrite written from what reviewers said, rather than one the optimiser measured.
+          Only the documents the service says an overlay reaches: a rewrite of anything else
+          would be approved and change nothing the agents read. */}
+      {vals.slTunable.length ? (
+        <div style={{ ...CARD, marginTop: "18px", padding: "14px 16px" }}>
+          <div style={KICK}>{"Write a rewrite"}</div>
+          <div style={{ fontSize: "12.5px", color: "var(--color-neutral-500)", marginTop: "4px" }}>
+            {"From what reviewers said in Trace Lab, rather than from a measured replay. It is added to what the document says now, and changes nothing until it is approved below."}
+          </div>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginTop: "10px" }}>
+            <label style={KICK} htmlFor="sl-doc">{"Document"}</label>
+            <select id="sl-doc" value={vals.slDoc} onChange={vals.slSetDoc}
+              style={{ ...QUIET, cursor: "pointer", color: "var(--color-text)" }}>
+              {vals.slTunable.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <textarea value={vals.slAppend} onChange={vals.slSetAppend} rows={5}
+            placeholder="What the instructions should say, in the words the agents should read."
+            style={{ width: "100%", marginTop: "10px", padding: "10px", borderRadius: "7px",
+              border: "1px solid var(--color-divider)", background: "var(--color-bg)",
+              color: "var(--color-text)", fontSize: "12.5px", lineHeight: "1.5", resize: "vertical" }} />
+          <input value={vals.slNote} onChange={vals.slSetNote}
+            placeholder="Where this came from, e.g. R32 - three reviewers said the role was never checked"
+            style={{ width: "100%", marginTop: "8px", padding: "9px 10px", borderRadius: "7px",
+              border: "1px solid var(--color-divider)", background: "var(--color-bg)",
+              color: "var(--color-text)", fontSize: "12.5px" }} />
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "10px" }}>
+            <button type="button" onClick={vals.slWrite} disabled={vals.slWriting} style={MAIN}>
+              {vals.slWriting ? "Proposing…" : "Propose it"}
+            </button>
+            <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>
+              {"Nothing changes until an admin approves it."}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
       {vals.slProposals.map((p) => (
         <div key={p.id} style={{ ...CARD, marginTop: "16px", padding: "14px 16px", borderLeft: "3px solid var(--st-warn)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <div style={KICK}>{"Rewrite waiting for approval · " + p.doc + " · " + p.when}</div>
-              <div style={{ fontSize: "13px", marginTop: "4px" }}>{p.verdict}</div>
-              {p.rationale ? <div style={{ fontSize: "12px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{p.rationale}</div> : null}
+              <div style={KICK}>{"Rewrite waiting for approval · " + p.doc + " · " + p.when
+                + (p.written ? " · written, not measured" : "")}</div>
+              {/* Said plainly: a written rewrite sits beside ones that won a measured comparison
+                  and must not read as if it had a score behind it. */}
+              <div style={{ fontSize: "13px", marginTop: "4px" }}>
+                {p.written ? ("Written by " + (p.writtenBy || "an administrator") + ". No replay behind it.") : p.verdict}
+              </div>
+              {p.written && p.note ? <div style={{ fontSize: "12px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{p.note}</div> : null}
+              {!p.written && p.rationale ? <div style={{ fontSize: "12px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{p.rationale}</div> : null}
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
               <button type="button" onClick={p.approve} style={MAIN}>{"Approve"}</button>

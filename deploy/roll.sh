@@ -23,6 +23,8 @@ ACR_NAME="${ACR_NAME:-agentapi}"
 ACR_REPO="${ACR_REPO:-finalplenumcafm}"
 APP="${APP:-hoistra-frontend}"
 RG="${RG:-azure-cotainer}"
+# The workspace the container app logs to, for the Trace Lab schema check at the end.
+LAW_WORKSPACE="${LAW_WORKSPACE:-0f4636cb-e800-421a-9d00-92eb95161659}"
 
 TAG="${1:?usage: deploy/roll.sh <tag>}"
 IMAGE="${ACR_NAME}.azurecr.io/${ACR_REPO}:${TAG}"
@@ -78,13 +80,48 @@ az containerapp revision list -n "$APP" -g "$RG" \
   --query "[?properties.trafficWeight>\`0\`].{rev:name,state:properties.runningState,traffic:properties.trafficWeight}" \
   --output table
 
+step "wait for the traffic switch, then check the build id"
+FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
+# Traffic switches ~20-25 s AFTER `update` returns, so a check run straight away is answered by
+# the OLD revision and reports a roll that has not happened yet.
+for _ in $(seq 1 60); do
+  curl -s -I "https://$FQDN/" | grep -qi "x-build-id: ${TAG}" && break
+  sleep 5
+done
+served=$(curl -s -I "https://$FQDN/" | grep -i x-build-id | tr -d '
+')
+echo "${served:-no x-build-id served}"
+case "$served" in
+  *"$TAG"*) ;;
+  *) echo "THE SITE IS NOT SERVING ${TAG} YET. Check the revision before trusting anything below."; ;;
+esac
+
+step "is Trace Lab's schema actually ready?"
 cat <<'NOTE'
+This cannot be answered over HTTP. /backend/trace-lab/health is a bare liveness check that never
+looks at the schema, and authentication runs BEFORE the readiness gate, so every /api/trace-lab/*
+route answers 401 without a token whether the schema is ready or not. Reading a 401 as "not 503,
+therefore ready" is how the lab stayed down for an hour on 3 Nov 2026 while being reported healthy.
 
-Traffic switches a little AFTER `update` returns, so a health check run now reads the OLD
-revision and will tell you the roll worked when it has not yet happened. Wait for the new
-revision, then check the build id it serves:
+A schema version is TWO files -- the migration AND migrations/catalog.json's "version". Shipping
+one without the other gives status=unreadable, which 503s every route exactly like a missing
+migration does.
 
-  FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
-  until curl -s -I "https://$FQDN/" | grep -qi "x-build-id: <tag>"; do sleep 10; done
-  curl -s -I "https://$FQDN/" | grep -i x-build-id
+The service logs its own verdict on every check. That is the thing to read:
 NOTE
+# Printing the command and trusting the reader to run it is how it gets skipped. Run it.
+sleep 30
+verdicts=$(az monitor log-analytics query -w "$LAW_WORKSPACE" --analytics-query   "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(10m) | where Log_s has 'trace_lab.schema' | project TimeGenerated, Log_s | order by TimeGenerated desc | take 10"   -o tsv 2>/dev/null)
+if [ -z "$verdicts" ]; then
+  echo "NO trace_lab.schema LINES YET. The check runs on the first request; open the lab and run"
+  echo "this again before believing it is up. Ingestion also lags a minute or two."
+else
+  echo "$verdicts" | sed 's/^/  /' | head -6
+  newest=$(echo "$verdicts" | head -1)
+  case "$newest" in
+    *unavailable*) echo; echo "TRACE LAB IS 503 FOR EVERYONE. The newest verdict is 'unavailable' (see the problems= field)." ;;
+    *verified*)    echo; echo "Trace Lab schema verified." ;;
+    *)             echo; echo "Could not read a verdict from the newest line; read it yourself above." ;;
+  esac
+fi
+

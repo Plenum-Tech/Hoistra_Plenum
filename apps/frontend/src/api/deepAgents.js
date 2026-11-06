@@ -95,6 +95,9 @@ export const deepAgentsApi = {
   skillLabRun: (id) => apiFetch(B, '/api/skill-lab/runs/' + encodeURIComponent(id), { query: orgOverride(), timeoutMs: 15000 }),
   skillLabStart: (body) => apiFetch(B, '/api/skill-lab/runs', { method: 'POST', body: Object.assign({}, body, orgOverride()), timeoutMs: 15000 }),
   skillLabProposals: () => apiFetch(B, '/api/skill-lab/proposals', { timeoutMs: 12000 }),
+  // A rewrite an admin writes themselves, from what reviewers said rather than from a measured
+  // replay. It waits for approval exactly like a measured one.
+  skillLabWrite: (body) => apiFetch(B, '/api/skill-lab/proposals', { method: 'POST', body, timeoutMs: 15000 }),
   skillLabReview: (id, decision) => apiFetch(B, '/api/skill-lab/proposals/' + encodeURIComponent(id) + '/' + decision, { method: 'POST', timeoutMs: 8000 }),
   skillLabRevert: (skill, doc) => apiFetch(B, '/api/skill-lab/docs/' + encodeURIComponent(skill) + '/' + encodeURIComponent(doc) + '/revert', { method: 'POST', timeoutMs: 8000 }),
   traceExport: async (q) => {

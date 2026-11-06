@@ -372,7 +372,7 @@ def test_the_summary_rounds_every_rate_to_four_places_and_carries_the_published_
 
 
 def test_stats_imports_only_the_standard_library():
-    tree = ast.parse((Path(stats.__file__)).read_text())
+    tree = ast.parse((Path(stats.__file__)).read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

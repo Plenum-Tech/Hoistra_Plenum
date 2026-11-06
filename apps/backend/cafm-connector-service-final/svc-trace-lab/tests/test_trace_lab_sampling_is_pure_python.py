@@ -24,7 +24,7 @@ def _rows(n: int, d: int, seed: int) -> list[list[float]]:
 
 
 def test_the_module_imports_nothing_beyond_the_standard_library_and_the_package():
-    tree = ast.parse(SOURCE.read_text())
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
     roots = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

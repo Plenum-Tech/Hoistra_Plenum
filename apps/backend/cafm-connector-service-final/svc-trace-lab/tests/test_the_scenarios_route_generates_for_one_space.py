@@ -106,8 +106,74 @@ async def test_generate_returns_a_batch_for_that_space(space):
     out = await rs.generate(rs.GenerateRequest(space=space, count=20, seed=1), who=None)
     assert out["ok"] is True
     assert out["space"] == space
-    assert out["generated"] == 20 and len(out["scenarios"]) == 20
+    assert out["scenarios"] and len(out["scenarios"]) == out["generated"]
+    assert out["generated"] <= 20
     assert out["fingerprint"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("space", ["ops", "comp", "assets", "full"])
+async def test_no_question_is_asked_twice_in_one_batch(space):
+    """Reported on 3 Nov 2026: a batch of ten held "is each vendor inside its sla" three times --
+    once plainly, once with a letter dropped, once wrapped in "sorry quick one...". Three strings,
+    one question. A reviewer reading it is being asked to grade one answer three times, and the
+    batch measures one question three times over."""
+    out = await rs.generate(rs.GenerateRequest(space=space, count=20, seed=359375), who=None)
+    questions = [r["question"] for r in out["scenarios"]]
+    assert len(set(questions)) == len(questions)
+    # And not the same question underneath, either: the styles wrap or mangle a base question, so
+    # distinct STRINGS is not the test.
+    bases = [_base_of(q) for q in questions]
+    assert len(set(bases)) == len(bases), sorted(b for b in bases if bases.count(b) > 1)
+
+
+def _base_of(question: str) -> str:
+    """The question underneath the typing: the rambling wrapper and the frustrated suffix removed,
+    letters only, so a dropped letter does not make it a different question."""
+    q = question.lower()
+    for prefix in ("sorry quick one, i know you get asked this a lot but ",):
+        if q.startswith(prefix):
+            q = q[len(prefix):]
+    for suffix in (" - just need it for the morning meeting", "? this is the third time i am asking"):
+        if q.endswith(suffix):
+            q = q[: -len(suffix)]
+    return "".join(c for c in q if c.isalpha())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("space", ["ops", "comp", "assets", "full"])
+async def test_a_batch_asked_for_with_no_refusals_contains_none(space):
+    """The refusal loop used to run until the batch reached the requested size, so a main loop
+    that came up short was padded with questions the instance MUST refuse. An Ops batch asked for
+    with no refusals came back as seven refusals: every answer a refusal, which reads as the
+    engine failing rather than the generator running out."""
+    out = await rs.generate(rs.GenerateRequest(space=space, count=20, seed=359375), who=None)
+    assert out["out_of_module"] == 0
+    assert all(r["in_module"] for r in out["scenarios"])
+
+
+@pytest.mark.asyncio
+async def test_a_short_batch_says_it_is_the_whole_pool_rather_than_a_failure():
+    out = await rs.generate(rs.GenerateRequest(space="ops", count=100, seed=1), who=None)
+    assert out["short"] is True
+    assert "every distinct question" in out["short_reason"]
+    assert out["pool"] >= out["generated"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("space", ["ops", "comp", "assets", "full"])
+async def test_the_way_questions_are_typed_is_spread_across_the_batch(space):
+    """Styles used to be drawn independently, which gave a batch of ten with three questions
+    ending "this is the third time I am asking". That measures one writing style three times."""
+    out = await rs.generate(rs.GenerateRequest(space=space, count=10, seed=359375), who=None)
+    # Single-area questions only. A cross-domain question is asked plainly on purpose: it already
+    # has three parts to keep hold of, and mangling the typing as well would measure two things at
+    # once and leave a failure ambiguous.
+    plain = [r for r in out["scenarios"] if not r["needs"]]
+    counts: dict[str, int] = {}
+    for r in plain:
+        counts[r["style"]] = counts.get(r["style"], 0) + 1
+    assert max(counts.values()) <= (len(plain) // len(rs.scenarios.STYLES)) + 2, counts
 
 
 @pytest.mark.asyncio
@@ -141,7 +207,9 @@ async def test_the_csv_is_the_golden_upload_shape():
     res = await rs.template_csv(rs.GenerateRequest(space="ops", count=10, seed=3), who=None)
     rows = list(csv.reader(io.StringIO(res.body.decode("utf-8"))))
     assert tuple(rows[0]) == rs.CSV_HEADER
-    assert len(rows) == 11
+    # One header plus a row per question. Not 11 on the nose: a batch never repeats a question, so
+    # it is as large as the instance's distinct questions allow and no larger.
+    assert 1 < len(rows) <= 11
 
 
 @pytest.mark.asyncio

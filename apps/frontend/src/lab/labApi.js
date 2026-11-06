@@ -27,6 +27,9 @@ export const labApi = {
   generate: (body) => call('POST', '/scenarios/generate', { body, timeoutMs: 30000 }),
   // org: asking reads one company's records, so the company travels with the request.
   runScenarios: (body, org) => call('POST', '/scenarios/run', { body, org, timeoutMs: 600000 }),
+  // What reviewers have left, drafted. `run` narrows it to one run; without it the draft
+  // covers every run this company has annotated.
+  learningDraft: (run) => call('GET', '/learning/draft', { query: run ? { run } : {} }),
   members: () => call('GET', '/lab/members'),
   member: (userId) => call('GET', '/lab/members/' + enc(userId)),
   decide: (userId, body) => call('PUT', '/lab/members/' + enc(userId), { body }),
