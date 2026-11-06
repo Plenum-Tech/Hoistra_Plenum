@@ -183,3 +183,23 @@ def test_workflow_completed_carries_the_turn_the_caller_started():
         return workflow_stream_completion_payload(SID, answer="a", tool_calls=[])
     ev = asyncio.run(go())
     assert (ev["type"], ev["answer"], ev["turn_id"], ev["session_id"]) == ("workflow_completed", "a", "turn-gabc", SID)
+
+
+async def test_a_rerun_answers_with_the_text_under_test_and_a_golden_run_never_does():
+    """5 Nov 2026: every captured turn cleared the text under test that a correction-loop rerun had just set, so no
+    rerun ever read an approved change (R41, R42). The rerun now hands it to the turn; a golden run still gets none,
+    whatever the caller's context holds."""
+    from src.services import skill_overlays
+
+    orch = RecordedOrchestrator([Msg(), Msg()])
+    cand = {("compliance", "planner"): "UNDER TEST"}
+    await capture.run_message(orch, question=Q, session_id=SID, page_context=None, principal=principal("admin"),
+                              organization_id=ORG, authorization=BEARER, candidate=cand)
+    tok = skill_overlays.CANDIDATE.set({("compliance", "planner"): "LEAKED FROM THE CALLER"})
+    try:
+        await _ask(orch)
+    finally:
+        skill_overlays.CANDIDATE.reset(tok)
+    assert orch.seen[0]["candidate"] == cand, "the rerun's turn reads the text under test"
+    assert orch.seen[1]["candidate"] is None, "a golden run answers with the live text only"
+    assert skill_overlays.CANDIDATE.get() is None

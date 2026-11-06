@@ -38,6 +38,12 @@ class Msg:
     router_usd_tokens: int = 1000              # a call on the CALLER's ledger, before stream opens its own
 
 
+def _candidate():
+    from src.services import skill_overlays
+
+    return skill_overlays.CANDIDATE.get()
+
+
 class RecordedOrchestrator:
     def __init__(self, script: list[Msg]) -> None:
         self.script = script                       # the caller's list: a test may add to it later
@@ -59,7 +65,8 @@ class RecordedOrchestrator:
         self.seen.append({"message": user_message, "session": sid, "context": extra_context,
                           "turn": activity_log.current_turn(), "replay": replay_guard.is_replay(),
                           "principal": caller_principal.get(), "auth": caller_authorization.get(),
-                          "org": caller_organization_id.get(), "trace_turn": trace.current()})
+                          "org": caller_organization_id.get(), "trace_turn": trace.current(),
+                          "candidate": _candidate()})
         activity_log.fire(agent="orchestrator", stage="turn", direction="input", summary=user_message[:300],
                           payload={"message": user_message, "extra_context": extra_context, "mode": "stream"})
         llm_cost.record("router", "claude-sonnet-5", {"input_tokens": msg.router_usd_tokens, "output_tokens": 0}, 5)

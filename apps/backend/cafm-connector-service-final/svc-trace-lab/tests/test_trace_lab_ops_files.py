@@ -167,6 +167,23 @@ def test_the_azure_step_values_are_the_ones_the_supervisord_line_carries():
         assert _readme_value(step, name) == [env[name]], name
 
 
+@needs_repo
+def test_the_agent_reaches_deepagents_inside_the_container():
+    """The Trace Lab agent changes instructions through deepagents' own API (Bala, 5 Nov 2026). In the all-in-one
+    container that is 127.0.0.1 on deep-agents' port - the agent's default, so the approved supervisord environment (A8)
+    is unchanged. A local compose stack sets TRACE_LAB_DEEPAGENTS_URL=http://svc-deepagents:8008 itself."""
+    import configparser
+
+    from trace_lab import agent
+
+    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    parser.read_string((ROOT / "deploy" / "allinone" / "supervisord.conf").read_text(encoding="utf-8"))
+    port = re.search(r"--port (\d+)", parser["program:deep-agents"]["command"]).group(1)
+    env = dict(re.findall(r'(\w+)="([^"]*)"', parser["program:trace-lab"]["environment"]))
+    assert "TRACE_LAB_DEEPAGENTS_URL" not in env, "the default serves the container; A8 stays as approved"
+    assert agent.DEFAULT_DEEPAGENTS_URL == f"http://127.0.0.1:{port}"
+
+
 def test_the_rollback_unsets_both_switches():
     step = _section(README.read_text(encoding="utf-8"), 8)
     assert "VITE_TRACE_LAB" in step and "TRACE_LAB_ENABLED" in step

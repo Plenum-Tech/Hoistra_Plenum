@@ -45,6 +45,10 @@ LIST_MAX = 200
 TREND_RUNS = 8
 EXAMPLES = 3
 TURNS = conversations.TURNS
+#: The current expected answer of question `q` (alias e): the newest one a person wrote or imported, or a coding agent's
+#: that a person approved (3 Nov 2026, migration 0013). An agent's expected answer is only a proposal until then.
+CURRENT_EXPECTED_WHERE = ("(e.source <> 'coding_agent' OR EXISTS (SELECT 1 FROM tracelab.lab_reviews v "
+                          "WHERE v.subject_kind = 'expected_answer' AND v.subject_id = e.id AND v.decision = 'approved'))")
 USERS = labelling.USERS
 SOURCES = ("coding_agent", "excel", "manual")
 NONE_ORG = "00000000-0000-0000-0000-000000000000"
@@ -124,7 +128,7 @@ _RUN_STATS = """
     (SELECT count(DISTINCT t.question_id) FROM tracelab.lab_question_traces t
        JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id = r.id) AS n_traced,
     (SELECT count(DISTINCT e.question_id) FROM tracelab.lab_expected_answers e
-       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id = r.id) AS n_expected,
+       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id = r.id AND """ + CURRENT_EXPECTED_WHERE + """) AS n_expected,
     (SELECT count(*) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
       WHERE q.run_id = r.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
@@ -166,7 +170,10 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
         total = (await conn.execute(text(f"SELECT count(*) FROM tracelab.lab_runs r WHERE {where}"), p)).scalar_one()
         rows = (await conn.execute(text(
             f"SELECT {_RUN_COLS}, {_RUN_STATS} FROM tracelab.lab_runs r WHERE {where} "
-            "ORDER BY r.run_no DESC LIMIT :lim OFFSET :off"), {**p, "lim": limit, "off": offset})).mappings().all()
+            # Newest first by when they were last asked in (3 Nov 2026): a day run that synced a new question rises.
+            "ORDER BY greatest(r.created_at, coalesce((SELECT max(q.asked_at) FROM tracelab.lab_questions q "
+            "WHERE q.run_id = r.id), r.created_at)) DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
+            {**p, "lim": limit, "off": offset})).mappings().all()
     return {"total": int(total), "runs": [run_out(r) for r in rows]}
 
 
@@ -275,11 +282,18 @@ def _new_question(q: dict[str, Any], n: int) -> dict[str, Any]:
 # ── live traffic: one run per person per day ─────────────────────────────────────────────────────
 
 async def sync_production(m: labelling.Member, *, now: datetime | None = None) -> dict[str, Any]:
-    """Make questions of the chat's newer live answers, grouped one run per person per company per day (UTC). Reads the
-    chat's records read-only, then writes Trace Lab's own rows under one lock, so two syncs never number twice."""
+    """Sync now: the caller's companies (every company for the platform team and a consultant)."""
     labelling.require_active(m)
+    return await sync_live(None if m.all_companies else m.org, now=now)
+
+
+async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str, Any]:
+    """Make questions of the chat's newer live answers, grouped one run per person per company per day (UTC). Reads the
+    chat's records read-only, then writes Trace Lab's own rows under one lock, so two syncs never number twice. Also run
+    by itself every few minutes (autosync.py), for every company (org None). An answer the browser showed an error for
+    and the chat never recorded (lab_frontend_events, 3 Nov 2026) becomes a question too, its trace 'browser:<id>'.
+    Nothing already synced is touched: notes, labels, expected answers and failure modes stay as they are."""
     now = now or datetime.now(timezone.utc)
-    org = None if m.all_companies else m.org
     async with db.lab_engine().connect() as conn:
         last = (await conn.execute(text(
             "SELECT max(asked_at) FROM tracelab.lab_questions WHERE source = 'sync'"
@@ -296,6 +310,15 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
             f"SELECT tt.turn_id, tt.organization_id::text AS org, tt.user_id::text AS uid, tt.email, tt.started_at, "
             f"left({conversations._ASKER_WORDS_SQL}, {QUESTION_MAX}) AS q FROM {TURNS} tt WHERE {' AND '.join(where)} "
             "ORDER BY tt.started_at, tt.turn_id LIMIT :lim"), p)).mappings().all()]
+    async with db.lab_engine().connect() as conn:
+        turns += [dict(r) for r in (await conn.execute(text(
+            "SELECT 'browser:' || f.id::text AS turn_id, f.organization_id::text AS org, f.user_id::text AS uid, f.email, "
+            "coalesce(f.client_at, f.created_at) AS started_at, left(coalesce(f.question, ''), :qmax) AS q "
+            "FROM tracelab.lab_frontend_events f WHERE f.kind = 'error' AND f.created_at >= :since "
+            "AND (f.turn_id IS NULL OR f.turn_id LIKE 'browser:%')"
+            + ("" if org is None else " AND f.organization_id = CAST(:org AS uuid)")
+            + " ORDER BY f.created_at LIMIT :lim"), {**p, "qmax": QUESTION_MAX})).mappings().all()]
+    turns.sort(key=lambda t: (t["started_at"], t["turn_id"]))
     if not turns:
         return {"new_questions": 0, "new_runs": 0, "more": False}
     new_q = new_r = 0
@@ -347,12 +370,17 @@ _Q_COLS = ("q.id::text AS id, q.seq_no, q.question, q.followups, q.role, q.inten
 _Q_STATS = """
     (SELECT json_agg(t.turn_id ORDER BY t.created_at, t.turn_id) FROM tracelab.lab_question_traces t
       WHERE t.question_id = q.id) AS turn_ids,
-    (SELECT e.expected FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id
+    (SELECT e.expected FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id AND """ + CURRENT_EXPECTED_WHERE + """
       ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS expected,
     (SELECT count(*) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
       WHERE t.question_id = q.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
     (SELECT count(DISTINCT s.reviewer_id) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t
        ON t.turn_id = s.turn_id WHERE t.question_id = q.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_annotators"""
+
+
+def _q_order(run: Any) -> str:
+    """A day of live questions lists its newest first; a batch keeps its own order (R1-1 first)."""
+    return "q.seq_no DESC" if run.get("kind") == "production" else "q.seq_no"
 
 
 def question_out(r: Any, run_no: int) -> dict[str, Any]:
@@ -375,7 +403,7 @@ async def list_questions(m: labelling.Member, code: str) -> dict[str, Any]:
     async with db.lab_engine().connect() as conn:
         run = await _run_row(conn, m, code)
         rows = (await conn.execute(text(f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q "
-                                        "WHERE q.run_id = CAST(:rid AS uuid) ORDER BY q.seq_no"),
+                                        f"WHERE q.run_id = CAST(:rid AS uuid) ORDER BY {_q_order(run)}"),
                                    {"rid": run["id"]})).mappings().all()
     return {"run": run_out(run), "questions": [question_out(r, run["run_no"]) for r in rows]}
 
@@ -408,17 +436,35 @@ async def get_question(m: labelling.Member, code: str, *, turn_id: str | None = 
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
         run, row = await _question_row(conn, m, code)
-        expected = [expected_out(r) for r in (await conn.execute(text(
-            "SELECT id::text AS id, expected, expected_id, evidence, source, author_email, created_at "
-            "FROM tracelab.lab_expected_answers WHERE question_id = CAST(:qid AS uuid) ORDER BY created_at DESC, id DESC"),
-            {"qid": row["id"]})).mappings().all()]
+        from . import loop
+
+        rows = [dict(r) for r in (await conn.execute(text(
+            "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence, e.source, e.author_email, e.created_at, "
+            f"{CURRENT_EXPECTED_WHERE} AS counts, EXISTS (SELECT 1 FROM tracelab.lab_reviews v WHERE "
+            "v.subject_kind = 'expected_answer' AND v.subject_id = e.id) AS decided "
+            "FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:qid AS uuid) "
+            "ORDER BY e.created_at DESC, e.id DESC"), {"qid": row["id"]})).mappings().all()]
+        # Newest first (3 Nov 2026): the answer just asked again is the one a reviewer opens on.
         links = [dict(r) for r in (await conn.execute(text(
             "SELECT turn_id, organization_id::text AS organization_id, source, created_by_email, created_at "
-            "FROM tracelab.lab_question_traces WHERE question_id = CAST(:qid AS uuid) ORDER BY created_at, turn_id"),
+            "FROM tracelab.lab_question_traces WHERE question_id = CAST(:qid AS uuid) ORDER BY created_at DESC, turn_id"),
             {"qid": row["id"]})).mappings().all()]
+        spec = await loop.approved_spec(conn)
+        browser = await loop.browser_events(conn, [t["turn_id"] for t in links])
+    codes = loop.rule_codes(spec)
+    expected = []
+    for r in rows:
+        if r["counts"]:
+            expected.append({**expected_out(r), "derivation": loop.derivation(r.get("evidence"), codes)})
+    newest = rows[0] if rows else None
+    pending = (newest if newest is not None and not newest["counts"] and not newest["decided"] else None)
     q = question_out(row, run["run_no"])
     out = {"question": q, "run": run_out(run), "expected": expected[0] if expected else None,
            "expected_history": expected[1:],
+           "expected_pending": ({**expected_out(pending), "derivation": loop.derivation(pending.get("evidence"), codes)}
+                                if pending else None),
+           "browser": browser,
+           "spec_rules": [{"code": r.get("code"), "title": r.get("title")} for r in (spec or {}).get("rules") or []],
            "traces": [{"turn_id": t["turn_id"], "organization_id": t["organization_id"], "source": t["source"],
                        "linked_by": t.get("created_by_email"), "at": _iso(t.get("created_at"))} for t in links],
            "active": None, "labels": [], "me": m.user_id}
@@ -439,11 +485,20 @@ async def get_question(m: labelling.Member, code: str, *, turn_id: str | None = 
 async def set_expected(m: labelling.Member, code: str, *, expected: str, expected_id: str | None = None,
                        evidence: Any = None) -> dict[str, Any]:
     """A person types or corrects the expected answer: a new version, the newest wins."""
+    from . import loop
+
     labelling.require_active(m)
     expected = _text(expected, EXPECTED_MAX, "expected", "Write the expected answer.")
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         _run, row = await _question_row(conn, m, code)
+        # Derived from the specification and the company's records, never the model's own answer (3 Nov 2026).
+        if isinstance(evidence, dict) and evidence.get("spec_rule"):
+            rule = str(evidence["spec_rule"]).strip().upper()
+            if rule not in loop.rule_codes(await loop.approved_spec(conn)):
+                raise Invalid("rule_not_found", f"{rule} is not a rule of the approved specification.")
+            evidence = {**evidence, "spec_rule": rule}
+        await loop.refuse_copy(conn, row["id"], expected)
         await _insert_expected(conn, m, question_id=row["id"], expected=expected,
                                expected_id=_opt(expected_id, 200, "expected_id"), evidence=evidence, source="manual")
     return (await get_question(m, code))["expected"]
@@ -670,10 +725,18 @@ def mode_out(r: Any) -> dict[str, Any]:
             "by": r.get("created_by_email"), "at": _iso(r.get("created_at")), "since": _iso(r.get("first_at"))}
 
 
+async def _live_modes(conn: Any) -> list[dict[str, Any]]:
+    """The confirmed failure modes (agents/loop.resolve_modes): written by a person, or a coding agent's that a person
+    approved. A coding agent's mode that nobody has decided is a proposal, never a column (3 Nov 2026)."""
+    from . import loop
+
+    return await loop.live_modes(conn)
+
+
 async def list_modes(m: labelling.Member) -> list[dict[str, Any]]:
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
-        return [mode_out(r) for r in (await conn.execute(text(_MODES_SQL))).mappings().all()]
+        return await _live_modes(conn)
 
 
 async def save_mode(m: labelling.Member, *, name: str, definition: str | None = None,
@@ -686,7 +749,7 @@ async def save_mode(m: labelling.Member, *, name: str, definition: str | None = 
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SYNC_LOCK + 1})
-        live = [dict(r) for r in (await conn.execute(text(_MODES_SQL))).mappings().all()]
+        live = await _live_modes(conn)
         if lineage_id and not any(x["lineage_id"] == lin for x in live):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         if any(x["name"].strip().lower() == name.lower() and x["lineage_id"] != lin for x in live):
@@ -704,7 +767,7 @@ async def retire_mode(m: labelling.Member, lineage_id: str) -> dict[str, Any]:
     lin = _uuid_or_none(lineage_id)
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
-        live = [dict(r) for r in (await conn.execute(text(_MODES_SQL))).mappings().all()]
+        live = await _live_modes(conn)
         if not any(x["lineage_id"] == lin for x in live):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         await conn.execute(text(
@@ -729,8 +792,8 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
         run = await _run_row(conn, m, code)
         questions = (await conn.execute(text(
             f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q WHERE q.run_id = CAST(:rid AS uuid) "
-            "ORDER BY q.seq_no"), {"rid": run["id"]})).mappings().all()
-        modes = [mode_out(r) for r in (await conn.execute(text(_MODES_SQL))).mappings().all()]
+            f"ORDER BY {_q_order(run)}"), {"rid": run["id"]})).mappings().all()
+        modes = await _live_modes(conn)
         cells = (await conn.execute(text(_CELLS_SQL), {"rid": run["id"]})).mappings().all()
         last = (await conn.execute(text(
             "SELECT max(c.created_at) FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q ON q.id = c.question_id "
@@ -742,7 +805,7 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
         by.setdefault(c["question_id"], {}).setdefault(c["mode"], []).append({
             "value": c["value"], "author_id": c.get("author_id"), "author_email": c.get("author_email"),
             "author_role": c.get("author_role"), "source": c["source"], "at": _iso(c["created_at"]),
-            "mine": c.get("author_id") == m.user_id})
+            "mine": c.get("author_id") == m.user_id, "suggestion": c["source"] == "coding_agent"})
     return {"run": run_out(run), "questions": [question_out(q, run["run_no"]) for q in questions], "modes": modes,
             "cells": by, "last_updated": _iso(last), "me": m.user_id}
 
@@ -756,7 +819,7 @@ async def set_cell(m: labelling.Member, code: str, *, mode: str, value: str | No
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         _run, q = await _question_row(conn, m, code)
-        live = [dict(r) for r in (await conn.execute(text(_MODES_SQL))).mappings().all()]
+        live = await _live_modes(conn)
         if not any(x["lineage_id"] == lin for x in live):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         row = (await conn.execute(text(
@@ -782,8 +845,10 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
                                            "ORDER BY r.run_no DESC LIMIT 1"), p)).mappings().first()
             if run is None:
                 return {"run": None, "tiles": None, "modes": [], "runs": []}
-        modes = [mode_out(r) for r in (await conn.execute(text(_MODES_SQL))).mappings().all()]
-        cells = [c for c in (await conn.execute(text(_CELLS_SQL), {"rid": run["id"]})).mappings().all() if c["value"]]
+        modes = await _live_modes(conn)
+        # People's values only: a coding agent's label is a suggestion until a person sets it (3 Nov 2026).
+        cells = [c for c in (await conn.execute(text(_CELLS_SQL), {"rid": run["id"]})).mappings().all()
+                 if c["value"] and c["source"] == "manual"]
         recent = [dict(r) for r in (await conn.execute(text(
             f"SELECT r.id::text AS id, r.run_no, r.title FROM tracelab.lab_runs r WHERE {where} AND r.run_no <= :top "
             "ORDER BY r.run_no DESC LIMIT :n"), {**p, "top": run["run_no"], "n": TREND_RUNS})).mappings().all()]
@@ -792,7 +857,7 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
               FROM (SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
                            q.run_id::text AS run_id, c.mode_lineage_id::text AS mode, c.question_id, c.value
                       FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q ON q.id = c.question_id
-                     WHERE q.run_id = ANY(CAST(:runs AS uuid[]))
+                     WHERE q.run_id = ANY(CAST(:runs AS uuid[])) AND c.source = 'manual'
                      ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email),
                               c.created_at DESC, c.id DESC) x
              GROUP BY run_id, mode"""), {"runs": [r["id"] for r in recent]})).mappings().all()

@@ -202,6 +202,19 @@ NOT_DRIVEN = {
     "/lab/progress": "same", "/lab/q/{code}": "same", "/lab/q/{code}/expected": "same", "/lab/q/{code}/traces": "same", "/lab/q/{code}/candidates": "same",
     "/lab/q/{code}/cells": "same", "/lab/modes": "same", "/lab/modes/{lineage_id}": "same",
     "/lab/platform-members": "same",
+    "/scenarios/spaces": "synthetic batches (2 Nov): covered by test_the_scenarios_route_generates_for_one_space",
+    "/scenarios/generate": "same", "/scenarios/template.csv": "same", "/scenarios/run": "same",
+    "/learning/draft": "the learning draft: covered by the scenario route tests", "/learning/draft.md": "same",
+    "/lab/companies": "the company picker of a synthetic batch: covered by the scenario route tests",
+    "/lab/proposals": "correction loop (3 Nov): covered by test_trace_lab_correction_loop_sql",
+    "/lab/proposals/{kind}/{subject_id}": "same", "/lab/spec": "same", "/lab/spec/draft": "same",
+    "/lab/spec.md": "same", "/lab/corrections": "same", "/lab/modes/{lineage_id}/regression": "same",
+    "/lab/runs/{code}/rerun": "same", "/lab/runs/{code}/compare": "same", "/lab/loop": "same",
+    "/lab/sync-status": "test_trace_lab_correction_loop_routes", "/lab/frontend-events": "same",
+    "/lab/agent/propose-from-notes": "the agent in the container (5 Nov): covered by test_trace_lab_agent_in_container_sql",
+    "/lab/modes/{lineage_id}/draft-fix": "same", "/lab/changes": "same", "/lab/changes/{overlay_id}/approve": "same",
+    "/lab/changes/{overlay_id}/reject": "same", "/lab/changes/{overlay_id}/live": "same",
+    "/lab/changes/export.zip": "same",
 }
 
 

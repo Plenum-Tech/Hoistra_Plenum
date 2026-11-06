@@ -1798,6 +1798,68 @@
     "type": "integer"
    }
   },
+  "lab_corrections": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "description": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "mode_lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "reference": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "spec_rule": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   }
+  },
   "lab_expected_answers": {
    "author_email": {
     "default": null,
@@ -1902,6 +1964,98 @@
     "identity": "",
     "notnull": true,
     "type": "boolean"
+   }
+  },
+  "lab_frontend_events": {
+   "client_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "instance": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "ms_first_text": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "ms_total": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "question": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "session_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "user_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "view": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
    }
   },
   "lab_label_cells": {
@@ -2220,6 +2374,118 @@
     "type": "text"
    }
   },
+  "lab_regression_runs": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "mode_lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "space": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "spec_rule": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "spec_version_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   }
+  },
+  "lab_reviews": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "decision": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "reviewer_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "reviewer_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "reviewer_role": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "subject_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "subject_kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
   "lab_runs": {
    "created_at": {
     "default": "now()",
@@ -2292,6 +2558,68 @@
     "identity": "",
     "notnull": true,
     "type": "text"
+   }
+  },
+  "lab_spec_versions": {
+   "based_on": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "body": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "intro": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "rules": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "version_no": {
+    "default": null,
+    "identity": "d",
+    "notnull": true,
+    "type": "integer"
    }
   },
   "labels": {
@@ -4618,6 +4946,38 @@
    "def": "CHECK ((version >= 0))",
    "type": "c"
   },
+  "lab_corrections.ck_tl_lab_corrections_target": {
+   "def": "CHECK (((mode_lineage_id IS NOT NULL) OR (spec_rule IS NOT NULL)))",
+   "type": "c"
+  },
+  "lab_corrections.lab_corrections_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_corrections.lab_corrections_description_check": {
+   "def": "CHECK (((description IS NULL) OR (char_length(description) <= 2000)))",
+   "type": "c"
+  },
+  "lab_corrections.lab_corrections_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['prompt'::text, 'skill'::text, 'code'::text, 'data'::text, 'spec'::text])))",
+   "type": "c"
+  },
+  "lab_corrections.lab_corrections_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_corrections.lab_corrections_reference_check": {
+   "def": "CHECK (((char_length(reference) >= 1) AND (char_length(reference) <= 500)))",
+   "type": "c"
+  },
+  "lab_corrections.lab_corrections_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['manual'::text, 'coding_agent'::text])))",
+   "type": "c"
+  },
+  "lab_corrections.lab_corrections_spec_rule_check": {
+   "def": "CHECK (((spec_rule IS NULL) OR ((char_length(spec_rule) >= 1) AND (char_length(spec_rule) <= 40))))",
+   "type": "c"
+  },
   "lab_expected_answers.lab_expected_answers_author_email_check": {
    "def": "CHECK (((author_email IS NULL) OR (char_length(author_email) <= 320)))",
    "type": "c"
@@ -4661,6 +5021,50 @@
   "lab_failure_modes.lab_failure_modes_pkey": {
    "def": "PRIMARY KEY (id)",
    "type": "p"
+  },
+  "lab_frontend_events.lab_frontend_events_email_check": {
+   "def": "CHECK (((email IS NULL) OR (char_length(email) <= 320)))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_error_check": {
+   "def": "CHECK (((error IS NULL) OR (char_length(error) <= 500)))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_instance_check": {
+   "def": "CHECK (((instance IS NULL) OR (char_length(instance) <= 40)))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['answer_shown'::text, 'error'::text, 'stopped'::text])))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_ms_first_text_check": {
+   "def": "CHECK (((ms_first_text IS NULL) OR ((ms_first_text >= 0) AND (ms_first_text <= 86400000))))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_ms_total_check": {
+   "def": "CHECK (((ms_total IS NULL) OR ((ms_total >= 0) AND (ms_total <= 86400000))))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_frontend_events.lab_frontend_events_question_check": {
+   "def": "CHECK (((question IS NULL) OR (char_length(question) <= 4000)))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_session_id_check": {
+   "def": "CHECK (((session_id IS NULL) OR (char_length(session_id) <= 200)))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_turn_id_check": {
+   "def": "CHECK (((turn_id IS NULL) OR ((char_length(turn_id) >= 1) AND (char_length(turn_id) <= 200))))",
+   "type": "c"
+  },
+  "lab_frontend_events.lab_frontend_events_view_check": {
+   "def": "CHECK (((view IS NULL) OR (char_length(view) <= 60)))",
+   "type": "c"
   },
   "lab_label_cells.ck_tl_lab_label_cells_author": {
    "def": "CHECK (((author_id IS NOT NULL) OR (author_email IS NOT NULL)))",
@@ -4795,11 +5199,67 @@
    "type": "c"
   },
   "lab_questions.lab_questions_source_check": {
-   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'excel'::text, 'manual'::text])))",
+   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'excel'::text, 'manual'::text, 'regression'::text])))",
    "type": "c"
   },
   "lab_questions.ux_tl_lab_questions_seq": {
    "def": "UNIQUE (run_id, seq_no)",
+   "type": "u"
+  },
+  "lab_regression_runs.lab_regression_runs_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_regression_runs.lab_regression_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_regression_runs.lab_regression_runs_run_id_fkey": {
+   "def": "FOREIGN KEY (run_id) REFERENCES tracelab.lab_runs(id)",
+   "type": "f"
+  },
+  "lab_regression_runs.lab_regression_runs_space_check": {
+   "def": "CHECK (((char_length(space) >= 1) AND (char_length(space) <= 40)))",
+   "type": "c"
+  },
+  "lab_regression_runs.lab_regression_runs_spec_rule_check": {
+   "def": "CHECK (((spec_rule IS NULL) OR ((char_length(spec_rule) >= 1) AND (char_length(spec_rule) <= 40))))",
+   "type": "c"
+  },
+  "lab_regression_runs.lab_regression_runs_spec_version_id_fkey": {
+   "def": "FOREIGN KEY (spec_version_id) REFERENCES tracelab.lab_spec_versions(id)",
+   "type": "f"
+  },
+  "lab_regression_runs.ux_tl_lab_regression_runs_run": {
+   "def": "UNIQUE (run_id)",
+   "type": "u"
+  },
+  "lab_reviews.lab_reviews_decision_check": {
+   "def": "CHECK ((decision = ANY (ARRAY['approved'::text, 'rejected'::text])))",
+   "type": "c"
+  },
+  "lab_reviews.lab_reviews_note_check": {
+   "def": "CHECK (((note IS NULL) OR (char_length(note) <= 2000)))",
+   "type": "c"
+  },
+  "lab_reviews.lab_reviews_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_reviews.lab_reviews_reviewer_email_check": {
+   "def": "CHECK (((reviewer_email IS NULL) OR (char_length(reviewer_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_reviews.lab_reviews_reviewer_role_check": {
+   "def": "CHECK (((reviewer_role IS NULL) OR (char_length(reviewer_role) <= 40)))",
+   "type": "c"
+  },
+  "lab_reviews.lab_reviews_subject_kind_check": {
+   "def": "CHECK ((subject_kind = ANY (ARRAY['failure_mode'::text, 'expected_answer'::text, 'spec_version'::text])))",
+   "type": "c"
+  },
+  "lab_reviews.ux_tl_lab_reviews_subject": {
+   "def": "UNIQUE (subject_kind, subject_id)",
    "type": "u"
   },
   "lab_runs.ck_tl_lab_runs_production": {
@@ -4823,7 +5283,7 @@
    "type": "p"
   },
   "lab_runs.lab_runs_source_check": {
-   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'excel'::text, 'manual'::text])))",
+   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'excel'::text, 'manual'::text, 'regression'::text])))",
    "type": "c"
   },
   "lab_runs.lab_runs_title_check": {
@@ -4832,6 +5292,34 @@
   },
   "lab_runs.ux_tl_lab_runs_no": {
    "def": "UNIQUE (run_no)",
+   "type": "u"
+  },
+  "lab_spec_versions.lab_spec_versions_body_check": {
+   "def": "CHECK (((char_length(body) >= 1) AND (char_length(body) <= 200000)))",
+   "type": "c"
+  },
+  "lab_spec_versions.lab_spec_versions_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_spec_versions.lab_spec_versions_intro_check": {
+   "def": "CHECK (((intro IS NULL) OR (char_length(intro) <= 20000)))",
+   "type": "c"
+  },
+  "lab_spec_versions.lab_spec_versions_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_spec_versions.lab_spec_versions_rules_check": {
+   "def": "CHECK ((jsonb_typeof(rules) = 'array'::text))",
+   "type": "c"
+  },
+  "lab_spec_versions.lab_spec_versions_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['manual'::text, 'coding_agent'::text])))",
+   "type": "c"
+  },
+  "lab_spec_versions.ux_tl_lab_spec_versions_no": {
+   "def": "UNIQUE (version_no)",
    "type": "u"
   },
   "labels.ck_tl_labels_accepted": {
@@ -5687,6 +6175,10 @@
    "def": "CREATE INDEX ix_tl_items_turn_only ON tracelab.sample_items USING btree (turn_id)",
    "table": "sample_items"
   },
+  "ix_tl_lab_corrections_mode": {
+   "def": "CREATE INDEX ix_tl_lab_corrections_mode ON tracelab.lab_corrections USING btree (mode_lineage_id, created_at DESC)",
+   "table": "lab_corrections"
+  },
   "ix_tl_lab_expected_question": {
    "def": "CREATE INDEX ix_tl_lab_expected_question ON tracelab.lab_expected_answers USING btree (question_id, created_at DESC)",
    "table": "lab_expected_answers"
@@ -5695,6 +6187,18 @@
    "def": "CREATE INDEX ix_tl_lab_failure_modes_lineage ON tracelab.lab_failure_modes USING btree (COALESCE(lineage_id, id), created_at DESC)",
    "table": "lab_failure_modes"
   },
+  "ix_tl_lab_frontend_events_org": {
+   "def": "CREATE INDEX ix_tl_lab_frontend_events_org ON tracelab.lab_frontend_events USING btree (organization_id, created_at DESC)",
+   "table": "lab_frontend_events"
+  },
+  "ix_tl_lab_frontend_events_turn": {
+   "def": "CREATE INDEX ix_tl_lab_frontend_events_turn ON tracelab.lab_frontend_events USING btree (turn_id)",
+   "table": "lab_frontend_events"
+  },
+  "ix_tl_lab_frontend_events_user": {
+   "def": "CREATE INDEX ix_tl_lab_frontend_events_user ON tracelab.lab_frontend_events USING btree (user_id, created_at DESC)",
+   "table": "lab_frontend_events"
+  },
   "ix_tl_lab_label_cells_cell": {
    "def": "CREATE INDEX ix_tl_lab_label_cells_cell ON tracelab.lab_label_cells USING btree (question_id, mode_lineage_id, created_at DESC)",
    "table": "lab_label_cells"
@@ -5702,6 +6206,10 @@
   "ix_tl_lab_question_traces_turn": {
    "def": "CREATE INDEX ix_tl_lab_question_traces_turn ON tracelab.lab_question_traces USING btree (turn_id)",
    "table": "lab_question_traces"
+  },
+  "ix_tl_lab_regression_runs_mode": {
+   "def": "CREATE INDEX ix_tl_lab_regression_runs_mode ON tracelab.lab_regression_runs USING btree (mode_lineage_id, created_at DESC)",
+   "table": "lab_regression_runs"
   },
   "ix_tl_lab_runs_org": {
    "def": "CREATE INDEX ix_tl_lab_runs_org ON tracelab.lab_runs USING btree (organization_id, run_no DESC)",
@@ -5843,6 +6351,10 @@
    "def": "CREATE UNIQUE INDEX judges_pkey ON tracelab.judges USING btree (id)",
    "table": "judges"
   },
+  "lab_corrections_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_corrections_pkey ON tracelab.lab_corrections USING btree (id)",
+   "table": "lab_corrections"
+  },
   "lab_expected_answers_pkey": {
    "def": "CREATE UNIQUE INDEX lab_expected_answers_pkey ON tracelab.lab_expected_answers USING btree (id)",
    "table": "lab_expected_answers"
@@ -5850,6 +6362,10 @@
   "lab_failure_modes_pkey": {
    "def": "CREATE UNIQUE INDEX lab_failure_modes_pkey ON tracelab.lab_failure_modes USING btree (id)",
    "table": "lab_failure_modes"
+  },
+  "lab_frontend_events_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_frontend_events_pkey ON tracelab.lab_frontend_events USING btree (id)",
+   "table": "lab_frontend_events"
   },
   "lab_label_cells_pkey": {
    "def": "CREATE UNIQUE INDEX lab_label_cells_pkey ON tracelab.lab_label_cells USING btree (id)",
@@ -5871,9 +6387,21 @@
    "def": "CREATE UNIQUE INDEX lab_questions_pkey ON tracelab.lab_questions USING btree (id)",
    "table": "lab_questions"
   },
+  "lab_regression_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_regression_runs_pkey ON tracelab.lab_regression_runs USING btree (id)",
+   "table": "lab_regression_runs"
+  },
+  "lab_reviews_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_reviews_pkey ON tracelab.lab_reviews USING btree (id)",
+   "table": "lab_reviews"
+  },
   "lab_runs_pkey": {
    "def": "CREATE UNIQUE INDEX lab_runs_pkey ON tracelab.lab_runs USING btree (id)",
    "table": "lab_runs"
+  },
+  "lab_spec_versions_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_spec_versions_pkey ON tracelab.lab_spec_versions USING btree (id)",
+   "table": "lab_spec_versions"
   },
   "labels_pkey": {
    "def": "CREATE UNIQUE INDEX labels_pkey ON tracelab.labels USING btree (id)",
@@ -6003,6 +6531,14 @@
    "def": "CREATE UNIQUE INDEX ux_tl_lab_questions_seq ON tracelab.lab_questions USING btree (run_id, seq_no)",
    "table": "lab_questions"
   },
+  "ux_tl_lab_regression_runs_run": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_regression_runs_run ON tracelab.lab_regression_runs USING btree (run_id)",
+   "table": "lab_regression_runs"
+  },
+  "ux_tl_lab_reviews_subject": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_reviews_subject ON tracelab.lab_reviews USING btree (subject_kind, subject_id)",
+   "table": "lab_reviews"
+  },
   "ux_tl_lab_runs_no": {
    "def": "CREATE UNIQUE INDEX ux_tl_lab_runs_no ON tracelab.lab_runs USING btree (run_no)",
    "table": "lab_runs"
@@ -6010,6 +6546,10 @@
   "ux_tl_lab_runs_user_day": {
    "def": "CREATE UNIQUE INDEX ux_tl_lab_runs_user_day ON tracelab.lab_runs USING btree (owner_user_id, COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid), run_day) WHERE (kind = 'production'::text)",
    "table": "lab_runs"
+  },
+  "ux_tl_lab_spec_versions_no": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_spec_versions_no ON tracelab.lab_spec_versions USING btree (version_no)",
+   "table": "lab_spec_versions"
   },
   "ux_tl_labels_head": {
    "def": "CREATE UNIQUE INDEX ux_tl_labels_head ON tracelab.labels USING btree (turn_id, mode_id) WHERE (superseded_by IS NULL)",
@@ -6083,14 +6623,19 @@
   "judge_split_members",
   "judge_splits",
   "judges",
+  "lab_corrections",
   "lab_expected_answers",
   "lab_failure_modes",
+  "lab_frontend_events",
   "lab_label_cells",
   "lab_members",
   "lab_platform_members",
   "lab_question_traces",
   "lab_questions",
+  "lab_regression_runs",
+  "lab_reviews",
   "lab_runs",
+  "lab_spec_versions",
   "labels",
   "mode_events",
   "modes",
@@ -6130,10 +6675,14 @@
   "judges.judges_examples_from_train": "CREATE TRIGGER judges_examples_from_train BEFORE INSERT ON tracelab.judges FOR EACH ROW EXECUTE FUNCTION tracelab.judges_examples_from_train()",
   "judges.judges_guard": "CREATE TRIGGER judges_guard BEFORE DELETE OR UPDATE ON tracelab.judges FOR EACH ROW EXECUTE FUNCTION tracelab.judges_guard()",
   "judges.judges_no_truncate": "CREATE TRIGGER judges_no_truncate BEFORE TRUNCATE ON tracelab.judges FOR EACH STATEMENT EXECUTE FUNCTION tracelab.judges_guard()",
+  "lab_corrections.lab_corrections_append_only": "CREATE TRIGGER lab_corrections_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_corrections FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_corrections.lab_corrections_no_truncate": "CREATE TRIGGER lab_corrections_no_truncate BEFORE TRUNCATE ON tracelab.lab_corrections FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_expected_answers.lab_expected_answers_append_only": "CREATE TRIGGER lab_expected_answers_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_expected_answers FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_expected_answers.lab_expected_answers_no_truncate": "CREATE TRIGGER lab_expected_answers_no_truncate BEFORE TRUNCATE ON tracelab.lab_expected_answers FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_failure_modes.lab_failure_modes_append_only": "CREATE TRIGGER lab_failure_modes_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_failure_modes FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_failure_modes.lab_failure_modes_no_truncate": "CREATE TRIGGER lab_failure_modes_no_truncate BEFORE TRUNCATE ON tracelab.lab_failure_modes FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_frontend_events.lab_frontend_events_append_only": "CREATE TRIGGER lab_frontend_events_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_frontend_events FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_frontend_events.lab_frontend_events_no_truncate": "CREATE TRIGGER lab_frontend_events_no_truncate BEFORE TRUNCATE ON tracelab.lab_frontend_events FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_label_cells.lab_label_cells_append_only": "CREATE TRIGGER lab_label_cells_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_label_cells FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_label_cells.lab_label_cells_no_truncate": "CREATE TRIGGER lab_label_cells_no_truncate BEFORE TRUNCATE ON tracelab.lab_label_cells FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_members.lab_members_no_truncate": "CREATE TRIGGER lab_members_no_truncate BEFORE TRUNCATE ON tracelab.lab_members FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
@@ -6144,8 +6693,14 @@
   "lab_question_traces.lab_question_traces_no_truncate": "CREATE TRIGGER lab_question_traces_no_truncate BEFORE TRUNCATE ON tracelab.lab_question_traces FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_questions.lab_questions_append_only": "CREATE TRIGGER lab_questions_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_questions FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_questions.lab_questions_no_truncate": "CREATE TRIGGER lab_questions_no_truncate BEFORE TRUNCATE ON tracelab.lab_questions FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_regression_runs.lab_regression_runs_append_only": "CREATE TRIGGER lab_regression_runs_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_regression_runs FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_regression_runs.lab_regression_runs_no_truncate": "CREATE TRIGGER lab_regression_runs_no_truncate BEFORE TRUNCATE ON tracelab.lab_regression_runs FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_reviews.lab_reviews_append_only": "CREATE TRIGGER lab_reviews_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_reviews FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_reviews.lab_reviews_no_truncate": "CREATE TRIGGER lab_reviews_no_truncate BEFORE TRUNCATE ON tracelab.lab_reviews FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_runs.lab_runs_append_only": "CREATE TRIGGER lab_runs_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_runs FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "lab_runs.lab_runs_no_truncate": "CREATE TRIGGER lab_runs_no_truncate BEFORE TRUNCATE ON tracelab.lab_runs FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_spec_versions.lab_spec_versions_append_only": "CREATE TRIGGER lab_spec_versions_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_spec_versions FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_spec_versions.lab_spec_versions_no_truncate": "CREATE TRIGGER lab_spec_versions_no_truncate BEFORE TRUNCATE ON tracelab.lab_spec_versions FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "labels.labels_no_truncate": "CREATE TRIGGER labels_no_truncate BEFORE TRUNCATE ON tracelab.labels FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
   "labels.labels_supersede_only": "CREATE TRIGGER labels_supersede_only BEFORE DELETE OR UPDATE ON tracelab.labels FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()",
   "mode_events.mode_events_append_only": "CREATE TRIGGER mode_events_append_only BEFORE DELETE OR UPDATE ON tracelab.mode_events FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
@@ -6161,5 +6716,5 @@
   "step_labels.step_labels_no_truncate": "CREATE TRIGGER step_labels_no_truncate BEFORE TRUNCATE ON tracelab.step_labels FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
   "step_labels.step_labels_supersede_only": "CREATE TRIGGER step_labels_supersede_only BEFORE DELETE OR UPDATE ON tracelab.step_labels FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()"
  },
- "version": 12
+ "version": 13
 }

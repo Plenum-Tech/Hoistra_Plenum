@@ -24,6 +24,7 @@ from fastapi import APIRouter, FastAPI
 from . import db, jobs, migrate, routes_conversations, routes_status
 from . import review_labels, routes_golden, routes_judges, routes_mode_proposals, routes_monitor, routes_review
 from . import routes_labelling, routes_runs, routes_scenarios, routes_taxonomy, spend
+from . import autosync, routes_loop
 from .migrate import SchemaState
 from .settings import Settings, load
 
@@ -48,6 +49,7 @@ ROUTERS: list[APIRouter] = [
     routes_labelling.router,
     routes_runs.router,
     routes_scenarios.router,
+    routes_loop.router,
 ]
 
 
@@ -85,6 +87,8 @@ async def startup(settings: Settings | None = None) -> SchemaState:
             await judges.recover_after_restart()
         except Exception as exc:  # noqa: BLE001 - startup never raises; a failure here never hides the sweep above
             log.warning("trace_lab.judges.recover_failed", error=str(exc)[:300])
+        # New live answers become questions by themselves, every TRACE_LAB_AUTO_SYNC_S seconds (3 Nov 2026).
+        autosync.start()
     log.info("trace_lab.startup.done", status=st.status, version=st.applied_version,
              ms=round((time.perf_counter() - t0) * 1000))
     return st
@@ -111,6 +115,10 @@ async def _check_schema(s: Settings) -> SchemaState:
 
 
 async def shutdown() -> None:
+    try:
+        await autosync.stop()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace_lab.autosync.stop_failed", error=str(exc)[:200])
     try:
         await db.dispose_engines()
     except Exception as exc:  # noqa: BLE001

@@ -52,6 +52,7 @@ deploy/allinone/supervisord.conf
 apps/frontend/vite.config.js
 apps/frontend/src/logic/users.js
 apps/frontend/src/screens/Users.jsx
+apps/frontend/src/logic/complianceLive.js
 '
 
 # Another session's uncommitted work: not Trace Lab's, never touched by it. The first five are the
@@ -103,6 +104,7 @@ expect_for() {
     apps/frontend/vite.config.js) echo "A9: the Trace Lab page as a second build input" ;;
     apps/frontend/src/logic/users.js) echo "A10: 1 added (labUser on each live row)" ;;
     apps/frontend/src/screens/Users.jsx) echo "A11: 2 added (the Trace Lab access control)" ;;
+    apps/frontend/src/logic/complianceLive.js) echo "A12: 2 added (the trace beacon import and its one call, approved 3 Nov 2026)" ;;
     *) echo "?" ;;
   esac
 }

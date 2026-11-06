@@ -1,8 +1,16 @@
 # Trace Lab: writing runs, expected answers and labels from a coding agent
 
-Trace Lab keeps its own records in the `hoist_tracelab` database, schema `tracelab` (migration 0011). A coding agent may
-write there directly with plain `INSERT`s. Every table below is append-only: a change is a new row, and the newest row
-wins. Nothing may be `UPDATE`d or `DELETE`d (the database refuses it).
+Trace Lab keeps its own records in the `hoist_tracelab` database, schema `tracelab` (migrations 0011 and 0013). A coding
+agent may write there directly with plain `INSERT`s. Every table below is append-only: a change is a new row, and the
+newest row wins. Nothing may be `UPDATE`d or `DELETE`d (the database refuses it).
+
+**People decide; the agent proposes (3 Nov 2026, migration 0013).** A failure mode, a label, an expected answer or a
+specification version that the agent writes is a PROPOSAL. It shows on the page's Loop tab and counts only after a person
+approves it there (a row in `tracelab.lab_reviews`, one final decision per proposal). The agent never writes
+`lab_reviews`, never writes notes (`step_labels`), and never sets `created_by` (that marks a row a person wrote).
+
+The loop: traces, then people's notes, then failure modes, then the specification (SPEC.md), then the prompt, skill or
+code correction, then a regression run, then a rerun.
 
 ## Codes
 
@@ -33,14 +41,22 @@ platform-wide batch, which only the platform team and the consultant see.
 
 ## 2. Expected answers
 
-The newest row per question is the one the page shows. Older rows stay as history.
+The newest row per question that COUNTS is the one the page shows: one a person wrote or imported, or the agent's once a
+person approved it. Older rows stay as history.
+
+An expected answer is DERIVED, never copied: from a rule of the approved specification (section 7) and the company's
+own records. Its `evidence` must name both, or it cannot be approved: `spec_rule` (for example `"S-3"`) and `data` (the
+query or record ids it was read from); `values` (optional) lists the figures, dates or codes an answer must carry, which
+is what a rerun is checked against. Trace Lab refuses an expected answer that repeats an answer the model gave for the
+question.
 
 ```sql
 INSERT INTO tracelab.lab_expected_answers (question_id, expected, expected_id, evidence, source, author_email)
 VALUES (tracelab.question_id('R3-12'),
         'Report the order status as placed, ordered 2026-07-01, shipped None, delivered None, total $584.50.',
         'report_order_3722_placed',
-        '{"reference": "SELECT order fields FROM orders WHERE id=3722", "type": "sql"}'::jsonb,
+        '{"spec_rule": "S-3", "data": "SELECT status, ordered_at, total FROM orders WHERE id = 3722",
+          "values": ["2026-07-01", "$584.50"]}'::jsonb,
         'coding_agent', 'agent@plenum-tech.com');
 ```
 
@@ -68,12 +84,15 @@ INSERT INTO tracelab.lab_failure_modes (lineage_id, tombstone, created_by_email)
 VALUES ('<lineage id>', true, 'agent@plenum-tech.com');
 ```
 
-A mode's lineage id is `coalesce(lineage_id, id)` of its first row.
+A mode's lineage id is `coalesce(lineage_id, id)` of its first row. A mode, a change or a retirement the agent writes is
+a proposal: the mode becomes a column of the labels view only once a person approves it, and a change leaves the
+approved version in force until then. Group people's notes (section 6) into modes; never invent one no note supports.
 
 ## 5. Labels (positive or negative per question and mode)
 
 One row per question, mode and author. The newest row per author is current, and a null `value` clears it. Write
-the agent's own view under its own email. It shows beside the people's views and never replaces them.
+the agent's own view under its own email. It shows beside the people's views as a SUGGESTION, never counts in progress
+or regression runs, and never replaces a person's value: a person accepts it by setting the same value themselves.
 
 ```sql
 INSERT INTO tracelab.lab_label_cells (question_id, mode_lineage_id, value, author_email, author_role, source)
@@ -105,6 +124,41 @@ SELECT 'R' || r.run_no || '-' || q.seq_no AS question_code, s.step_key, s.step_t
 | `<step id>#output` | the step's output block |
 | `<turn id>:scenario` | the question as a whole |
 | `<turn id>:orchestrator` | the orchestrator step, when routing ran as code |
+
+## 7. The specification (SPEC.md)
+
+The specification in force is the newest version a person approved on the Loop tab; it downloads as `SPEC.md`
+(`GET /api/trace-lab/lab/spec.md`). Its rules are numbered `S-1`, `S-2` ... and each names the failure mode it guards
+against. The page drafts the next version from the confirmed modes; the agent may also propose one:
+
+```sql
+INSERT INTO tracelab.lab_spec_versions (intro, rules, body, source, created_by_email)
+VALUES ('Answers about buildings and their work orders.',
+        '[{"code": "S-1", "mode_lineage_id": "<lineage id>", "title": "wrong_floor_count",
+           "text": "A floor count comes from the buildings register, never from a document or a guess."}]'::jsonb,
+        '<the SPEC.md text>', 'coding_agent', 'agent@plenum-tech.com');
+```
+
+Keep rule codes stable from version to version. After approval, commit `SPEC.md` to the repository unchanged.
+
+## 8. Corrections
+
+Each prompt, skill, code or data change made for a failure mode or a rule is recorded, so the loop shows what fixed it:
+
+```sql
+INSERT INTO tracelab.lab_corrections (mode_lineage_id, spec_rule, kind, reference, description, source, created_by_email)
+VALUES ('<lineage id>', 'S-1', 'skill', 'svc-deepagents/skills/buildings.md @ 5c653a4',
+        'Floors are read from the buildings register.', 'coding_agent', 'agent@plenum-tech.com');
+```
+
+`kind` is one of `prompt`, `skill`, `code`, `data`, `spec`; `reference` is a commit, pull request or file.
+
+## 9. Regression runs and the rerun
+
+A person makes a regression run of a confirmed mode on the Loop tab once its rule is in the approved specification: the
+questions people marked positive for it, each with its derived expected answer and the answer that was marked. "Ask
+again" asks them in the chosen instance after the correction, and "Compare" checks the old and new answers against the
+expected values (fixed, still failing, regressed, passing).
 
 ## Excel or CSV import (the page)
 

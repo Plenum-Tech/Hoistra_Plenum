@@ -170,23 +170,27 @@ def _close(t: Any, *, answer: str, error: str | None) -> None:
 
 async def run_message(orchestrator: Any, *, question: str, session_id: str, page_context: str | None,
                       principal: Any, organization_id: str | None, authorization: str | None,
-                      space: str | None = None) -> CapturedTurn:
+                      space: str | None = None,
+                      candidate: dict[tuple[str, str], str] | None = None) -> CapturedTurn:
     """Answer one golden message for real and capture it. Never raises for a chat failure: errors,
     timeouts and exceptions come back in the CapturedTurn.
 
     `space` is the role space to ask in (agents/spaces.py), set here exactly as the chat's own
     WebSocket route sets it. Without it a batch is asked with no space, which allows every engine
     -- right for a caller who has not picked an instance, wrong for a run that is supposed to be
-    measuring one."""
+    measuring one.
+
+    `candidate`: the instruction text under test that a correction-loop rerun asks with (Bala, 5 Nov 2026) -
+    {(skill, doc): text}. Every other run passes none and answers with the live text only."""
     return await asyncio.create_task(_run(orchestrator, question=question, session_id=session_id,
                                           page_context=page_context, principal=principal,
                                           organization_id=organization_id, authorization=authorization,
-                                          space=space))
+                                          space=space, candidate=candidate))
 
 
 async def _run(orchestrator: Any, *, question: str, session_id: str, page_context: str | None, principal: Any,
                organization_id: str | None, authorization: str | None,
-               space: str | None = None) -> CapturedTurn:
+               space: str | None = None, candidate: dict[tuple[str, str], str] | None = None) -> CapturedTurn:
     from src.agents import activity_log, context_budget, llm_cost, trace
     from src.http_client import caller_authorization, caller_organization_id
     from src.services import skill_overlays
@@ -201,7 +205,9 @@ async def _run(orchestrator: Any, *, question: str, session_id: str, page_contex
     caller_authorization.set(authorization)
     context_budget.MODE.set(None)
     context_budget.STATS.set(context_budget.new_stats())
-    skill_overlays.CANDIDATE.set(None)
+    # Set in this task, so it dies with it: the text under test reaches only the rerun that asked with it (until
+    # 5 Nov 2026 this always cleared it, and no rerun ever read an approved change).
+    skill_overlays.CANDIDATE.set(candidate or None)
     activity_log.set_current_session(session_id, session_id)
     turn_id = activity_log.start_turn(new_turn_id())
     t = trace.Turn(turn_id, session_id)             # after the caller vars: it reads them

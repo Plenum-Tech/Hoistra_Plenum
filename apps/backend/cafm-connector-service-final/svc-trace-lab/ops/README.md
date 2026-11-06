@@ -85,15 +85,15 @@ type anything.
 ```sh
 docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate status
 docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate plan
-docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0012 --applied-by YOURNAME --dry-run
-docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0012 --applied-by YOURNAME
+docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0013 --applied-by YOURNAME --dry-run
+docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0013 --applied-by YOURNAME
 ```
 
 * `status` and `plan` only read. `status` prints the state as JSON and exits 0 only when it is `ready`.
 * `apply` needs an interactive terminal: it asks you to type the database name (`hoist_tracelab`) and refuses
   without a TTY. With `docker compose exec` never pass `-T`, which removes the terminal.
 * `--dry-run` runs the files in a transaction and rolls back. Do it first.
-* `--expect-db` must equal the database the container is connected to, or it refuses. `--through 0012` is the last
+* `--expect-db` must equal the database the container is connected to, or it refuses. `--through 0013` is the last
   file in `svc-trace-lab/migrations/`; `--applied-by` is recorded in the ledger as `cli:YOURNAME`.
 * After a real apply it prints `SHIPPED_CHECKSUMS` lines. Send them to a developer to add to
   `trace_lab/migrate.py`: that is a code change after the run, not part of it.

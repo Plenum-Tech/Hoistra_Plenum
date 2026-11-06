@@ -77,8 +77,9 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
     assert by_code["R1"]["kind"] == "production" and by_code["R4"]["run_day"] == DAY2.date().isoformat()
     assert by_code["R3"]["organization_id"] == ORG_B
     qs = await runs.list_questions(boss, "R1")
+    # A day of live questions lists its newest first (3 Nov 2026); the codes keep the order they were asked in.
     assert [(q["code"], q["question"], q["turn_ids"]) for q in qs["questions"]] == [
-        ("R1-1", "Which vendors are blocked?", ["turn-a1"]), ("R1-2", "And which are lapsed?", ["turn-a2"])]
+        ("R1-2", "And which are lapsed?", ["turn-a2"]), ("R1-1", "Which vendors are blocked?", ["turn-a1"])]
 
     admin = await labelling.access(principal(ORG_A, "admin", email="adm@a.test"), None, all_companies_ok=True)
     assert {r["code"] for r in (await runs.list_runs(admin))["runs"]} == {"R1", "R2", "R4"}
@@ -171,13 +172,13 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
     with pytest.raises(Invalid):
         await runs.set_cell(admin, "R1-1", mode=mode["lineage_id"], value="maybe")
     grid = await runs.matrix(admin, "R1")
-    cell = grid["cells"][grid["questions"][0]["id"]][mode["lineage_id"]]
+    cell = grid["cells"][next(q["id"] for q in grid["questions"] if q["code"] == "R1-1")][mode["lineage_id"]]
     assert sorted((c["value"], c["author_email"], c["mine"]) for c in cell) == [
         ("negative", "adm@a.test", True), ("positive", "boss@plenum.test", False)], "both views show"
     assert grid["last_updated"] and [m_["name"] for m_ in grid["modes"]] == ["missing_decision_rationale"]
     await runs.set_cell(boss, "R1-1", mode=mode["lineage_id"], value=None)
     grid = await runs.matrix(boss, "R1")
-    assert [c["value"] for c in grid["cells"][grid["questions"][0]["id"]][mode["lineage_id"]]] == ["negative"]
+    assert [c["value"] for c in grid["cells"][next(q["id"] for q in grid["questions"] if q["code"] == "R1-1")][mode["lineage_id"]]] == ["negative"]
 
     prog = await runs.progress(boss, "R1")
     assert prog["tiles"] == {"questions": 2, "reviewed": 2, "traced": 2, "modes": 1, "cells_filled": 1, "cells_total": 2,
