@@ -13,7 +13,7 @@ import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
 import RunsPage from './Runs.jsx';
 import Synthetic from './Synthetic.jsx';
-import Instances, { readInstance, writeInstance } from './Instances.jsx';
+import { readInstance, writeInstance } from './Instances.jsx';
 import LabelsView from './LabelsView.jsx';
 import ProgressView from './ProgressView.jsx';
 import Notes from './Notes.jsx';
@@ -29,7 +29,7 @@ const locks = () => { try { return navigator.locks || null; } catch (e) { return
 export function navFor(me) {
   // Loop follows Progress (the correction loop, 3 Nov 2026); Learning sits after Notes because that is the order
   // the work happens in: read a run, leave notes on it, then see what the notes add up to.
-  const items = [['runs', 'Runs'], ['instance', 'Instance'], ['synthetic', 'Synthetic'], ['labels', 'Labels'],
+  const items = [['runs', 'Runs'], ['synthetic', 'Synthetic'], ['labels', 'Labels'],
     ['progress', 'Progress'], ['loop', 'Loop'], ['notes', 'Notes'], ['learning', 'Learning']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
@@ -278,7 +278,6 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
       </div>
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion} /> : null}
-        {current === 'instance' ? <Instances instance={instance} onPick={pickInstance} /> : null}
         {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion}
           onOpenLoop={() => onView('loop')} /> : null}

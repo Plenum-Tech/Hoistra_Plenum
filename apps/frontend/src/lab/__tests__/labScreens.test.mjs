@@ -47,12 +47,12 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Runs, Instance, Synthetic, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
-  const WORK = ['runs', 'instance', 'synthetic', 'labels', 'progress', 'loop', 'notes', 'learning'];
+test('the menu: Runs, Synthetic, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
+  const WORK = ['runs', 'synthetic', 'labels', 'progress', 'loop', 'notes', 'learning'];
   assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), WORK);
   assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), WORK.concat(['people']));
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -124,18 +124,19 @@ test('the lab api names the three scenario routes once', () => {
 });
 
 
-// The instance is one setting with one place to change it (3 Nov 2026).
-test('the instance is chosen on its own page and carried to Synthetic', () => {
+// The instance is one setting with one place to change it (3 Nov 2026). Its own page was removed on 6 Nov 2026
+// (Bala): Synthetic's select is the one control, and the choice is still kept for the browser tab.
+test('the instance is chosen on Synthetic and kept for the tab; there is no Instance page', () => {
   const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
-  assert.ok(app.includes("current === 'instance' ? <Instances instance={instance} onPick={pickInstance} />"));
+  assert.ok(!app.includes("current === 'instance'") && !app.includes("['instance', 'Instance']"), 'the Instance page is back');
+  assert.ok(app.includes("import { readInstance, writeInstance } from './Instances.jsx'"));
   assert.ok(app.includes('<Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} />'),
     'Synthetic would pick its own instance again, and the two controls would disagree');
 });
 
 test('the instance is selectable on Synthetic, and it is the same setting', () => {
-  // Two VIEWS of one setting, not two settings: the select and the Instance page both call
-  // LabApp's pickInstance, so they cannot disagree. A local useState here would be a second
-  // setting, and that is the thing to keep out.
+  // One setting, kept by LabApp: the select calls LabApp's pickInstance, which also remembers it for the tab.
+  // A local useState here would be a second setting, and that is the thing to keep out.
   const src = readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes('onChange={(e) => onPick(e.target.value)}'),
     'the select does not write back to the shared instance');
@@ -150,11 +151,12 @@ test('a batch is cleared when the instance changes', () => {
   assert.ok(/setBatch\(null\); setRun\(null\); setError\(''\); \}, \[instance\]\)/.test(src));
 });
 
-test('the instance cards come from the product, not a copy in the lab', () => {
+test('the instances come from the product, not a copy in the lab', () => {
   const src = readFileSync(new URL('../Instances.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes("from '../logic/instances.js'"),
-    'a copy of the card text here could describe an instance the product no longer has');
+    'a copy here could accept an instance the product no longer has');
   assert.ok(!/Ops Brain'[,:]/.test(src.replace(/DEFAULT_INSTANCE[\s\S]*?;/, '')));
+  assert.ok(!/export default/.test(src), 'the Instance page is back');
 });
 
 test('an unknown stored instance falls back rather than generating for nothing', () => {
@@ -261,7 +263,7 @@ test('Learning is a page of its own, and the lab app renders it', () => {
   assert.ok(app.includes("current === 'learning' ? <Learning />"),
     'the menu names a page nothing draws, so opening it shows nothing');
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
 });
 
 test('the draft comes from the service, not from the browser', () => {
