@@ -95,6 +95,8 @@ export const labApi = {
   // run (R40): only the notes of the run the person has open.
   proposeFromNotes: (run) => call('POST', '/lab/agent/propose-from-notes', { query: run ? { run } : {}, timeoutMs: 120000 }),
   draftFix: (lineage) => call('POST', '/lab/modes/' + enc(lineage) + '/draft-fix', { timeoutMs: 120000 }),
+  // One click: a confirmed failure mode's rule goes into SPEC.md as a new approved version, under test (6 Nov 2026).
+  addRule: (lineage) => call('POST', '/lab/modes/' + enc(lineage) + '/rule', { timeoutMs: 60000 }),
   changes: () => call('GET', '/lab/changes'),
   approveChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/approve'),
   rejectChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/reject'),

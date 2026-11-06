@@ -10,6 +10,7 @@
 // Notes are step_labels rows read with the question (one request), saved and removed through labApi with the question's
 // company. Parts and long text start folded so a long answer stays a short page; each step's header row stays in view.
 import React from 'react';
+import { NextStep, nextStepFor } from './NextStep.jsx';
 import { labApi } from './labApi.js';
 import { Clamp } from './AllLabels.jsx';
 import { NOTE_MAX, ROLE_TEXT, errText, isStale, selectedIn } from './logic/labelling.js';
@@ -802,7 +803,9 @@ export function QuestionView(props) {
 // The page with its data: one request for the question (its expected answer, answers, the active answer's steps and
 // everyone's notes), then notes saved and removed one at a time. `onChanged(what)` tells the run's list to read its counts
 // again ('expected', 'note' or 'link'); `onLinked(turnId)` follows a newly linked answer.
-export default function QuestionPage({ code, me, onChanged, onLinked }) {
+export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop }) {
+  // After a note is saved: a pop-up says the next step is the agent's proposal on the Loop page (6 Nov 2026).
+  const [next, setNext] = React.useState(null);
   const [st, setSt] = React.useState({ data: null, loading: true, error: '' });
   const [rows, setRows] = React.useState([]);
   const [selected, setSelected] = React.useState(null);
@@ -887,6 +890,7 @@ export default function QuestionPage({ code, me, onChanged, onLinked }) {
       const saved = out && out.label;
       if (saved) setRows((p) => p.concat([saved]));
       changed('note');
+      setNext(nextStepFor('note_saved'));
     },
     select: (key) => setSelected(key),
     openEditor: (key, quote) => {
@@ -929,6 +933,7 @@ export default function QuestionPage({ code, me, onChanged, onLinked }) {
         setEditor(null);
         clearPageSelection();
         changed('note');
+        if (!d.edit) setNext(nextStepFor('note_saved'));
       } catch (e) {
         if (isStale(e)) {
           setEditor(null);
@@ -984,6 +989,8 @@ export default function QuestionPage({ code, me, onChanged, onLinked }) {
       {st.error ? <div role="alert" className="lab-error">{st.error}</div> : null}
       <QuestionView data={viewData} steps={steps} notes={notes} curator={isCurator(me)} selected={selected} editor={editor}
         busy={busy} errors={errors} confirming={confirming} loading={st.loading} on={on} />
+      <NextStep step={onOpenLoop ? next : null} onClose={() => setNext(null)}
+        onAct={(a) => { if (a === 'open_loop' && onOpenLoop) onOpenLoop(); }} />
     </>
   );
 }

@@ -9,6 +9,7 @@ import React from 'react';
 import { labApi } from './labApi.js';
 import { errText } from './logic/labelling.js';
 import { when } from './LabelsView.jsx';
+import { NextStep, nextStepFor } from './NextStep.jsx';
 
 export const LOOP_STEPS = [['traces', 'Traces'], ['notes', 'Notes'], ['taxonomy', 'Failure modes'], ['spec', 'SPEC.md'],
   ['correction', 'Correction'], ['regression', 'Regression'], ['rerun', 'Rerun']];
@@ -22,7 +23,7 @@ const STATUS = { all_found: 'All expected values found', mismatch: 'An expected 
 // How many proposals wait for a person.
 export function waitingCount(p) {
   if (!p) return 0;
-  return (p.modes || []).length + (p.spec || []).length + (p.expected || []).length;
+  return (p.modes || []).length + (p.spec || []).length + (p.expected || []).length + (p.labels || []).length;
 }
 
 // One failure mode's place in the loop: each step done or not, and the next one to take.
@@ -99,7 +100,8 @@ export function Waiting({ data, busy, error, onDecide, onProposeFromNotes, run }
   const modes = p.modes || [];
   const spec = p.spec || [];
   const expected = p.expected || [];
-  const n = modes.length + spec.length + expected.length;
+  const labels = p.labels || [];
+  const n = modes.length + spec.length + expected.length + labels.length;
   return (
     <Section id="lab-loop-waiting" title={'Waiting for a decision' + (n ? ' (' + n + ')' : '')}
       hint="A coding agent may propose failure modes, labels and expected answers. Nothing it proposes counts until a person approves it here."
@@ -118,8 +120,26 @@ export function Waiting({ data, busy, error, onDecide, onProposeFromNotes, run }
               {m.definition ? <p className="lab-small">{m.definition}</p> : null}
               {m.current && m.kind === 'change' ? <p className="lab-small">{'Now: ' + m.current.name + (m.current.definition ? ' · ' + m.current.definition : '')}</p> : null}
               <p className="lab-small">{['Proposed', m.by ? 'by ' + m.by : '', m.at ? when(m.at) : ''].filter(Boolean).join(' · ')}</p>
-              {p.can_decide_modes ? <Decide busy={busy} onDecide={(d, note) => onDecide('failure_mode', m.id, d, note)} />
-                : <p className="lab-small">{'The platform team or the consultant decides failure modes.'}</p>}
+              {p.can_decide_modes ? (
+                <>
+                  {m.kind !== 'retire' ? <p className="lab-small">{'Approve: the failure mode is confirmed, its rule is added to SPEC.md (under test) and the labels the agent suggested for it are accepted.'}</p> : null}
+                  <Decide busy={busy} onDecide={(d, note) => onDecide('failure_mode', m.id, d, note)} />
+                </>
+              ) : <p className="lab-small">{'The platform team or the consultant decides failure modes.'}</p>}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {labels.length ? (
+        <ul className="lab-loop-list" aria-label="Suggested labels">
+          {labels.map((l) => (
+            <li key={l.id} className="lab-loop-item">
+              <div><span className="lab-chip">{'Suggested label'}</span> <strong>{l.question}</strong> <span className="lab-small">{excerpt(l.question_text, 140)}</span></div>
+              <p className="lab-small">{'The agent says this answer shows '}<strong>{l.mode_name}</strong>{'.'}</p>
+              <div className="lab-row">
+                <button type="button" className="lab-btn lab-btn-sm" disabled={busy} onClick={() => onDecide('label', l.id, 'approved', null)}>{'Accept'}</button>
+                <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" disabled={busy} onClick={() => onDecide('label', l.id, 'rejected', null)}>{'Reject'}</button>
+              </div>
             </li>
           ))}
         </ul>
@@ -278,12 +298,69 @@ function RegressionForm({ mode, wide, companies, busy, onMake, onCancel }) {
 }
 
 // One confirmed failure mode and its place in the loop.
-export function ModeRow({ mode, canTaxonomy, canCurate, wide, companies, busy, rerunning, onCorrection, onRegression, onRerun, onCompare, onDraftFix }) {
+// The expected answer written on the Loop page, as the question page saves it: the rule of the approved specification it is
+// derived from, the company records it was read from, and the values an answer must carry (one per line; ! = must not).
+export function expectedBody(f, rule) {
+  const values = String((f && f.values) || '').split('\n').map((v) => v.trim()).filter(Boolean);
+  return { expected: String((f && f.expected) || '').trim(),
+    evidence: Object.assign({ spec_rule: rule, data: String((f && f.records) || '').trim() }, values.length ? { values } : {}) };
+}
+
+function ExpectedForm({ code, rule, busy, onSave, onCancel }) {
+  const [f, setF] = React.useState({ expected: '', records: '', values: '' });
+  const set = (k) => (e) => { const v = e.target.value; setF((p) => Object.assign({}, p, { [k]: v })); };
+  const ok = f.expected.trim() && f.records.trim() && rule;
+  return (
+    <div className="lab-qp-form" aria-label={'Expected answer for ' + code}>
+      <p className="lab-small">{'Write it from the company’s records, never from the model’s answer. Derived from rule '}<strong>{rule || '—'}</strong>{'.'}</p>
+      <label className="lab-field"><span>{'Expected answer'}</span>
+        <textarea className="lab-note" rows={3} maxLength={20000} value={f.expected} onChange={set('expected')} disabled={busy} />
+      </label>
+      <label className="lab-field"><span>{'Company records it was read from'}</span>
+        <textarea className="lab-note" rows={2} maxLength={4000} value={f.records} onChange={set('records')} disabled={busy}
+          placeholder="The records or query the expected answer was read from" />
+      </label>
+      <label className="lab-field"><span>{'Values to check (optional, one per line)'}</span>
+        <textarea className="lab-note" rows={3} maxLength={4000} value={f.values} onChange={set('values')} disabled={busy}
+          placeholder={'Names and dates the answer must carry, e.g.\nHamworthy Heating\n2026-11-19\nStart a line with ! for something it must not say'} />
+      </label>
+      <div className="lab-row">
+        <button type="button" className="lab-btn lab-btn-sm" disabled={busy || !ok} onClick={() => onSave(code, expectedBody(f, rule))}>{'Save expected answer'}</button>
+        <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onCancel} disabled={busy}>{'Cancel'}</button>
+      </div>
+    </div>
+  );
+}
+
+// Test the fix (6 Nov 2026): a fresh regression run of the mode's questions (with their expected answers as they are now),
+// asked again with the change under test, then compared. One click for what were three.
+export async function testFix(api, mode, opts) {
+  const o = opts || {};
+  const companies = (mode && mode.companies) || [];
+  let company;
+  if (o.wide) {
+    if (companies.length !== 1) {
+      throw new Error('Choose the company with Make regression run: this failure mode has questions from '
+        + (companies.length ? companies.length + ' companies' : 'no company') + '.');
+    }
+    company = companies[0];
+  }
+  const made = await api.makeRegression(mode.lineage_id, Object.assign({ space: 'full' }, company ? { company } : {}));
+  const asked = await rerunAll(api, made.run, o.onProgress);
+  const compare = await api.compare(made.run);
+  return { run: made.run, asked, compare };
+}
+
+export function ModeRow({ mode, canTaxonomy, canCurate, wide, companies, busy, rerunning, onCorrection, onRegression, onRerun, onCompare, onDraftFix,
+  onAddRule, onTestFix, onSaveExpected, onOpenQuestion, openExpected }) {
   const [form, setForm] = React.useState(null);
+  const [expOpen, setExpOpen] = React.useState(null);
   const chips = stepChips(mode);
   const rule = mode.rule || null;
+  const questions = mode.questions || [];
+  const testing = rerunning && rerunning.mode === mode.lineage_id;
   return (
-    <li className="lab-loop-mode">
+    <li className="lab-loop-mode" id={'lab-mode-' + mode.lineage_id}>
       <div className="lab-loop-mode-head">
         <strong>{mode.name}</strong>
         {rule ? <span className="lab-chip">{rule.code}</span> : null}
@@ -296,7 +373,38 @@ export function ModeRow({ mode, canTaxonomy, canCurate, wide, companies, busy, r
             aria-current={c.next ? 'step' : undefined}>{c.label + (c.done ? ' ✓' : '')}</li>
         ))}
       </ol>
+      {questions.length ? (
+        <ul className="lab-loop-qs" aria-label={'Questions marked positive for ' + mode.name}>
+          {questions.map((q) => {
+            const open = !q.has_expected && (expOpen === q.code || openExpected === q.code);
+            return (
+              <li key={q.code}>
+                <div className="lab-row">
+                  {onOpenQuestion ? <button type="button" className="lab-lv-code" onClick={() => onOpenQuestion(q.code)}>{q.code}</button> : <strong>{q.code}</strong>}
+                  <span className="lab-small">{excerpt(q.text, 120)}</span>
+                  {q.has_expected ? <span className="lab-chip lab-loop-ok">{'Expected answer ✓'}</span>
+                    : (canCurate && onSaveExpected && !open ? (
+                      <button type="button" className="lab-link" onClick={() => setExpOpen(q.code)} disabled={busy || !rule}
+                        title={rule ? undefined : 'Add this failure mode’s rule to SPEC.md first'}>{'Add expected answer'}</button>
+                    ) : (!open ? <span className="lab-small">{'No expected answer yet'}</span> : null))}
+                </div>
+                {open ? <ExpectedForm code={q.code} rule={rule && rule.code} busy={busy} onCancel={() => setExpOpen(null)}
+                  onSave={async (c, body) => { if (await onSaveExpected(c, body, mode)) setExpOpen(null); }} /> : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       <div className="lab-row">
+        {canTaxonomy && !rule && onAddRule ? (
+          <button type="button" className="lab-btn lab-btn-sm" onClick={() => onAddRule(mode)} disabled={busy}
+            title="Adds the rule for this failure mode to SPEC.md as a new approved version, under test">{'Add to SPEC.md'}</button>
+        ) : null}
+        {canCurate && rule && onTestFix ? (
+          <button type="button" className="lab-btn lab-btn-sm" onClick={() => onTestFix(mode)} disabled={busy || !!rerunning}
+            title="A fresh regression run of these questions, asked again with the change under test, then compared">{'Test the fix'}</button>
+        ) : null}
+        {testing ? <span className="lab-small" role="status">{rerunning.text}</span> : null}
         {canTaxonomy && !form && onDraftFix ? (
           <button type="button" className="lab-link" onClick={() => onDraftFix(mode)} disabled={busy || !rule}
             title={rule ? 'The agent drafts a change to an instruction document. It waits below for a person.' : 'Add this failure mode to the approved specification first'}>{'Agent: draft fix'}</button>
@@ -466,7 +574,7 @@ export function companiesOf(runs) {
 }
 
 // The page itself, from what the service returned. Loop (below) reads the service and hands the actions back.
-export function LoopView({ me, run, loop, proposals, spec, draft, compare, changes, notice, busy, errors, rerunning, companies, on }) {
+export function LoopView({ me, run, loop, proposals, spec, draft, compare, changes, notice, busy, errors, rerunning, companies, on, next, openExpected }) {
   const wide = !!(me && me.all_companies);
   const curate = !!(me && (me.all_companies || me.manages));
   const errs = errors || {};
@@ -494,13 +602,15 @@ export function LoopView({ me, run, loop, proposals, spec, draft, compare, chang
           <ul className="lab-loop-list">
             {modes.map((m) => <ModeRow key={m.lineage_id} mode={m} canTaxonomy={wide} canCurate={curate} wide={wide} companies={companies}
               busy={busy} rerunning={rerunning} onCorrection={on.correction} onRegression={on.regression} onRerun={on.rerun} onCompare={on.compare}
-              onDraftFix={changes ? on.draftFix : null} />)}
+              onDraftFix={changes ? on.draftFix : null} onAddRule={on.addRule} onTestFix={on.testFix} onSaveExpected={on.saveExpected}
+              onOpenQuestion={on.openQuestion} openExpected={openExpected} />)}
           </ul>
         )}
       </Section>
       <ChangesPanel changes={changes} busy={busy} error={errs.changes} onApprove={on.approveChange} onReject={on.rejectChange}
         onLive={on.liveChange} onExport={on.exportChanges} />
       {compare ? <CompareView data={compare} onClose={on.closeCompare} onOpenQuestion={on.openQuestion} /> : null}
+      <NextStep step={next} busy={busy} onAct={on.nextAct} onClose={on.nextClose} />
     </div>
   );
 }
@@ -529,6 +639,15 @@ export default function Loop({ me, runs, run, onOpenQuestion }) {
   const [rerunning, setRerunning] = React.useState(null);
   const [changes, setChanges] = React.useState(null);
   const [notice, setNotice] = React.useState('');
+  // The "Next step" pop-up, the failure mode the steps are about, and the question whose expected answer form is open.
+  const [next, setNext] = React.useState(null);
+  const [focus, setFocus] = React.useState(null);
+  const [openExpected, setOpenExpected] = React.useState(null);
+  const latest = React.useRef({ loop: null, changes: null });
+  latest.current = { loop, changes };
+  const show = (event, data) => setNext(nextStepFor(event, data));
+  const modeOf = (lin) => (((latest.current.loop || {}).modes) || []).find((x) => x.lineage_id === lin) || null;
+  const scrollTo = (id) => { try { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { /* no page */ } };
   const err = (k, v) => setErrors((p) => Object.assign({}, p, { [k]: v }));
   const wide = !!(me && me.all_companies);
 
@@ -564,15 +683,62 @@ export default function Loop({ me, runs, run, onOpenQuestion }) {
       const out = await labApi.decideProposal(kind, id, { decision, note });
       if (out && out.published === 'testing') setNotice('SPEC.md version approved: it is under test. Only the reruns in this lab read it until a person makes it live.');
       else if (out && out.published === false) setNotice('SPEC.md version approved, but it could not be put under test: ' + (out.publish_error || 'the instruction store did not answer') + '.');
+      if (decision !== 'approved' || !out) return;
+      if (kind === 'failure_mode' && out.mode) { setFocus(out.mode); show('mode_approved', out); }
+      else if (kind === 'label') { setFocus(out.mode); show('label_accepted', { hasRule: !!(modeOf(out.mode) || {}).rule }); }
     }),
+    addRule: (mode) => act('modes', async () => {
+      const out = await labApi.addRule(mode.lineage_id);
+      setFocus(mode.lineage_id);
+      show('rule_added', out);
+    }),
+    saveExpected: (code, body, mode) => act('modes', async () => {
+      await labApi.setExpected(code, body);
+      setOpenExpected(null);
+      setFocus(mode.lineage_id);
+      show('expected_saved');
+    }),
+    testFix: async (mode) => {
+      err('modes', '');
+      setFocus(mode.lineage_id);
+      setRerunning({ mode: mode.lineage_id, text: 'Making the regression run…' });
+      try {
+        const out = await testFix(labApi, mode, { wide, onProgress: (p) => setRerunning({ mode: mode.lineage_id,
+          text: 'Asked ' + p.asked + (p.total !== null ? ' of ' + p.total : '') + (p.failed ? ' · ' + p.failed + ' failed' : '') }) });
+        setRerunning(null);
+        setCompare(out.compare);
+        await load();
+        show('tested', (out.compare && out.compare.summary) || {});
+      } catch (e) {
+        setRerunning(null);
+        err('modes', 'Could not test the fix: ' + errText(e));
+      }
+    },
+    nextAct: (a) => {
+      const m = modeOf(focus) || (((latest.current.loop || {}).modes) || [])[0] || null;
+      if (a === 'show_waiting') scrollTo('lab-loop-waiting');
+      else if (a === 'show_changes') scrollTo('lab-loop-changes');
+      else if (a === 'show_compare') scrollTo('lab-loop-compare');
+      else if (a === 'export') on.exportChanges();
+      else if (!m) scrollTo('lab-loop-modes');
+      else if (a === 'expected') {
+        const q = (m.questions || []).find((x) => !x.has_expected);
+        setOpenExpected(q ? q.code : null);
+        scrollTo('lab-mode-' + m.lineage_id);
+      } else if (a === 'add_rule') on.addRule(m);
+      else if (a === 'draft_fix') on.draftFix(m);
+      else if (a === 'test_fix') on.testFix(m);
+    },
+    nextClose: () => setNext(null),
     proposeFromNotes: () => act('agent', async () => {
       const out = await labApi.proposeFromNotes(run);
+      show('proposed', out);
       const n = ((out && out.proposed_modes) || []).length;
       const read = (out && out.notes_read) || 0;
       setNotice(!read ? (out && out.message) || ('No new notes on unlabelled questions of ' + run + '.')
         : 'The agent read ' + read + (read === 1 ? ' note' : ' notes') + ' on ' + (((out && out.questions) || []).join(', ') || run)
           + ' and proposed ' + n + (n === 1 ? ' new failure mode' : ' new failure modes') + ' and ' + ((out && out.labels) || 0)
-          + ' labels. Modes wait for a decision below; labels are suggestions in Labels.');
+          + ' labels. They wait for a decision below.');
     }),
     draftFix: (mode) => act('agent', async () => {
       setNotice('The agent is drafting a change for ' + mode.name + '…');
@@ -584,15 +750,21 @@ export default function Loop({ me, runs, run, onOpenQuestion }) {
         throw e;
       }
       setNotice('The agent drafted a change' + (out && out.path ? ' to ' + out.path : '') + ' for ' + mode.name + '. It waits under Instruction changes.');
+      setFocus(mode.lineage_id);
+      show('fix_drafted', out);
     }),
     approveChange: (id) => act('changes', async () => {
       const out = await labApi.approveChange(id);
-      setNotice((out && out.path ? out.path + ' is' : 'The change is') + ' under test. Ask the regression run again, then Compare.');
+      setNotice((out && out.path ? out.path + ' is' : 'The change is') + ' under test. Test the fix next.');
+      const c = ((latest.current.changes || {}).proposed || []).find((x) => x.id === id);
+      if (c && c.mode) setFocus(c.mode);
+      show('change_approved');
     }),
     rejectChange: (id) => act('changes', () => labApi.rejectChange(id)),
     liveChange: (id) => act('changes', async () => {
       await labApi.liveChange(id);
       setNotice('The change is live: every agent reads it from its next answer. Download the live files for the commit.');
+      show('made_live');
     }),
     exportChanges: () => act('changes', async () => {
       const out = await labApi.exportChanges();
@@ -627,7 +799,7 @@ export default function Loop({ me, runs, run, onOpenQuestion }) {
   };
   return (
     <LoopView me={me} run={run} loop={loop} proposals={proposals} spec={spec} draft={draft} compare={compare} changes={changes} notice={notice}
-      busy={busy} errors={errors}
+      busy={busy} errors={errors} next={next} openExpected={openExpected}
       rerunning={rerunning} companies={companiesOf(runs)} on={on} />
   );
 }
