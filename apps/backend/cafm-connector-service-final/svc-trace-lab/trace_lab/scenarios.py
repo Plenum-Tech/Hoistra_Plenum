@@ -225,6 +225,270 @@ CROSS_DOMAIN: tuple[dict[str, Any], ...] = (
      "needs": ("compliance", "wo_engine", "contract_performance"),
      "covers": "the certificates lapsing; whether remedial work exists for each; the responsible "
                "vendor's SLA position; the ones with no work raised called out"},
+    # ── fifty more, ten per area (6 Nov 2026) ──────────────────────────────────────────────
+    #
+    # Asked for as "10 questions for ops, assets, compliance, energy and maintenance, interlinked
+    # cross domain". Every one was put through resolve_phase2_engine BEFORE it was added and kept
+    # only if it routes INTO an area it needs -- the router reads the opening, so a three-part
+    # question that opens on the wrong area lands with an engine owning no part of it. 59 of 64
+    # candidates survived that; the five that did not are recorded under the assets block below.
+    #
+    # `covers` is what an answer is judged against and never an expected answer: only a person
+    # reading real rows can write one of those.
+
+    # ── ops ────────────────────────────────────────────────────────────────────────────────
+    {"question": "which building has the most open work orders right now, are its vendors inside "
+                 "sla, and what is the oldest job still sitting there",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "which building, by count; that building's vendors and each one's SLA position; "
+               "the oldest open job named with its age, not just a total"},
+    {"question": "the oldest open work order on site - what is it, who is it with, and is that "
+                 "contractor meeting their response sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the work order identified; the contractor holding it; that contractor's response "
+               "SLA position, judged from the record rather than asserted"},
+    {"question": "how many jobs were raised this month, how many did we close, and did the "
+                 "contractors who did them hit their first fix rate",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "raised and closed as two separate counts; the contractors involved; first fix "
+               "rate per contractor, not one portfolio average"},
+    {"question": "which work orders have been reopened, and is the contractor who first attended "
+                 "them still inside their sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the reopened work orders; who attended first; whether a reopen is counted against "
+               "that contractor's SLA, stated either way"},
+    {"question": "what work is open at my worst building, and does that building have any lapsed "
+                 "certificates",
+     "needs": ("wo_engine", "compliance"),
+     "covers": "what makes it the worst, said out loud; the open work there; its lapsed "
+               "certificates, with none reported as none rather than omitted"},
+    {"question": "show me the work orders waiting on approval, and whether the vendors attached to "
+                 "them are blocked",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the work orders awaiting approval; the vendor on each; which of those vendors are "
+               "blocked, since approving work to a blocked vendor is the risk"},
+    {"question": "which jobs breached their response time last month, and what did those "
+                 "contractors invoice us for them",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the breaching jobs; the contractor on each; what was invoiced, tied to those jobs "
+               "and not the contractor's whole month"},
+    {"question": "what reactive work is open on plant, and is any of that plant in a building "
+                 "where consumption is rising",
+     "needs": ("wo_engine", "energy_intelligence"),
+     "covers": "the open reactive work on plant; which buildings it sits in; which of those have "
+               "rising consumption, with the overlap named rather than two lists"},
+    {"question": "which work orders are overdue, and do any of them close out an inspection "
+                 "recommendation",
+     "needs": ("wo_engine", "compliance"),
+     "covers": "the overdue work orders; which carry an inspection recommendation; the ones where "
+               "an overdue job is holding a recommendation open called out as such"},
+    {"question": "which jobs are unassigned, and which contractor would normally take them under "
+                 "the contract",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the unassigned jobs; the contractor the contract puts them with; any job with no "
+               "contractor under any contract said plainly"},
+
+    # ── maintenance ────────────────────────────────────────────────────────────────────────
+    {"question": "which planned maintenance visits were missed, and did a reactive job follow at "
+                 "the same building",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the missed planned visits; reactive work at the same building afterwards; whether "
+               "the two are connected, or that it cannot be told from the record"},
+    {"question": "what planned work is due in the next 30 days, and are the contractors who do it "
+                 "inside sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the planned work due, by date; the contractor for each; each contractor's current "
+               "SLA position, so a due visit with a failing contractor stands out"},
+    {"question": "what planned work is overdue, and does any of it carry a statutory inspection",
+     "needs": ("wo_engine", "compliance"),
+     "covers": "the overdue planned work; which items are statutory; statutory overdue separated "
+               "from ordinary overdue, because the consequence differs"},
+    {"question": "is our planned maintenance keeping up with the reactive load, and which "
+                 "contractor is worst",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "planned against reactive as a ratio or comparison, not two counts; the worst "
+               "contractor named with the figure that makes them worst"},
+    {"question": "which planned visits were signed off without a certificate being filed",
+     "needs": ("wo_engine", "compliance"),
+     "covers": "the signed-off visits; which have no certificate on file; that a missing "
+               "certificate is a gap in the record, not proof the work was not done"},
+    {"question": "what maintenance has been raised on the plant driving our highest consumption",
+     "needs": ("wo_engine", "energy_intelligence"),
+     "covers": "which plant drives the consumption; the maintenance raised against it; whether "
+               "that maintenance would explain the consumption or does not"},
+    {"question": "ppm compliance by contractor this quarter, and which of them are also missing "
+                 "their sla",
+     "needs": ("contract_performance", "wo_engine"),
+     "covers": "PPM compliance per contractor; their SLA position; the contractors failing both, "
+               "which is the answer to the question as asked"},
+    {"question": "which contractors are behind on their planned visits, and what are we paying "
+                 "them",
+     "needs": ("contract_performance", "wo_engine"),
+     "covers": "the contractors behind, with how far behind; what each is paid; the two set "
+               "against each other rather than listed one after the other"},
+    {"question": "how many planned jobs did we close last quarter, and did the vendors who did "
+                 "them meet their sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the count closed; the vendors who did them; each vendor's SLA position on that "
+               "planned work specifically"},
+    {"question": "which buildings have planned work slipping, and how does their energy use "
+                 "compare",
+     "needs": ("wo_engine", "energy_intelligence"),
+     "covers": "the buildings where planned work is slipping; their energy use against the rest "
+               "of the portfolio, as a comparison and not a bare figure"},
+
+    # ── assets ─────────────────────────────────────────────────────────────────────────────
+    #
+    # Five asset questions had to be rewritten to be usable at all, because the router returns
+    # None for them: "which plant has failed most this year", "which equipment failed more than
+    # twice this year", "what work is open on the oldest plant", "which plant is out of service",
+    # "which assets have had more reactive jobs than planned visits". Failure, age and in-service
+    # state are ordinary things to ask an asset register, and resolve_phase2_engine places none
+    # of them. Naming the asset type, or anchoring on "work order", routes; the gap is the
+    # router's vocabulary, and it is recorded here rather than hidden by the rewrite.
+    {"question": "what work orders have the chillers needed, and what are those buildings "
+                 "consuming",
+     "needs": ("wo_engine", "energy_intelligence"),
+     "covers": "the work orders against chillers; the consumption of the buildings they sit in; "
+               "whether the work and the consumption line up"},
+    {"question": "which assets are costing the most in work orders, and how does that sit against "
+                 "the contract we are on",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the assets by work order cost; the contract covering them; whether the spend is "
+               "inside what the contract already pays for or on top of it"},
+    {"question": "what equipment has an open work order right now, and is the contractor on it "
+                 "inside sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the equipment with open work; the contractor on each; that contractor's SLA "
+               "position on that job, not their portfolio average"},
+    {"question": "where is consumption highest, and what plant maintenance has been raised there",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "the building with the highest consumption, with the measure named; the plant "
+               "maintenance raised there; whether it accounts for the consumption"},
+    {"question": "which assets have a lapsed statutory certificate, and is there work raised to "
+                 "recertify them",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the assets with a lapsed statutory certificate; recertification work for each; "
+               "the assets lapsed with nothing raised named explicitly"},
+    {"question": "what work have the boilers needed this year, and is the contractor who services "
+                 "them inside sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the boiler work this year; the servicing contractor; their SLA position, judged "
+               "from the record rather than asserted"},
+    {"question": "which equipment has both an open work order and a certificate expiring in the "
+                 "next 90 days",
+     "needs": ("wo_engine", "compliance"),
+     "covers": "equipment meeting BOTH conditions, as an intersection and not two lists; the "
+               "expiry date for each; an empty intersection said plainly"},
+    {"question": "what jobs are open on lifts, and is the lift contractor inside its sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the open lift jobs; the lift contractor; their SLA position, with lift work "
+               "treated as the statutory-adjacent work it is"},
+    {"question": "what work orders are open on the air handling units, and is the contractor on "
+                 "them inside sla",
+     "needs": ("wo_engine", "contract_performance"),
+     "covers": "the open AHU work orders; the contractor on them; their SLA position on that "
+               "work, with none found reported as none"},
+    {"question": "which assets have open work orders at the building with the highest consumption",
+     "needs": ("wo_engine", "energy_intelligence"),
+     "covers": "which building consumes most, named first; the assets there with open work; the "
+               "two joined, rather than the open work for the whole portfolio"},
+
+    # ── compliance ─────────────────────────────────────────────────────────────────────────
+    {"question": "which certificates lapse in the next 60 days, and is there work raised to renew "
+                 "them",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the certificates lapsing, by date; renewal work for each; the ones lapsing with "
+               "nothing raised, which is the point of asking"},
+    {"question": "which buildings are failing compliance, and are the contractors responsible "
+                 "inside their sla",
+     "needs": ("compliance", "contract_performance"),
+     "covers": "the failing buildings and what fails; the contractor responsible for each; their "
+               "SLA position, so a failing building with a failing contractor is visible"},
+    {"question": "what did the last fire risk assessment recommend, and has any of it been raised "
+                 "as a work order",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the recommendations from the assessment; work raised against each; the "
+               "recommendations with nothing raised named one by one"},
+    {"question": "which vendors are blocked on compliance, and what work is still assigned to them",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the blocked vendors and why each is blocked; work still assigned to them; that "
+               "open work with a blocked vendor is the exposure, said as such"},
+    {"question": "which statutory inspections are overdue, and what are we paying the contractor "
+                 "who should do them",
+     "needs": ("compliance", "contract_performance"),
+     "covers": "the overdue statutory inspections; the contractor obliged to do each; what that "
+               "contractor is paid, set against work not done"},
+    {"question": "which certificates expired without being renewed, and what work followed at "
+                 "those buildings",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the expired, unrenewed certificates; work at those buildings afterwards; whether "
+               "any of that work addressed the expiry or none did"},
+    {"question": "are any of my highest consumption buildings also failing compliance",
+     "needs": ("compliance", "energy_intelligence"),
+     "covers": "the highest consumption buildings, with the measure; their compliance position; "
+               "the overlap answered as a yes or no before anything is listed"},
+    {"question": "which contract terms come up for renewal with compliance obligations still open",
+     "needs": ("compliance", "contract_performance"),
+     "covers": "the contracts due for renewal; the open compliance obligations under each; the "
+               "renewals that would carry an unmet obligation forward"},
+    {"question": "what inspection recommendations are open with no work order against them",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the open recommendations; which have work raised; the ones with nothing raised, "
+               "which is what was actually asked for"},
+    {"question": "which vendor has the most lapsed certificates, and are they still being given "
+                 "work",
+     "needs": ("compliance", "wo_engine"),
+     "covers": "the vendor, with the count; what has lapsed; whether work is still being assigned "
+               "to them, which is the decision the question is really about"},
+
+    # ── energy ─────────────────────────────────────────────────────────────────────────────
+    {"question": "where is consumption highest per square metre, and what work has been raised on "
+                 "the plant there",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "the building by intensity, not by total; the plant work raised there; whether "
+               "that work explains the intensity or leaves it unexplained"},
+    {"question": "which buildings have seen energy use rise most this quarter, and is the plant "
+                 "there overdue maintenance",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "the buildings by rise, with the figures; the plant there; whether its maintenance "
+               "is overdue, tying the rise to the maintenance or declining to"},
+    {"question": "what are we spending on energy, and how does that compare with what we pay our "
+                 "contractors",
+     "needs": ("energy_intelligence", "contract_performance"),
+     "covers": "energy spend; contractor spend; the two compared on the same basis and period, "
+               "which is where this answer usually goes wrong"},
+    {"question": "which buildings are our worst energy performers, and do they have open "
+                 "compliance issues",
+     "needs": ("energy_intelligence", "compliance"),
+     "covers": "the worst performers, with the measure named; their open compliance issues; the "
+               "buildings carrying both, rather than two separate lists"},
+    {"question": "where has consumption spiked, and was there a work order at that building around "
+                 "the same time",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "where and when consumption spiked; work orders at that building near that date; "
+               "whether the timing connects them, stated as uncertain if it is"},
+    {"question": "which sites have the worst energy intensity, and what have they cost us in work "
+                 "orders",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "the sites by intensity; their work order cost; the two set against each other, "
+               "since a cheap site to maintain may be an expensive one to run"},
+    {"question": "has energy use fallen where we have done plant replacement work",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "where plant replacement happened; consumption before and after at those "
+               "buildings; an honest answer where the record cannot show it"},
+    {"question": "which building costs us most on energy and on maintenance together",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "energy cost and maintenance cost per building, then combined; the total that "
+               "decides the answer, not whichever figure is larger"},
+    {"question": "where is consumption rising while planned maintenance is behind",
+     "needs": ("energy_intelligence", "wo_engine"),
+     "covers": "buildings meeting both conditions, as an intersection; how far behind the planned "
+               "maintenance is; an empty intersection said plainly"},
+    {"question": "which buildings have an energy certificate on record and rising consumption",
+     "needs": ("energy_intelligence", "compliance"),
+     "covers": "the buildings with a certificate on record, with its rating; their consumption "
+               "trend; where a good rating sits against a rising trend"},
 )
 
 #: How the question is typed. The point of these is that a real question is rarely tidy.
