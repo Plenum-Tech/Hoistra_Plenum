@@ -156,7 +156,9 @@ export async function apiFetch(base, path, opts) {
     const inFlight = hooks.pending();
     if (inFlight) await Promise.resolve(inFlight).then(() => {}, () => {});
   }
-  const out = await attempt(base, path, o, useAuth ? hooks.getToken() : null, useAuth);
+  // Stamped so a read still waiting in the send queue when the company changes is never sent.
+  const out = await attempt(base, path, useAuth ? Object.assign({}, o, { _issuedUnder: issuedUnder }) : o,
+    useAuth ? hooks.getToken() : null, useAuth);
   // Checked AFTER the await, on the way back — the company can change while this is in
   // flight, and this is the one place every register's reads pass through.
   //
@@ -200,6 +202,56 @@ async function attempt(base, path, o, token, useAuth) {
   }
 }
 
+// ── the send queue ───────────────────────────────────────────────────────
+// A browser sends at most six requests at a time to one host over HTTP/1.1 (the dev server and
+// the gateway both speak it), and a page mount asks for forty-odd reads in one breath. Each
+// read's 20 s timer used to start the moment it was asked for, so a read that waited behind slow
+// ones for most of that time was cut off moments after it was sent: the server logged a 200 and
+// the page showed "—" (2 Nov 2026 - Vendors in Ops Brain lost approvals, contracts and the
+// summary that way while the gateway answered each in 4-8 s). Reads now wait their turn here,
+// with no timer running, and the timer starts when a read is actually sent. Five at a time
+// leaves the browser's sixth for writes, uploads and the orchestrator's long POSTs, which never
+// queue.
+export const MAX_READS = 5;
+// Switched on by the browser entry (main.jsx): the queue models the browser's connection pool,
+// which node (the tests) does not have. Off, every read goes straight out, as before.
+let readQueueOn = false;
+export function enableReadQueue(on) { readQueueOn = on !== false; }
+let readsInFlight = 0;
+const readQueue = [];
+function takeReadSlot(signal) {
+  if (signal && signal.aborted) return Promise.reject(cancelledError());
+  if (readsInFlight < MAX_READS) { readsInFlight += 1; return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const entry = { resolve: resolve, signal: signal || null, onAbort: null };
+    if (signal) {
+      // Cancelled while waiting: it leaves the queue and is never sent.
+      entry.onAbort = () => {
+        const i = readQueue.indexOf(entry);
+        if (i > -1) readQueue.splice(i, 1);
+        reject(cancelledError());
+      };
+      signal.addEventListener('abort', entry.onAbort);
+    }
+    readQueue.push(entry);
+  });
+}
+// The slot passes straight to the next read waiting, so the count only drops when none waits.
+function releaseReadSlot() {
+  const next = readQueue.shift();
+  if (next) {
+    if (next.signal && next.onAbort) next.signal.removeEventListener('abort', next.onAbort);
+    next.resolve();
+    return;
+  }
+  readsInFlight = Math.max(0, readsInFlight - 1);
+}
+function cancelledError() {
+  const err = new Error('cancelled');
+  err.cancelled = true;
+  return err;
+}
+
 async function request(base, path, o, token) {
   const url = new URL(base + path, window.location.origin);
   if (o.query) {
@@ -207,8 +259,29 @@ async function request(base, path, o, token) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     });
   }
+  // A read takes a slot first (the send queue above); the timer below starts once it has one.
+  const isRead = readQueueOn && String(o.method || 'GET').toUpperCase() === 'GET';
+  if (isRead) await takeReadSlot(o.signal);
+  if (isRead && o._issuedUnder !== undefined) {
+    // The company changed (a view-as switch, a sign-out) while this read waited for its turn:
+    // never sent, so the new company's reads do not queue behind it and no read goes out
+    // under the previous company (pre-push review, 3 Nov 2026).
+    if (o._issuedUnder !== orgEpoch) {
+      releaseReadSlot();
+      const stale = new Error('the company changed while this request was waiting to be sent');
+      stale.staleScope = true;
+      throw stale;
+    }
+    // A token refreshed while it waited is the one it goes out with.
+    const now = hooks.getToken ? hooks.getToken() : null;
+    if (now) token = now;
+  }
+  let slotHeld = isRead;
+  const giveBack = () => { if (slotHeld) { slotHeld = false; releaseReadSlot(); } };
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), o.timeoutMs || 20000);
+  // A timed-out read gives its slot back at once, even if the fetch it started never settles
+  // (a browser's fetch rejects on abort; a stub may not).
+  const timer = setTimeout(() => { giveBack(); ctrl.abort(); }, o.timeoutMs || 20000);
   let cancelled = false;
   const onAbort = () => { cancelled = true; ctrl.abort(); };
   if (o.signal) {
@@ -255,6 +328,7 @@ async function request(base, path, o, token) {
     throw e;
   } finally {
     clearTimeout(timer);
+    giveBack();
     if (o.signal) o.signal.removeEventListener('abort', onAbort);
   }
 }

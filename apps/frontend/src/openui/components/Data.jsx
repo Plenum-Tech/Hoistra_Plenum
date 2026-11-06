@@ -1,5 +1,6 @@
 // Data — headline figures and tables.
-import React, { memo, useState } from 'react';
+import React, { memo, useContext, useState } from 'react';
+import { AnswerKey, getView, nextSort, setView, sortRows, tableViewKey } from '../tableView.js';
 import { inline } from '../../components/shell/markdownInline.jsx';
 import { scrubInternal } from '../../logic/publicText.js';
 import { arr, cell, CODE, fmt, refs, sameData, toneOf } from '../shared.jsx';
@@ -60,14 +61,26 @@ const KIND_CLASS = { num: 'oui-num', code: 'oui-code', text: undefined };
 // Wider than its box (the dock), it scrolls inside the box and never widens the page.
 // A row longer than the headings keeps its extra cells under blank headings, and a table with no
 // headings at all is drawn without a heading row: no cell is ever dropped (27 Oct 2026).
+//
+// A heading sorts by its column - ascending, descending, then the answer's own order - and what
+// the reader set (the sort, "Show all") is remembered for this table in this answer of this
+// conversation (openui/tableView.js), so a new question, a re-run, another conversation or a
+// reload does not put it back (2 Nov 2026).
 export const Table = memo(function Table({ props }) {
-  const [all, setAll] = useState(false);
   const heads = arr(props.columns);
-  const rows = arr(props.rows).filter(Array.isArray);
-  const width = rows.reduce((w, r) => Math.max(w, r.length), heads.length);
+  const given = arr(props.rows).filter(Array.isArray);
+  const width = given.reduce((w, r) => Math.max(w, r.length), heads.length);
   const columns = Array.from({ length: width }, (_, j) => String(heads[j] == null ? '' : heads[j]));
   const headed = columns.some((c) => c.trim());
-  const kinds = columnKinds(columns, rows);
+  const kinds = columnKinds(columns, given);
+  const viewKey = tableViewKey(useContext(AnswerKey), columns);
+  const [view, setViewState] = useState(() => getView(viewKey) || { sort: null, all: false });
+  const change = (next) => { const v = Object.assign({}, view, next); setViewState(v); setView(viewKey, v); };
+  const all = !!view.all;
+  const setAll = (v) => change({ all: v });
+  const sort = view.sort && view.sort.col < width ? view.sort : null;
+  const sortable = headed && given.length > 1;
+  const rows = sortRows(given, kinds, sort);
   const shown = all ? rows : rows.slice(0, LIMIT);
   const more = rows.length > LIMIT;
   const { ready, streaming, ask } = useAsk();
@@ -86,7 +99,21 @@ export const Table = memo(function Table({ props }) {
           {headed ? (
             <thead>
               <tr>
-                {columns.map((c, j) => <th key={j} className={kinds[j] === 'num' ? 'oui-num' : undefined}>{inline(c, 'th' + j)}</th>)}
+                {columns.map((c, j) => {
+                  const by = sort && sort.col === j ? sort.dir : '';
+                  return (
+                    <th key={j} className={kinds[j] === 'num' ? 'oui-num' : undefined}
+                      aria-sort={sortable ? (by === 'asc' ? 'ascending' : by === 'desc' ? 'descending' : 'none') : undefined}>
+                      {sortable && c.trim() ? (
+                        <button type="button" className={'oui-sort' + (by ? ' is-' + by : '')} title={'Sort by ' + c}
+                          onClick={() => change({ sort: nextSort(sort, j) })}>
+                          {inline(c, 'th' + j)}
+                          <i className={'ph ' + (by === 'asc' ? 'ph-caret-up' : by === 'desc' ? 'ph-caret-down' : 'ph-caret-up-down')} aria-hidden="true"></i>
+                        </button>
+                      ) : inline(c, 'th' + j)}
+                    </th>
+                  );
+                })}
                 {askable ? <td className="oui-go-col" aria-hidden="true"></td> : null}
               </tr>
             </thead>

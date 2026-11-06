@@ -1,6 +1,7 @@
 // OrchestratorDock — the agent dock and its flows
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React, { useEffect, useRef } from 'react';
+import { AnswerKey } from '../../openui/tableView.js';
 import ChoiceCards from './ChoiceCards.jsx';
 import ComplianceAnswer from './ComplianceAnswer.jsx';
 import EmailComposer from './EmailComposer.jsx';
@@ -34,12 +35,13 @@ export default function OrchestratorDock({ vals }) {
   }, [vals.orchFlowKey]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <OpenUIHostContext.Provider value={vals.openuiHost}>
-      {/* Drag the right edge to widen the dock. Widen only — it never goes below the
-          flow's default width — and it stops at a hard maximum. Double-click to reset. */}
+      {/* Drag the right edge to resize the dock. It opens at half the space beside the
+          navigator, never goes below the flow's own width, and stops at a hard maximum.
+          Double-click to go back to the half. */}
       <div
         onMouseDown={vals.orchResizeStart}
         onDoubleClick={vals.orchResizeReset}
-        title={vals.orchAtMax ? "Maximum width — drag left to narrow back toward the default" : "Drag to widen · double-click to reset"}
+        title={vals.orchAtMax ? "Maximum width — drag left to narrow it" : "Drag to resize · double-click to reset"}
         style={{ display: vals.orchResizeShow, position: "fixed", top: "0", bottom: "0", left: vals.orchHandleLeft, width: "6px", zIndex: "61", cursor: "col-resize", background: vals.orchHandleTint, opacity: "0.5" }}
       ></div>
       <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", padding: vals.orchPad, overflow: "hidden", transition: "left 0.2s ease" }}>
@@ -53,9 +55,12 @@ export default function OrchestratorDock({ vals }) {
               {"Ask. Run. Anything."}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <i className={"ph " + vals.orchFullIcon + " hv6"} onClick={vals.orchFullToggle} title={vals.orchFullTitle}
-               style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            {/* Full screen: the dock fills the content area; pressed again, back beside the page. */}
+            <button type="button" className="hv6" onClick={vals.orchFullToggle} title={vals.orchFullTitle} aria-label={vals.orchFullTitle} aria-pressed={!!vals.orchFull}
+              style={{ font: "inherit", background: "transparent", border: "0", padding: "0", margin: "0", display: "flex", alignItems: "center", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+              <i className={`ph ${vals.orchFullIcon}`} style={{ fontSize: "15px" }}></i>
+            </button>
             <i className="ph ph-x hv6" onClick={vals.closeOrch} style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
           </div>
         </div>
@@ -695,7 +700,7 @@ export default function OrchestratorDock({ vals }) {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "10px" }}>
               {(vals.orchChat || []).map((m) => (
-                <React.Fragment key={m.key}>
+                <React.Fragment key={m.key}><AnswerKey.Provider value={vals.chatSessionId ? vals.chatSessionId + ":" + m.key : ""}>
                   {m.isYou ? (
                     <div style={{ alignSelf: m.editing ? "stretch" : "flex-end", maxWidth: m.editing ? "100%" : "92%", display: "flex", flexDirection: "column", alignItems: m.editing ? "stretch" : "flex-end", gap: "3px" }}>
                       {/* Editing happens in place: the bubble becomes a box with the
@@ -705,7 +710,7 @@ export default function OrchestratorDock({ vals }) {
                           <textarea className="input" value={vals.ccEditText} onChange={vals.ccEditSet} onKeyDown={vals.ccEditKey} rows="2" autoFocus style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", lineHeight: "1.5", padding: "0", border: "none", background: "transparent", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", resize: "vertical" }}></textarea>
                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "10px" }}>
                             <span style={{ flex: "1", minWidth: "0", fontSize: "10px", color: "var(--color-neutral-500)" }}>
-                              {"Re-running replaces this question's answer."}
+                              {"Runs as a new question at the end; this answer stays."}
                             </span>
                             <span className="hv11" onClick={vals.ccEditCancel} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", whiteSpace: "nowrap" }}>
                               {"Cancel"}
@@ -756,7 +761,7 @@ export default function OrchestratorDock({ vals }) {
                       {m.layingOut ? <div className="ans-laying is-line" role="status">{"Laying out…"}</div> : null}
                     </div>
                   )}
-                </React.Fragment>
+                </AnswerKey.Provider></React.Fragment>
               ))}
               {vals.orchBusy ? (
                 <div style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "9px" }}>

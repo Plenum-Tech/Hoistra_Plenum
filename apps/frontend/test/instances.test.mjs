@@ -418,7 +418,8 @@ test('a pinned question is asked in the orchestrator, not opened as a page', () 
   signIn(c, USER);
   pick(c, 'ops');
   let asked = null;
-  c.askScoped = (q) => { asked = q; };
+  // askNew: a pinned question asks in a new session (2 Nov 2026).
+  c.askNew = (q) => { asked = q; };
   c.renderVals().pinned[0].run();
   assert.equal(asked, 'What needs my approval today?');
 });
@@ -452,9 +453,11 @@ test('Ops Brain cards: platform value over its own modules, decisions, recommend
   ] });
   const cards = c.renderVals().instHomeCards;
   assert.deepEqual(cards.map((x) => x.l), ['Platform value · 2026', 'Decisions owed', 'Recommendations open', 'Vendors below 80']);
-  // Maintenance and Compliance are not priced in this ledger; Vendors is the only figure.
+  // Maintenance is not priced in this ledger; Vendors is the only figure. Compliance is not an
+  // Ops Brain module, so it is not on the card at all (2 Nov 2026).
   assert.equal(cards[0].v, '£14k');
-  assert.match(cards[0].s, /Maintenance — · Vendors £14k · Compliance —/);
+  assert.match(cards[0].s, /Maintenance — · Vendors £14k$/);
+  assert.doesNotMatch(cards[0].s, /Compliance/);
   assert.equal(cards[1].v, '5');
   assert.equal(cards[1].s, '2 blocked or not yet raised');
   assert.equal(cards[2].v, '3');
@@ -619,4 +622,46 @@ test('the picker opened from the chip has a way back', () => {
   v.pickerBack();
   assert.equal(c.state.view, 'home');
   assert.equal(c.state.instance, 'ops');
+});
+
+// ── a conversation stays in the instance it was held in (3 Nov 2026) ──────────────────────────
+// Pre-push review: picking Ops Brain after a Compliance Engine conversation left that transcript
+// in the dock, and a follow-up went out with space=ops on top of a compliance thread.
+
+test('picking another instance starts a fresh conversation', () => {
+  const c = signIn(fresh(), USER);
+  pick(c, 'comp');
+  c.setState({ sessionId: 's-comp', ccChat: [{ role: 'user', text: 'Which certificates have lapsed?' }] });
+  pick(c, 'ops');
+  assert.equal(c.state.instance, 'ops');
+  assert.equal(c.state.sessionId, null);
+  assert.deepEqual(c.state.ccChat, []);
+});
+
+test('picking the same instance again keeps the conversation', () => {
+  const c = signIn(fresh(), USER);
+  pick(c, 'comp');
+  c.setState({ sessionId: 's-comp', ccChat: [{ role: 'user', text: 'Which certificates have lapsed?' }] });
+  pick(c, 'comp');
+  assert.equal(c.state.sessionId, 's-comp');
+  assert.equal(c.state.ccChat.length, 1);
+});
+
+// Pre-push review (3 Nov 2026): a compliance view left on in an instance without Compliance was
+// DRAWN as Home but stayed `cc` - the orchestrator was told the person was on the compliance page,
+// and Home's own refresh never ran. The view itself now becomes Home.
+test('a compliance view in an instance without Compliance becomes Home', () => {
+  const c = signIn(fresh(), USER);
+  pick(c, 'ops');
+  c.setState({ view: 'cc' });
+  assert.equal(c.state.view, 'home');
+  c.setState({ view: 'module', module: 'compliance' });
+  assert.equal(c.state.view, 'home');
+});
+
+test('the Compliance Engine keeps its compliance view', () => {
+  const c = signIn(fresh(), USER);
+  pick(c, 'comp');
+  c.setState({ view: 'cc' });
+  assert.equal(c.state.view, 'cc');
 });

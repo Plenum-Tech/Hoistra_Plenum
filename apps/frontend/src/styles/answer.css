@@ -186,6 +186,104 @@
 .ans-offer.is-error > i, .ans-offer.is-error .ans-offer-state { color: var(--st-risk); }
 @media (prefers-reduced-motion: reduce) { .ans-offer.is-busy > i { animation: none; } }
 
+/* Many offers with one label as one menu (ComplianceAnswer OfferMenu), 2 Nov 2026: nine "Draft
+   renewal email" buttons under one answer read as a wall. The trigger is the same secondary button
+   with a count and a caret; open, it takes the row and lists one certificate per line - name, then
+   holder and code in the quiet ink - with what pressing it does on the right. The list opens in
+   place (the dock and the chat column clip and scroll), scrolls past eight rows, and keeps each
+   row's state as the buttons do: busy spins, open is filled, done steps back with a green tick. */
+.ans-offers { --ans-offer-ink: #C23A05; }
+:root[data-theme="dark"] .ans-offers { --ans-offer-ink: #FFB08A; }
+.ans-offer-menu { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 100%; }
+.ans-offer-menu.is-open { flex: 1 1 100%; }
+.ans-offer-menu-trigger { align-items: center; padding-right: 9px; }
+.ans-offer-menu-trigger > i:first-child { align-self: flex-start; }
+.ans-offer-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 7px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-accent-900);
+  color: var(--ans-offer-ink);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 17px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 1px;
+}
+.ans-offer-caret { margin-left: 4px; font-size: 12px; color: var(--ans-offer-ink); transition: transform .18s cubic-bezier(0.16, 1, 0.3, 1); }
+.ans-offer-menu.is-open .ans-offer-caret { transform: rotate(180deg); }
+.ans-offer-menu.is-open .ans-offer-menu-trigger { background: var(--color-accent-900); }
+.ans-offer-menu.is-open .ans-offer-count { background: var(--color-surface); }
+.ans-offer-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  max-height: 352px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--color-divider);
+  border-radius: 9px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  animation: ansOfferListIn .18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  container-type: inline-size;
+}
+.ans-offer-list li + li { border-top: 1px solid var(--color-divider); }
+/* In the dock's narrow column an idle row keeps only its arrow, so the certificate keeps the width;
+   a status ("Drafting…", "Open below", "Done") still shows in words. */
+@container (max-width: 380px) { .ans-offer-row-verb { display: none; } .ans-offer-row { gap: 10px; } }
+.ans-offer-row {
+  font: inherit;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .12s ease;
+}
+.ans-offer-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ans-offer-row-what { font-size: 12.5px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.ans-offer-row-who { font-size: 11px; line-height: 1.35; color: var(--color-neutral-400); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.ans-offer-row-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ans-offer-ink);
+  white-space: nowrap;
+}
+.ans-offer-row-act > i { font-size: 12px; transition: transform .14s ease; }
+.ans-offer-row:hover:not(:disabled) { background: var(--color-neutral-900); }
+.ans-offer-row:hover:not(:disabled) .ans-offer-row-act > .ph-arrow-right { transform: translateX(2px); }
+.ans-offer-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.ans-offer-row:disabled { cursor: default; }
+.ans-offer-row:disabled:not(.is-busy) { opacity: 0.5; }
+.ans-offer-row.is-busy { cursor: progress; }
+.ans-offer-row.is-busy .ans-offer-row-act { color: var(--color-neutral-400); }
+.ans-offer-row.is-busy .ans-offer-row-act > i { animation: emcSpin .8s linear infinite; }
+.ans-offer-row.is-open { background: var(--color-accent-900); }
+.ans-offer-row.is-done .ans-offer-row-what { color: var(--color-neutral-300); }
+.ans-offer-row.is-done .ans-offer-row-act { color: var(--color-neutral-400); }
+.ans-offer-row.is-done .ans-offer-row-act > i { color: var(--st-ok); }
+.ans-offer-row.is-error .ans-offer-row-act { color: var(--st-risk); }
+@keyframes ansOfferListIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .ans-offer-list, .ans-offer-caret, .ans-offer-row-act > i { animation: none; transition: none; }
+}
+
 /* The email card (components/shell/EmailComposer.jsx), 28 Oct 2026: one card for the dock and for
    the chat page, where it opens under the answer that asked for it. A letter on the page: title,
    the address lines ruled like a form, the message, then Cancel and Approve & send. Orange only on

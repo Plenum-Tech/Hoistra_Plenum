@@ -61,8 +61,16 @@ const LEAD = /^\s*(\*\*|__)/;
 const OPENS_ON_PUNCTUATION = /^[,.;:)]/;
 export const Finding = memo(function Finding({ props }) {
   const title = said(props.title);
-  const md = said(props.text);
-  const code = said(props.code).trim();
+  const rawCode = said(props.code).trim();
+  // The code once (2 Nov 2026: "WO-B-301-4560 WO-B-301-4560 L20 FCUs…"): a title that already says
+  // it keeps it there, as a tag, and no second tag follows; a text that opens on it beside an empty
+  // title drops that opening, since the tag says it.
+  const low = (s) => s.toLowerCase();
+  const code = rawCode && !low(title).includes(low(rawCode)) ? rawCode : '';
+  const text = said(props.text);
+  const md = code && !title.trim() && low(text.trim()).startsWith(low(code))
+    ? text.trim().slice(code.length).replace(/^[\s:—–-]+/, '')
+    : text;
   const blocks = useMemo(() => parseBlocks(md), [md]);
   const tone = findingTone(props.tone, props.title, props.text, props.code);
   const hasHead = Boolean(title.trim() || code);

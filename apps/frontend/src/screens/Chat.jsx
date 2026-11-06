@@ -28,6 +28,7 @@ import { useTraceSpy } from '../components/shell/useTraceSpy.js';
 import LazyOpenUIAnswer from '../openui/LazyOpenUIAnswer.jsx';
 // Every other answer is Markdown, drawn with the same components (openui/fromMarkdown.js).
 import AnyAnswer from '../openui/AnyAnswer.jsx';
+import { AnswerKey } from '../openui/tableView.js';
 import { OpenUIHostContext } from '../openui/host.js';
 
 const KICKER = { fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)" };
@@ -49,7 +50,8 @@ export default function Chat({ vals }) {
   const count = (vals.orchChat || []).length;
   // Follow the answer as it streams in — the page scrolls, the composer does not. Scrolling
   // up to read an earlier turn pauses the following; the next question resumes it.
-  const follow = useFollowBottom({ container: null, end: endRef, busy: vals.orchBusy, count: count });
+  // A conversation opened or switched to lands at its end (2 Nov 2026).
+  const follow = useFollowBottom({ container: null, end: endRef, busy: vals.orchBusy, count: count, conversation: vals.chatSessionId });
   // Which turn's trace the rail shows follows the reader's scroll position, not just
   // whichever question finished most recently — see useTraceSpy for how.
   useTraceSpy(vals.orchTraceFollow, [count, vals.orchBusy]);
@@ -216,14 +218,14 @@ export default function Chat({ vals }) {
             </div>
 
             {(vals.orchChat || []).map((m) => (
-              <React.Fragment key={m.key}>
+              <React.Fragment key={m.key}><AnswerKey.Provider value={vals.chatSessionId ? vals.chatSessionId + ":" + m.key : ""}>
                 {m.isYou ? (
                   <div style={{ alignSelf: m.editing ? "stretch" : "flex-end", maxWidth: m.editing ? "100%" : "72%", display: "flex", flexDirection: "column", alignItems: m.editing ? "stretch" : "flex-end", gap: "4px" }}>
                     {m.editing ? (
                       <div style={{ border: "1px solid var(--color-accent)", borderRadius: "12px", background: "var(--color-surface)", padding: "12px 14px" }}>
                         <textarea className="input" value={vals.ccEditText} onChange={vals.ccEditSet} onKeyDown={vals.ccEditKey} rows="2" autoFocus style={{ width: "100%", boxSizing: "border-box", fontSize: "13px", lineHeight: "1.5", padding: "0", border: "none", background: "transparent", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", resize: "vertical" }}></textarea>
                         <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "10px" }}>
-                          <span style={{ flex: "1", minWidth: "0", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{"Re-running replaces this question's answer."}</span>
+                          <span style={{ flex: "1", minWidth: "0", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{"Runs as a new question at the end; this answer stays."}</span>
                           <button type="button" className="hv11" onClick={vals.ccEditCancel} style={{ ...BARE, fontSize: "11.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{"Cancel"}</button>
                           <button type="button" className="hv7" onClick={vals.ccEditRun} style={{ ...BARE, fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", background: "var(--color-text)", color: "var(--color-bg)", whiteSpace: "nowrap" }}>{"Run again"}</button>
                         </div>
@@ -344,7 +346,7 @@ export default function Chat({ vals }) {
                 )}
                 {vals.emChatAt === m.key ? draftHere : null}
                 {vals.emChatReceipt && vals.emChatReceipt.at === m.key ? receiptHere : null}
-              </React.Fragment>
+              </AnswerKey.Provider></React.Fragment>
             ))}
 
             {/* A draft (or its receipt) whose answer is no longer in the transcript, or that no

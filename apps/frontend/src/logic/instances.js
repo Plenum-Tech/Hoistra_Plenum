@@ -35,8 +35,9 @@ export const INSTANCES = [
     icp: 'Property manager · UK',
     desc: 'Your daily operations, connected in real time and turned into intelligence that feeds your financial model, so you control your P&L instead of reading it after the fact.',
     reports: ['buildings', 'ops', 'vendors'],
-    // The value ledger's module keys (engines/value_ledger.py) this instance answers for.
-    value: ['maintenance', 'vendors', 'compliance'],
+    // The value ledger's module keys (engines/value_ledger.py) this instance answers for. Not
+    // compliance: it is not one of this instance's modules (Hussain, 2 Nov 2026).
+    value: ['maintenance', 'vendors'],
     placeholder: 'What needs my decision this week?',
     // [chip label, the question it asks]
     pinned: [
@@ -111,6 +112,40 @@ const isBuilding = (b) => b && b.name && !/no building on certificate/i.test(b.n
 
 export function instanceOf(key) { return INSTANCES.find((i) => i.key === key) || null; }
 
+// ── a module's data stays in the module ─────────────────────────────────
+// Hussain, 2 Nov 2026: "Each module should separate the data specific to it. For example you
+// cannot have compliance certificates shown in the OpsBrain. It is not part of the module". The
+// instance's `reports` are its modules. A module label — a queue item's module, a session's
+// engine — names one of them; a label that names none (Platform, Documents, Migration, the
+// Orchestrator) belongs to every instance. The orchestrator applies the same rule to answers
+// (svc-deepagents agents/spaces.py).
+const MODULE_REPORT = { Compliance: 'compliance', Vendors: 'vendors', Energy: 'energy', Maintenance: 'ops', 'Work orders': 'ops', Assets: 'assets' };
+// The page a session was raised on (core.js ctxLabel) → its report. Buildings is every instance's.
+const PAGE_REPORT = { Compliance: 'compliance', 'Compliance Graph': 'graph', Vendors: 'vendors', 'Hoist vendors': 'vendors', Energy: 'energy', Assets: 'assets', Maintenance: 'ops', 'Inspection reports': 'ops' };
+
+// The reports of the instance in view, or null when nothing is narrowed (admin view, superadmin,
+// full platform, none picked yet) — scopedInstance's rule.
+export function instanceReports(s) {
+  const c = scopedInstance(s);
+  return c ? c.reports : null;
+}
+
+// True when an instance with these reports shows data of this module. null reports show all.
+export function instanceShowsModule(reports, label) {
+  if (!reports) return true;
+  const r = MODULE_REPORT[label];
+  return !r || reports.indexOf(r) > -1;
+}
+
+// A session belongs to the module its answers came from (its `domain`) and the page it was
+// raised on: a task raised on the Compliance page is compliance whatever engine ran it.
+export function instanceShowsSession(reports, rec) {
+  if (!reports || !rec) return true;
+  if (!instanceShowsModule(reports, rec.domain)) return false;
+  const p = PAGE_REPORT[rec.page];
+  return !p || reports.indexOf(p) > -1;
+}
+
 // An admin or a user picks an instance. So does a superadmin while viewing as a company
 // (superAdmin.js viewAsCompany, `viewOrgId`) — for that view they are the company's admin.
 // A superadmin's own sign-in goes to the console, and their own company app underneath it
@@ -176,7 +211,9 @@ export function complianceEngineCards(reg, opts) {
   const ok = buildings.filter((b) => !(b.gaps || []).length && !lapsedAt[b.name]).length;
   const obligations = buildings.reduce((q, b) => q + (num(b.req) || 0), 0);
   const lapsed = certs.filter((c) => num(c.days) !== null && c.days < 0);
-  const failed = certs.filter((c) => /suspect/.test(String(c.auth || '')));
+  // Authenticity OR registration, as the card says (3 Nov 2026): a document in doubt, or a register check that failed
+  // (not on the register, details differ, the lookup failed). The chat counts the same (agents/cert_checks.py).
+  const failed = certs.filter((c) => /suspect/.test(String(c.auth || '')) || (c.verChip && c.verChip.sev === 'risk'));
   const blocked = vendors.filter((v) => v.block === 'Blocked');
   const soon = vendors.filter((v) => v.block !== 'Blocked' && v.worst === '<30d').length;
   return [
@@ -204,6 +241,10 @@ export const instancesMethods = {
     // The backend answers from this space's modules only, and can only do that if it is
     // told which space you are in (api/client.js, agents/spaces.py).
     setActiveSpace(key);
+    // A conversation belongs to the instance it was held in: another instance starts a fresh
+    // one, or its transcript stays in the dock and a follow-up goes out under the new space
+    // on top of the old thread (pre-push review, 3 Nov 2026).
+    if (this.state.instance && this.state.instance !== key && this.ccChatReset) this.ccChatReset();
     this.setState({ instance: key, view: 'home', navOpen: true, detail: null, queueOpen: false, orchOpen: false, acctOpen: false, query: '' });
   },
 
@@ -331,7 +372,7 @@ export const instancesMethods = {
     }
     out.navSpaces = (vals.navSpaces || []).filter((sp) => !SPACE_REPORT[sp.key] || reports.indexOf(SPACE_REPORT[sp.key]) > -1);
     out.navReports = [];
-    out.pinned = c.pinned.map((p) => ({ label: p[0], run: () => this.askScoped(p[1]) }));
+    out.pinned = c.pinned.map((p) => ({ label: p[0], run: () => this.askNew(p[1]) }));
     out.instKicker = 'Instance ' + c.n + ' · ' + c.name + ' · ' + c.icp;
     // The line under the title: the company's own estate, counted, with the figure this
     // instance is about in the middle. Before the register answers it is left empty — the
@@ -372,9 +413,9 @@ export const instancesMethods = {
     // The Buildings and Vendors ask bars, in the instance's words.
     if (s.view === 'buildings' && c.asks) {
       out.abPh = 'Ask anything about your ' + (nB !== null ? plural(nB, 'building', 'buildings') : 'buildings') + ' — schema, documents, open risk';
-      out.abChips = c.asks.buildings.map((q) => ({ label: q, run: () => this.askScoped(q) }));
+      out.abChips = c.asks.buildings.map((q) => ({ label: q, run: () => this.askNew(q) }));
     }
-    if (s.view === 'vp' && c.asks) out.abChips = c.asks.vp.map((q) => ({ label: q, run: () => this.askScoped(q) }));
+    if (s.view === 'vp' && c.asks) out.abChips = c.asks.vp.map((q) => ({ label: q, run: () => this.askNew(q) }));
     return out;
   }
 };

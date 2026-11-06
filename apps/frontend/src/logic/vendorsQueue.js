@@ -10,6 +10,10 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { canRequest } from './accreditationRequest.js';
 import { humanise } from './homeLive.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
+
+// The blocked list's hint where the module has no Compliance: the block, not the accreditation.
+const BLOCKED_HINT_NO_CC = "A blocked vendor cannot be allocated regulated work, and its score is held at the ceiling of 60 until the block lifts.";
 
 const TONE = {
   risk: { bg: "var(--st-risk-bg)", fg: "var(--st-risk)" },
@@ -73,8 +77,21 @@ export const vendorsQueueMethods = {
     };
     const approvalCard = (it) => ({ kind: "approval", module: "Vendors", title: it.summary || humanise(it.item_type), item: it });
 
+    // An instance without Compliance lists who is blocked and nothing of the certificates behind
+    // it: no lapsed or never-supplied count, no request, no coverage or accreditations tab
+    // (Hussain, 2 Nov 2026).
+    const ccOn = instanceShowsModule(instanceReports(s), "Compliance");
     let rows = [];
-    if (s.vpQueue === "blocked") {
+    if (s.vpQueue === "blocked" && !ccOn) {
+      rows = vendors.filter((v) => v.blocked).map((v) => row("b:" + v.id, {
+        title: v.name,
+        sub: vm.pkgOf(v.id),
+        meta: "",
+        chips: [chip("Blocked", "risk")]
+      }, [
+        { label: "Open scorecard", run: () => this.vpQueueVendor(v.id, 0) }
+      ]));
+    } else if (s.vpQueue === "blocked") {
       rows = vendors.filter((v) => v.blocked).map((v) => {
         const R = V[v.id] || {};
         const owed = (R.certs || []).filter(canRequest);
@@ -167,7 +184,7 @@ export const vendorsQueueMethods = {
     const shortBy = typeof tile === "number" && tile > n ? tile - n : 0;
     return {
       vpQueueShow: true, vpBrowse: false,
-      vpQTitle: q.title, vpQHint: q.hint,
+      vpQTitle: q.title, vpQHint: s.vpQueue === "blocked" && !ccOn ? BLOCKED_HINT_NO_CC : q.hint,
       vpQCount: s.vpQueue === "defaults" ? plural(terms, "term") + " across " + plural(n, "vendor") : plural(n, q.noun[0], q.noun[1]),
       vpQNote: shortBy ? shortBy + " more counted by the engine than this read returned." : "",
       vpQRows: rows,

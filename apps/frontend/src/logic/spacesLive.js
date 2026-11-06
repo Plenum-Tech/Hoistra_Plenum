@@ -290,7 +290,7 @@ export const spacesMethods = {
     }
     if (!q) return this.ccOpenChat();
     this.setState({ spaceAsk: '' });
-    this.askScoped(q);
+    this.askNew(q);
   },
 
   // A built-in space's page: the live console where one exists, the module otherwise.

@@ -36,6 +36,10 @@ export function platformNotices(input) {
   const now = o.now instanceof Date ? o.now.getTime() : Date.now();
   const out = [];
   const add = (n) => out.push(Object.assign({ kind: "platform", module: "Platform", icon: ICON, moneyValue: null, at: 0, info: false }, n));
+  // `compliance: false` - an instance without Compliance (instances.js): no notice names a
+  // certificate or a compliance check there (Hussain, 2 Nov 2026).
+  const ccOn = o.compliance !== false;
+  const ccWords = /certificat|complian|accreditat/i;
 
   // ── Hoist Score: low means the platform is working from part of your portfolio ──
   const sc = o.score || null;
@@ -44,7 +48,7 @@ export function platformNotices(input) {
       key: "platform:score",
       tone: sc.value < SCORE_RISK ? "risk" : "warn",
       title: "Hoist Score is " + sc.value + "/100 — ingest what is missing to raise it",
-      meta: sc.gap || "Some of your records are not on Hoistra yet.",
+      meta: sc.gap && (ccOn || !ccWords.test(sc.gap)) ? sc.gap : "Some of your records are not on Hoistra yet.",
       money: sc.value + "/100",
       // Someone who cannot ingest is shown the buildings and what each is missing, not an
       // upload card they would be refused at.
@@ -66,6 +70,8 @@ export function platformNotices(input) {
   (jobs || []).forEach((j) => {
     const last = (j && j.runs && j.runs[0]) || null;
     if (!j || !j.enabled || !last || last.ok) return;
+    // A compliance check that failed is the Compliance module's to see.
+    if (!ccOn && (Array.isArray(j.jobs) && j.jobs.length ? j.jobs.every((k) => /^compliance_/.test(String(k))) : ccWords.test(String(j.name || "")))) return;
     add({
       key: "platform:cron:" + j.id,
       tone: "risk",
@@ -84,7 +90,7 @@ export function platformNotices(input) {
       tone: "info",
       info: true,
       title: "Nothing is scheduled for you — schedule what you check every day",
-      meta: "A Hoist Cron runs a check on its own and shows what it found on Home — a daily compliance expiry scan, a weekly SLA watch.",
+      meta: "A Hoist Cron runs a check on its own and shows what it found on Home — " + (ccOn ? "a daily compliance expiry scan, a weekly SLA watch." : "a weekly SLA watch, the monthly vendor scorecards."),
       money: "Suggestion",
       action: { type: "schedule" }
     });

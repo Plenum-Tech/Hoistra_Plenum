@@ -865,7 +865,8 @@ export default function Buildings({ vals }) {
                               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--color-accent-900)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
                                 {b.nStruct}{" "}{b.structLabel}
                               </span>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
+                              {/* Certificates are Compliance's: no count or column where the module has none (b.certShow). */}
+                              <span style={{ display: b.certShow === false ? "none" : undefined, fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
                                 {b.nUnstruct}{" "}{b.unstructLabel}
                               </span>
                               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
@@ -875,7 +876,7 @@ export default function Buildings({ vals }) {
                           </div>
                           <div style={{ display: b.openShow, flexDirection: "column", borderTop: "1px solid var(--color-divider)" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))" }}>
-                              <div style={{ minWidth: "0", borderRight: "1px solid var(--color-divider)" }}>
+                              <div style={{ minWidth: "0", borderRight: b.certShow === false ? "none" : "1px solid var(--color-divider)" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "50%", background: "var(--color-accent)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
@@ -913,7 +914,7 @@ export default function Buildings({ vals }) {
                                   </React.Fragment>
                                 ))}
                               </div>
-                              <div style={{ minWidth: "0" }}>
+                              <div style={{ minWidth: "0", display: b.certShow === false ? "none" : undefined }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "3px", background: "var(--marker)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>

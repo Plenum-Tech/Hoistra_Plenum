@@ -269,7 +269,7 @@ export const maintenanceMethods = {
         { l: "Work order", v: d.id || "not raised yet" },
         { l: "Building", v: d.b }, { l: "Vendor", v: d.vendor },
         { l: "Estimate", v: d.est }, { l: "Due", v: d.due || "—" },
-        { l: "Statutory", v: d.statutory ? d.statutoryNote : "not forced by a certificate" }
+        { l: "Statutory", v: d.statutory ? d.statutoryNote : (d.ccOff ? "no" : "not forced by a certificate") }
       ],
       actions: []
     };
@@ -284,8 +284,9 @@ export const maintenanceMethods = {
   mxInspAsk(question) {
     const q = String(question || "").trim();
     if (!q) return this.openInsp("");
-    this.setState({ inspDraft: "" });
-    return this.askScoped(q);
+    const asked = this.askNew(q);
+    if (asked !== false) this.setState({ inspDraft: "" });
+    return asked;
   },
 
   openInsp(q) {

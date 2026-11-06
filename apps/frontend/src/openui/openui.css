@@ -515,6 +515,30 @@
   white-space: nowrap;
 }
 .oui-table th.oui-num { text-align: right; }
+/* A sortable heading (Data.jsx Table, 2 Nov 2026): the heading itself is the button, in the
+   heading's own type; a quiet caret says it sorts, and the sorted column's heading and caret take
+   the ink so which column the table is in order by reads at a glance. */
+.oui-sort {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.oui-sort > i { font-size: 10px; opacity: 0.4; transition: opacity .12s ease; }
+.oui-sort:hover { color: var(--color-text); }
+.oui-sort:hover > i { opacity: 0.8; }
+.oui-sort.is-asc, .oui-sort.is-desc { color: var(--color-text); }
+.oui-sort.is-asc > i, .oui-sort.is-desc > i { opacity: 1; color: var(--color-accent); }
+.oui-sort:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .oui-table td {
   padding: 9px 12px;
   border-bottom: 1px solid var(--color-divider);

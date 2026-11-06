@@ -5,6 +5,7 @@ import { HOISTWAY } from '../data/hoistway-data.js';
 import { makeSession, newSessionId, trimSessions } from './sessions.js';
 import { flattenCards } from './reports.js';
 import { planQueueAction } from './queueDraft.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
 
 // The re-entry guards loadLiveData()'s loaders set while a read is in flight. Instance
 // flags, not state — resetLiveData() has to release them together, or a company switch
@@ -26,6 +27,16 @@ export const coreMethods = {
       if (e.key === "Escape") this.setState({ paletteOpen: false, detail: null, queueOpen: false, pwOpen: false });
     };
     window.addEventListener("keydown", this._key);
+    // The dock opens at half the space beside the navigator (renderVals orchDefaultW), so a
+    // resized window re-renders it at the new half. Once per frame, not per resize event.
+    this._resize = () => {
+      if (this._resizeRaf) return;
+      this._resizeRaf = requestAnimationFrame(() => {
+        this._resizeRaf = null;
+        if (this.state.vw !== window.innerWidth) this.setState({ vw: window.innerWidth });
+      });
+    };
+    window.addEventListener("resize", this._resize);
     this._frameTimer = setInterval(() => {
       if (!this.state.signedIn) this.setState((p) => ({ frame: (p.frame + 1) % 4 }));
     }, 3200);
@@ -67,10 +78,12 @@ export const coreMethods = {
 
   componentWillUnmount() {
     window.removeEventListener("keydown", this._key);
+    window.removeEventListener("resize", this._resize);
+    if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf);
     this.authStop();
     clearInterval(this._frameTimer); clearInterval(this._cronTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
-    clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
+    clearTimeout(this._vpRetry); clearTimeout(this._vpPartialTimer); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
     clearTimeout(this._spRetry); this.rpStop();
     clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
     clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh);
@@ -91,7 +104,17 @@ export const coreMethods = {
     // The Decision queue's saved schedule and channels (queueLive.js) — restored before the
     // reads so the timer cadence is the reader's own from the first tick.
     this.queueBoot();
-    this.ccLoad();
+    // The page on screen is read first: reads go out in the order they are asked for (api/client.js
+    // send queue), and a reload on Vendors waited behind every other register (2 Nov 2026). Each
+    // loader guards re-entry, so its second call in the list below does nothing.
+    const onScreen = this.loaderOnScreen();
+    if (onScreen) onScreen();
+    // The compliance register is the slowest read on mount (14-16 s). Where the instance shows
+    // no compliance (Ops Brain, Assets OS) it goes last, so the pages on screen are read first
+    // (api/client.js send queue, 2 Nov 2026). It still loads: a vendor's Blocked status and
+    // the Home line read it.
+    const ccLast = !instanceShowsModule(instanceReports(this.state), 'Compliance');
+    if (!ccLast) this.ccLoad();
     this.homeLoad();
     // The company's scheduled jobs, for the Hoist Crons panel (crons.js).
     this.cronLoad();
@@ -124,6 +147,16 @@ export const coreMethods = {
     // The refresh-cadence menu. Not company-scoped, but it needs a token, and rpStart no
     // longer reads it from the sign-in gate — this is where a fresh sign-in picks it up.
     if (typeof this.rpLoadPresets === 'function') this.rpLoadPresets();
+    if (ccLast) this.ccLoad();
+  },
+
+  // The loader for the page on screen, or null (loadLiveData reads it first).
+  loaderOnScreen() {
+    const s = this.state;
+    const byView = { vp: 'vpLoad', vh: 'vpLoad', cc: 'ccLoad', hg: 'ccLoad', buildings: 'bldLoad', home: 'homeLoad' };
+    const byModule = { energy: 'energyLoad', assets: 'asLiveLoad', ops: 'mxLiveLoad' };
+    const name = s.view === 'module' ? byModule[s.module] : byView[s.view];
+    return name && typeof this[name] === 'function' ? () => this[name]() : null;
   },
 
   // Clears every register loadLiveData() fills, and cancels any retry/refresh timer
@@ -151,7 +184,7 @@ export const coreMethods = {
     if (typeof this.vdlReset === 'function') this.vdlReset();
     clearTimeout(this._mgTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
-    clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
+    clearTimeout(this._vpRetry); clearTimeout(this._vpPartialTimer); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
     clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
     clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh); clearTimeout(this._spRetry);
     // A debounced rule write belongs to the company whose steppers were moved. Left armed,

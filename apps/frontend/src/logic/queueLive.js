@@ -24,6 +24,7 @@ import { platformNotices } from './platformNotices.js';
 import { accountCanIngest } from './auth.js';
 import { adminApi } from '../api/admin.js';
 import { baseSubject } from './emailHistory.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
 
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 const gbp = (v) => "£" + Math.round(v).toLocaleString("en-GB");
@@ -153,6 +154,21 @@ export function shapeLiveQueue(input, now) {
 //: when "Vendors 0" is the fact worth seeing.
 export const QUEUE_FILTERS = ["All", "Energy", "Vendors", "Compliance", "Maintenance", "Platform"];
 
+// The queue as an instance sees it: only its own modules' items, counted again (Hussain,
+// 2 Nov 2026: a lapsed certificate is not Ops Brain's to decide). `reports` null keeps it all.
+export function scopeQueue(model, reports) {
+  if (!reports || !model) return model;
+  const items = (model.items || []).filter((i) => instanceShowsModule(reports, i.module));
+  const byModule = {};
+  items.forEach((i) => { byModule[i.module] = (byModule[i.module] || 0) + 1; });
+  return Object.assign({}, model, { items: items, byModule: byModule, count: model.live ? items.filter((i) => !i.info).length : null });
+}
+
+// The drawer's "Show" chips an instance offers: none for a module it does not have.
+export function queueFiltersFor(reports) {
+  return QUEUE_FILTERS.filter((f) => f === "All" || instanceShowsModule(reports, f));
+}
+
 // The items the drawer shows under a filter. Pure.
 export function filterQueue(items, filter) {
   if (!filter || filter === "All") return items || [];
@@ -240,13 +256,14 @@ export const queueLiveMethods = {
     const hr = s.homeRaw, mr = s.mxRaw;
     // Everything the platform notices read, so the memo turns over when any of it does.
     // The minute too, so "35 min ago" in a notice moves on rather than freezing in the memo.
-    const deps = [hr, mr, s.ccLive, s.cronJobs, s.cronLoadedAt, s.cronCanManage, s.usageRaw, s.account, s.viewOrgId, Math.floor(Date.now() / 60000)];
+    // The instance and role too: the queue holds only the instance's own modules (scopeQueue).
+    const deps = [hr, mr, s.ccLive, s.cronJobs, s.cronLoadedAt, s.cronCanManage, s.usageRaw, s.account, s.viewOrgId, s.instance, s.role, Math.floor(Date.now() / 60000)];
     const m = this._queueMemo;
     if (m && m.deps.length === deps.length && m.deps.every((d, i) => d === deps[i])) return m.model;
     const mx = this.mxModel();
     const hm = typeof this.homeModel === "function" ? this.homeModel() : null;
     const role = String((s.account && s.account.role) || "").toLowerCase();
-    const model = shapeLiveQueue({
+    const model = scopeQueue(shapeLiveQueue({
       approvals: (hr && hr.approvals) || null,
       anomalies: (hr && hr.anomalies) || null,
       decisions: mx.live ? mx.decisions : [],
@@ -258,9 +275,10 @@ export const queueLiveMethods = {
         canManageCrons: !!s.cronCanManage,
         canIngest: accountCanIngest(s),
         isAdmin: role === "admin" || role === "superadmin",
-        usage: (s.usageRaw && s.usageRaw.totals) || null
+        usage: (s.usageRaw && s.usageRaw.totals) || null,
+        compliance: instanceShowsModule(instanceReports(s), "Compliance")
       })
-    });
+    }), instanceReports(s));
     this._queueMemo = { deps: deps, model: model };
     return model;
   },

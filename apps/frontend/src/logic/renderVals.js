@@ -1,6 +1,7 @@
 import { docLabel } from './chatCases.js';
 import { choiceCards, choiceIntro } from './choiceCards.js';
-import { filterQueue, QUEUE_FILTERS } from './queueLive.js';
+import { filterQueue, queueFiltersFor } from './queueLive.js';
+import { instanceReports, instanceShowsModule, instanceShowsSession } from './instances.js';
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER, INGEST_ASK } from './constants.js';
@@ -211,6 +212,27 @@ export const renderValsMethods = {
     if (!D) return {};
     // The Decision queue's live model (memoized on its reads — queueLive.js).
     const qlm = this.queueModel();
+    // The modules of the instance in view (instances.js), null when nothing is narrowed. A
+    // module's data stays in it: the queue, its chips and the session lists below hold only
+    // these (Hussain, 2 Nov 2026 - "you cannot have compliance certificates shown in the
+    // OpsBrain").
+    const instReports = instanceReports(s);
+    // Whether the instance in view has Compliance. Without it (Ops Brain, Assets OS) no page
+    // shows a certificate, an accreditation or a coverage figure, and nothing links into the
+    // compliance console. A vendor's Blocked status and its score stay: one vendor, one score,
+    // in every module - only the certificate detail behind them goes (Hussain, 2 Nov 2026).
+    const ccOn = instanceShowsModule(instReports, "Compliance");
+    const VP_CC_TABS = [3, 5, 6];
+    const ccBlocked = !ccOn && (s.view === "cc" || s.view === "hg" || (s.view === "module" && s.module === "compliance"));
+    // The Hoist Graph without Compliance: no certificate table under Document, and a pick left
+    // on it reads as the document it hangs from.
+    const SUB = ccOn ? SUB_OF : Object.assign({}, SUB_OF, { document: (SUB_OF.document || []).filter((x) => x.id !== "certificate") });
+    const GRAPH_V = ccOn ? GRAPH : GRAPH.filter((g) => g.id !== "certificate");
+    const GRAPH_EDGES_V = ccOn ? GRAPH_EDGES : GRAPH_EDGES.filter((e) => e[0] !== "certificate" && e[1] !== "certificate");
+    const gTableId = !ccOn && s.gTable === "certificate" ? "document" : s.gTable;
+    const vpTab = !ccOn && VP_CC_TABS.indexOf(s.vpTab) > -1 ? 0 : s.vpTab;
+    const qPool = qlm.live ?qlm.items : D.decisions.filter((d) => instanceShowsModule(instReports, d.module));
+    const qFilter = queueFiltersFor(instReports).indexOf(s.queueFilter) > -1 ? s.queueFilter : "All";
     // Sessions and reports are one shared browser store, not per-account (see
     // makeSession()'s own comment) — every account that has ever signed in in this tab,
     // superadmin's view-as-company included, left its own rows in the same arrays. These
@@ -225,8 +247,10 @@ export const renderValsMethods = {
     // since both were asked by the one owner email. null means "my own account, not viewing
     // as anyone" and is its own scope, same as any company id.
     const myOrgScope = s.viewOrgId || null;
+    // And an instance lists only sessions of its own modules: a conversation about
+    // certificates is not Ops Brain's (instanceShowsSession).
     const mySessions = myEmail
-      ? s.sessions.filter((r) => r.owner === myEmail && (r.viewOrgId || null) === myOrgScope)
+      ? s.sessions.filter((r) => r.owner === myEmail && (r.viewOrgId || null) === myOrgScope && instanceShowsSession(instReports, r))
       : [];
     // Reports are personal: every route in api/routes/reports.py filters on s.user_id, so
     // the array in state holds the rows of whoever was signed in when it was READ — which
@@ -251,7 +275,9 @@ export const renderValsMethods = {
     // starts collapsed there. The console's dock has no rail and keeps it open.
     const stepsDefault = s.view !== "chat";
 
-    const mkActions = (labels, ctx) => labels.map((l, i) => ({
+    // A drawer button into Compliance ("Open compliance console", "Open compliance") is not
+    // offered where the instance has no Compliance.
+    const mkActions = (labels, ctx) => labels.filter((l) => ccOn || !/compliance console|open compliance/i.test(l)).map((l, i) => ({
       label: l, cls: i === 0 ? "btn-primary" : "btn-secondary",
       click: () => {
         // A drawer that brings its own handler for a button uses it — the asset drawer's
@@ -292,19 +318,22 @@ export const renderValsMethods = {
     // Dock width. orchBaseW is the designed width for the current flow and acts as the
     // floor; ORCH_MAX_W is the hard ceiling so a drag cannot swallow the page beside it.
     // Hoisting a vendor (vendorHoist.js) asks for typed fields and shows the record back.
+    const navW = s.navOpen ? 248 : 52;
     const orchBaseW = s.flow === "investigate" ? 420 : s.flow === "vhoist" ? 380 : 280;
-    const ORCH_MAX_W = 720;
-    const orchW = Math.max(orchBaseW, Math.min(ORCH_MAX_W, s.orchW || orchBaseW));
-    // A task opened from the Sessions list fills the content area (sessions.js openSession) —
-    // only for that task on that page: an action that raises another task, a move to another
-    // page, or closing the dock puts it back beside the page.
+    // The dock opens at half the space right of the navigator (Hussain, 2 Nov 2026: "the side
+    // chat open this much by default" - the width it had been dragged to every time, 611px on a
+    // 1470px window). vw is the window width the resize listener keeps (core.js), so the half
+    // follows a resized window; never under the flow's own designed width.
+    const viewW = s.vw || (typeof window !== "undefined" && window.innerWidth) || 1440;
+    const orchDefaultW = Math.max(orchBaseW, Math.round((viewW - navW) / 2));
+    const ORCH_MAX_W = Math.max(720, orchDefaultW);
+    const orchW = Math.max(orchBaseW, Math.min(ORCH_MAX_W, s.orchW || orchDefaultW));
     // Full width two ways. A task opened from the Sessions list fills the content area by
     // itself, for that task on that page. And the reader can ask for it at any time, which is
     // what the expand control sets: a long answer, a wide table or a trace to read is worth the
     // whole screen whether or not it came from a session (1 Nov 2026).
     const orchFull = !!(s.orchOpen && (s.orchFullManual
       || (s.orchFull && s.orchTask && s.orchFullTask === s.orchTask.id && s.orchFullView === s.view)));
-    const navW = s.navOpen ? 248 : 52;
 
     const detail = s.detail;
     const modKey = s.module;
@@ -432,7 +461,9 @@ export const renderValsMethods = {
           ]
         : [D.portfolio.buildings + " buildings hoisted", D.portfolio.area, "UK, US, Singapore, UAE"],
       heroLive: heroLive,
-      isHome: s.signedIn && s.view === "home", isAnswer: s.signedIn && s.view === "answer", isModule: s.signedIn && s.view === "module",
+      // A compliance page reached in an instance without Compliance (an old link, a stored view)
+      // shows Home rather than the console or a blank page (ccBlocked).
+      isHome: s.signedIn && (s.view === "home" || ccBlocked), isAnswer: s.signedIn && s.view === "answer", isModule: s.signedIn && s.view === "module" && !ccBlocked,
       isChat: s.signedIn && s.view === "chat",
       // The chat page's connection line and its empty-state copy.
       chatLinkLabel: s.chatLink === "connected"
@@ -443,7 +474,12 @@ export const renderValsMethods = {
       chatLinkDot: s.chatLink === "connected" ? "var(--st-ok)" : s.chatLink === "unreachable" ? "var(--st-risk)" : "var(--color-neutral-600)",
       chatLinkTip: s.chatLink === "unreachable" ? (s.chatLinkError || "The orchestrator did not answer") : "One conversation across every engine",
       chatRetry: () => this.chatConnect(true),
-      chatIntro: "Ask about compliance, energy, vendors, work orders or documents. The question goes to the engine that owns the answer, and how the answer was produced is shown with it — step by step.",
+      // The intro names the modules this instance has, and only those.
+      chatIntro: "Ask about " + (() => {
+        const topics = [["Compliance", "compliance"], ["Energy", "energy"], ["Vendors", "vendors"], ["Maintenance", "work orders"]]
+          .filter((x) => instanceShowsModule(instReports, x[0])).map((x) => x[1]).concat(["documents"]);
+        return topics.slice(0, -1).join(", ") + " or " + topics[topics.length - 1];
+      })() + ". The question goes to the engine that owns the answer, and how the answer was produced is shown with it — step by step.",
       queueOpen: s.queueOpen, paletteOpen: s.paletteOpen, detailOpen: !!detail,
       vendorDrawerOpen: !!(s.vdOpen && s.signedIn), vd: s.vdOpen && s.signedIn ? this.vendorDrawerVals() : null,
       toggleQueue: () => this.setState((p) => ({ queueOpen: !p.queueOpen, acctOpen: false, paletteOpen: false, detail: null }), () => {
@@ -453,7 +489,7 @@ export const renderValsMethods = {
         else if (this.state.queueOpen) { this.queueSeenInit(); this.queueModel().items.forEach((i) => { if (this._qSeen) this._qSeen[i.key] = true; }); }
       }),
       closeQueue: () => this.setState({ queueOpen: false }),
-      queueCount: qlm.live ? qlm.count : Math.max(D.decisions.length, CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length), query: s.query,
+      queueCount: qlm.live ? qlm.count : Math.max(qPool.length, CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length), query: s.query,
       chainOpen: s.chainOpen, chainIcon: s.chainOpen ? "ph-caret-down" : "ph-caret-right",
       toastOn: !!s.toast, toast: s.toast, askedQuery: s.askedQuery,
       themeIcon: s.dark ? "ph-sun" : "ph-moon",
@@ -463,7 +499,7 @@ export const renderValsMethods = {
       goHome: () => this.setState({ view: "home", detail: null, queueOpen: false }),
 
       // The home ask bar. A question goes to the live orchestrator through the dock chat
-      // (askScoped → ccAsk on this view); Run on an empty bar opens the chat instead.
+      // (askNew: a new session, then ccAsk on this view); Run on an empty bar opens the chat instead.
       setQuery: (e) => this.setState({ query: e.target.value }),
       // An ATTACHMENT IS ITSELF THE INSTRUCTION. Staging a document and pressing Run with an
       // empty box is not an empty question — it is "file this". Without this the bar would
@@ -473,14 +509,12 @@ export const renderValsMethods = {
         if (!isSendEnter(e)) return;
         const q = (s.query || "").trim() || ((s.ccFiles || []).length ? INGEST_ASK : "");
         if (!q) return;
-        this.setState({ query: "" });
-        this.askScoped(q);
+        if (this.askNew(q) !== false) this.setState({ query: "" });
       },
       runQuery: () => {
         const q = (s.query || "").trim() || ((s.ccFiles || []).length ? INGEST_ASK : "");
         if (!q) return this.ccOpenChat();
-        this.setState({ query: "" });
-        this.askScoped(q);
+        if (this.askNew(q) !== false) this.setState({ query: "" });
       },
       // Saved report cards' questions first, then the questions the portfolio is most often
       // asked. Every chip ASKS its question (Hussain, 8 Oct 2026): a card's chip used to open
@@ -496,7 +530,7 @@ export const renderValsMethods = {
             "Which vendors are blocked right now?"
           ].map((a) => ({ label: a, q: a })))
           .filter((p) => p.q && !seen.has(key(p.q)) && seen.add(key(p.q)))
-          .map((p) => ({ label: p.label, run: () => this.askScoped(p.q) }));
+          .map((p) => ({ label: p.label, run: () => this.askNew(p.q) }));
       })(),
 
       signedIn: s.signedIn, gated: !s.signedIn,
@@ -789,7 +823,7 @@ export const renderValsMethods = {
             });
 
             if (!kOn) return;
-            const subs = SUB_OF[k.id] || [];
+            const subs = SUB[k.id] || [];
             subs.forEach((sb, j) => {
               const spread = (j - (subs.length - 1) / 2) * 48 * RAD;
               const a2 = a + spread;
@@ -850,8 +884,8 @@ export const renderValsMethods = {
               stroke: "var(--color-accent)", w: kOn ? "2.2" : on ? "1.5" : "1.2", dash: "0", op: on ? "1" : "0.55"
             });
             if (!kOn) return;
-            (SUB_OF[k.id] || []).forEach((sb, j) => {
-              const subs = SUB_OF[k.id];
+            (SUB[k.id] || []).forEach((sb, j) => {
+              const subs = SUB[k.id];
               const a2 = a + (j - (subs.length - 1) / 2) * 48 * RAD;
               const scx = h.cx + Math.cos(a2) * (h.sat + 158), scy = h.cy - Math.sin(a2) * (h.sat + 158);
               const dx = scx - cx, dy = scy - cy, L = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -872,7 +906,7 @@ export const renderValsMethods = {
       // snapshots behind it. Named by date and build so "which one am I taking"
       // needs no explanation.
       exportT: (() => {
-        const n = GRAPH.find((x) => x.id === s.gTable) || GRAPH[4];
+        const n = GRAPH.find((x) => x.id === gTableId) || GRAPH[4];
         const b = this.glSelected();
         const t = this.glTable(n.id);
         const counted = typeof t.rows === "number";
@@ -1127,15 +1161,21 @@ export const renderValsMethods = {
           {
             value: cnt(vendors.length), label: "Vendors",
             click: () => this.setState({ vpVendor: idOr("v1", firstId), vpTab: 0 }),
-            rows: [
+            // Without Compliance the accreditation split is not this module's: the vendors are
+            // counted by score instead, and a block stays a block.
+            rows: ccOn ? [
               { label: "Fully accredited", n: cnt(byAccred("Current").length), color: cntTone("var(--st-ok)"), bar: bar(byAccred("Current").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v3", idOf(byAccred("Current")[0] || vendors[0])), vpTab: 3 }) },
               { label: "Expiring", n: cnt(byAccred("Expiring").length), color: cntTone("var(--st-warn)"), bar: bar(byAccred("Expiring").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v6", idOf(byAccred("Expiring")[0] || vendors[0])), vpTab: 3 }) },
               { label: "Lapsed", n: cnt(byAccred("Lapsed").length), color: cntTone("var(--st-risk)"), bar: bar(byAccred("Lapsed").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v2", idOf(byAccred("Lapsed")[0] || vendors[0])), vpTab: 3 }) }
+            ] : [
+              { label: "Scored", n: cnt(scoredV.length), color: cntTone("var(--st-ok)"), bar: bar(scoredV.length, vendors.length), click: () => this.setState({ vpVendor: idOf(scoredV[0] || vendors[0]), vpTab: 0 }) },
+              { label: "Not scored", n: cnt(vendors.length - scoredV.length), color: cntTone("var(--st-warn)"), bar: bar(vendors.length - scoredV.length, vendors.length), click: () => this.setState({ vpVendor: idOf(vendors.find((v) => scoredV.indexOf(v) < 0) || vendors[0]), vpTab: 0 }) },
+              { label: "Blocked", n: cnt(vendors.filter(capOf).length), color: cntTone("var(--st-risk)"), bar: bar(vendors.filter(capOf).length, vendors.length), click: () => this.setState({ vpVendor: idOf(vendors.filter(capOf)[0] || vendors[0]), vpTab: 0 }) }
             ]
           },
           {
             value: cnt(Object.keys(byPkg).length), label: "Packages",
-            click: () => this.flash("Vendors are grouped by service package. A package with a single vendor is a single point of failure — worth a second accredited contractor before the next renewal."),
+            click: () => this.flash("Vendors are grouped by service package. A package with a single vendor is a single point of failure — worth a second " + (ccOn ? "accredited " : "") + "contractor before the next renewal."),
             rows: Object.keys(byPkg).map((k) => ({
               label: k, n: cnt(byPkg[k].length),
               color: byPkg[k].some(capOf) ? "var(--st-risk)" : byPkg[k].length === 1 ? "var(--st-warn)" : "var(--st-ok)",
@@ -1185,8 +1225,12 @@ export const renderValsMethods = {
         const n = sc.score;
         const draft = !!(R && R.contract && R.contract.id && !R.contract.confirmed);
         return {
-          name: v.name, meta: v.meta || "",
-          cap: capped ? "ceiling 60 — mandatory lapse" : "", capShow: capped ? "block" : "none", capFg: "var(--st-risk)",
+          // Without Compliance a capped vendor reads Blocked: the status stays, the lapse behind
+          // it does not, and neither does the coverage column (covShow).
+          name: v.name, meta: ccOn ? (v.meta || "") : String(v.meta || "").split(" · ").filter((x) => !/accreditation/i.test(x)).join(" · "),
+          cap: capped ? (ccOn ? "ceiling 60 — mandatory lapse" : "blocked") : "", capShow: capped ? "block" : "none", capFg: "var(--st-risk)",
+          capTag: ccOn ? "· ceiling 60" : "· blocked",
+          covShow: ccOn,
           score: N(n), trend: v.trend,
           scoreFg: n === null ? "var(--color-neutral-500)" : n >= 85 ? "var(--st-ok)" : n >= 70 ? "var(--st-warn)" : "var(--st-risk)",
           cov: cov === null ? "—" : cov + "%", covFrac: req ? on + "/" + req : "—",
@@ -1217,6 +1261,13 @@ export const renderValsMethods = {
       const shown = searched.filter(on[1]);
       const plural = (k) => k + (k === 1 ? " vendor" : " vendors");
       return {
+        // The page's words follow the module: without Compliance there is no coverage to name.
+        vpIntro: ccOn
+          ? "Contract terms, monthly scorecards, compliance coverage and invoice checking for every vendor serving your buildings. No score is asserted — each one decomposes to the clause it was measured against and the work orders behind it."
+          : "Contract terms, monthly scorecards and invoice checking for every vendor serving your buildings. No score is asserted — each one decomposes to the clause it was measured against and the work orders behind it.",
+        vpDirCols: ccOn ? "score · coverage" : "score",
+        vpDirPh: ccOn ? "Search vendors, contracts, accreditation" : "Search vendors, contracts",
+        vpDirFoot: ccOn ? "Coverage is the accreditation types a vendor holds against those its work requires. A mandatory lapse caps the score at 60." : "",
         vpList: shown,
         vpDirCount: shown.length === dirRows.length ? plural(dirRows.length) : shown.length + " of " + plural(dirRows.length),
         vpDirQ: s.vpDirQ || "",
@@ -1236,18 +1287,22 @@ export const renderValsMethods = {
       //
       // Each tab carries its own id, so Accreditations (5) and Buildings served (6) sit beside
       // Coverage on screen while every existing link into Invoices (4) keeps its number.
-      vpTabs: [["Scorecard", SC.rows.length, 0], ["Contract terms", (vpR ? vpR.terms.length : 0), 1], ["Evidence", (vpEvm ? (vpEvm.status === "loading" && !vpEvm.jobs.length ? "…" : vpEvm.jobs.length) : 0), 2], ["Coverage", (vpR ? vpR.certs.length : 0), 3], ["Accreditations", vpCC.live === false ? "—" : vpCC.certs.length, 5], ["Buildings served", vpCC.live === false ? "—" : vpCC.rec ? vpCC.rec.serves.length : 0, 6], ["Invoices", (vpR ? (vpR.invoicesError ? "—" : vpR.invoices.length) : 0), 4]].map((t) => ({
+      //
+      // Coverage (3), Accreditations (5) and Buildings served (6) are the compliance register's
+      // view of the vendor: an instance without Compliance has none of the three, and a tab left
+      // on one of them (a link, a switch of instance) opens the Scorecard instead (vpTab below).
+      vpTabs: [["Scorecard", SC.rows.length, 0], ["Contract terms", (vpR ? vpR.terms.length : 0), 1], ["Evidence", (vpEvm ? (vpEvm.status === "loading" && !vpEvm.jobs.length ? "…" : vpEvm.jobs.length) : 0), 2], ["Coverage", (vpR ? vpR.certs.length : 0), 3], ["Accreditations", vpCC.live === false ? "—" : vpCC.certs.length, 5], ["Buildings served", vpCC.live === false ? "—" : vpCC.rec ? vpCC.rec.serves.length : 0, 6], ["Invoices", (vpR ? (vpR.invoicesError ? "—" : vpR.invoices.length) : 0), 4]].filter((t) => ccOn || VP_CC_TABS.indexOf(t[2]) < 0).map((t) => ({
         label: t[0], n: String(t[1]),
-        edge: s.vpTab === t[2] ? "var(--color-accent)" : "transparent",
-        fg: s.vpTab === t[2] ? "var(--color-accent)" : "var(--color-neutral-500)",
+        edge: vpTab === t[2] ? "var(--color-accent)" : "transparent",
+        fg: vpTab === t[2] ? "var(--color-accent)" : "var(--color-neutral-500)",
         pick: () => this.setState({ vpTab: t[2] })
       })),
-      vpPaneScore: s.vpTab === 0, vpPaneTerms: s.vpTab === 1, vpPaneEvidence: s.vpTab === 2,
-      vpPaneCerts: s.vpTab === 3, vpPaneInv: s.vpTab === 4,
+      vpPaneScore: vpTab === 0, vpPaneTerms: vpTab === 1, vpPaneEvidence: vpTab === 2,
+      vpPaneCerts: vpTab === 3, vpPaneInv: vpTab === 4,
       // The vendor's accreditations as the Compliance register holds them — each with the three
       // checks — and the buildings it serves. One place for a vendor, not a second copy under
       // Compliance (Hussain, 7 Oct 2026).
-      vpPaneAccred: s.vpTab === 5, vpPaneServed: s.vpTab === 6,
+      vpPaneAccred: vpTab === 5, vpPaneServed: vpTab === 6,
       vpAccredRows: vpCC.certs.map((c) => this.ccCertRowVals(c, vpCC.CC)),
       vpAccredKey: vpV ? "vendor:" + vpV.id : "",
       vpCCPending: vpCC.live === false,
@@ -1351,9 +1406,10 @@ export const renderValsMethods = {
           score: N(score), trend: v.trend,
           scoreFg: score === null ? "var(--color-neutral-500)" : score >= 85 ? "var(--st-ok)" : score >= 70 ? "var(--st-warn)" : "var(--st-risk)",
           capShow: capped ? "flex" : "none", capBg: "var(--st-risk-bg)", capFg: "var(--st-risk)",
-          capNote: capped
-            ? "Score cannot exceed " + (R.cap || 60) + " while " + capNames + " " + (mandatoryMissing.length > 1 ? "are" : "is") + " not current — this vendor cannot hold regulated work whatever the delivery numbers say."
-            : "",
+          // Without Compliance the block is stated, not the certificates behind it.
+          capNote: !capped ? ""
+            : !ccOn ? "Blocked — this vendor's score is held at " + (R.cap || 60) + " while the block stands."
+            : "Score cannot exceed " + (R.cap || 60) + " while " + capNames + " " + (mandatoryMissing.length > 1 ? "are" : "is") + " not current — this vendor cannot hold regulated work whatever the delivery numbers say.",
           metrics: SC.rows.map((r) => {
             // A component the card did not report has no bar and no colour — an empty
             // track, not a full-width red one saying the vendor scored nothing.
@@ -1375,6 +1431,9 @@ export const renderValsMethods = {
           }),
           totalPts: N(SC.raw),
           capRowShow: capApplied ? "grid" : "none",
+          // The row keeps the total adding up; without Compliance it names the block, not the
+          // accreditation behind it.
+          capRowLabel: ccOn ? "Accreditation cap applied" : "Block cap applied",
           finalScore: N(score),
           critSplit: [
             { label: "L1 · critical", n: R.crit ? String(R.crit.L1) : "—", note: "misses weigh 3×", color: "var(--st-risk)" },
@@ -1563,8 +1622,7 @@ export const renderValsMethods = {
         if (!isSendEnter(e)) return;
         const q = (s.pq || "").trim();
         if (!q) return;
-        this.setState({ pq: "" });
-        this.askScoped(q);
+        if (this.askNew(q) !== false) this.setState({ pq: "" });
       },
       pqRun: () => {
         const q = (s.pq || "").trim();
@@ -1572,8 +1630,7 @@ export const renderValsMethods = {
         if (!q) return chatView
           ? this.ccOpenChat()
           : this.flash("Type a question — it runs against the graph behind this page, not the table on it.");
-        this.setState({ pq: "" });
-        this.askScoped(q);
+        if (this.askNew(q) !== false) this.setState({ pq: "" });
       },
       abPh: (() => {
         // Counted, not typed. "118 obligations across 24 buildings" sat above a register
@@ -1612,7 +1669,7 @@ export const renderValsMethods = {
           : s.view === "buildings"
           ? ["Which of my buildings has open risk?", "What documents have I ingested?", "Which assets are unaccounted for?"]
           : (mod && mod.asks) || ["Which buildings put me at risk this month?"];
-        return q.map((a) => ({ label: a, run: () => this.askScoped(a) }));
+        return q.map((a) => ({ label: a, run: () => this.askNew(a) }));
       })(),
 
       isUser: s.role !== "admin",
@@ -1621,9 +1678,11 @@ export const renderValsMethods = {
       roleBg: s.role === "admin" ? "var(--color-accent)" : "var(--color-neutral-900)",
       roleFg: s.role === "admin" ? "var(--accent-ink)" : "var(--color-neutral-400)",
       docScope: s.role === "admin" ? "Everything ingested, per building" : "What you ingested, per building",
+      // Without Compliance the documents are listed without the certificates they evidence.
       docBlurb: s.role === "admin"
         ? "Every document on the graph, per building — and beside each, the certificates it evidences. A building with nothing filed says so rather than showing an empty list."
-        : "The documents on the graph for each building, and the certificates they evidence. Source files stay with whoever ingested them.",
+        : ccOn ? "The documents on the graph for each building, and the certificates they evidence. Source files stay with whoever ingested them."
+        : "The documents on the graph for each building. Source files stay with whoever ingested them.",
       docStats: (() => {
         const rows = this.glBuildings();
         const sum = (k) => rows.reduce((q, b) => {
@@ -1636,15 +1695,15 @@ export const renderValsMethods = {
         const none = rows.filter((b) => ((b.counts || {}).documents || 0) === 0).length;
         return [
           { value: NUM(docs), label: docs === 1 ? "document on the graph" : "documents on the graph", color: "var(--color-text)" },
-          { value: certsKnown ? NUM(certs) : "?",
+          ccOn ? { value: certsKnown ? NUM(certs) : "?",
             label: certsKnown ? "certificates bound to them" : "certificates · branch not counted",
-            color: certsKnown ? "var(--color-text)" : "var(--color-neutral-500)" },
+            color: certsKnown ? "var(--color-text)" : "var(--color-neutral-500)" } : null,
           // Not a total under management — the buildings with nothing filed, which is the
           // figure that says what to do next. plenum_cafm.documents records no file size,
           // so the "0.6 GB" that sat here was a formula over a seed building.
           { value: String(none), label: none === 1 ? "building with nothing filed" : "buildings with nothing filed",
             color: none ? "var(--st-warn)" : "var(--color-accent)" }
-        ];
+        ].filter(Boolean);
       })(),
       // Search + pagination — independent of the buildings table above (docQuery/docPage),
       // over the same portfolio, filtered the same way (name, building ID, country, state).
@@ -1720,6 +1779,8 @@ export const renderValsMethods = {
           };
         });
         return {
+          // The certificates column and count are Compliance's: not drawn without it.
+          certShow: ccOn,
           // Manage documents: type, personal, links, Index now, upload with a type (documentsRegister.js).
           manageDocs: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.dmOpen(key, b.name); },
           name: b.name, id: b.code || b.id, state: b.state,
@@ -1911,7 +1972,7 @@ export const renderValsMethods = {
             const t = GRAPH.find((g) => g.id === k.id);
             const open = s.gChild === k.id;
             const sel = s.gTable === k.id;
-            const subs = SUB_OF[k.id] || [];
+            const subs = SUB[k.id] || [];
             return {
               tbl: t.tbl, glyph: k.glyph, rel: k.rel, pk: t.pk, rows: line(k.id, k.unit),
               arrow: open ? "▾" : "▸",
@@ -1926,7 +1987,7 @@ export const renderValsMethods = {
               toggle: () => this.setState((p) => ({ gChild: p.gChild === k.id && p.gTable === k.id ? null : k.id, gTable: k.id })),
               subs: subs.map((sb) => {
                 const st = GRAPH.find((g) => g.id === sb.id);
-                const ssel = s.gTable === sb.id;
+                const ssel = gTableId === sb.id;
                 return {
                   tbl: st.tbl, glyph: sb.glyph, rel: sb.rel, on: sb.on, pk: st.pk,
                   rows: line(sb.id, UNITS[sb.id]),
@@ -1947,7 +2008,7 @@ export const renderValsMethods = {
 
       gCrumbs: (() => {
         const path = [];
-        let cur = GRAPH.find((n) => n.id === s.gTable) || GRAPH[4];
+        let cur = GRAPH.find((n) => n.id === gTableId) || GRAPH[4];
         const up = (id) => { const e = GRAPH_EDGES.find((x) => x[0] === id); return e ? e[1] : null; };
         let guard = 0;
         while (cur && guard++ < 5) { path.unshift(cur); const p = up(cur.id); cur = p ? GRAPH.find((n) => n.id === p) : null; }
@@ -1958,9 +2019,9 @@ export const renderValsMethods = {
         }));
       })(),
       tbl: (() => {
-        const n = GRAPH.find((x) => x.id === s.gTable) || GRAPH[4];
-        const kids = GRAPH_EDGES.filter((e) => e[1] === n.id).map((e) => GRAPH.find((x) => x.id === e[0]));
-        const pars = GRAPH_EDGES.filter((e) => e[0] === n.id).map((e) => GRAPH.find((x) => x.id === e[1]));
+        const n = GRAPH.find((x) => x.id === gTableId) || GRAPH[4];
+        const kids = GRAPH_EDGES_V.filter((e) => e[1] === n.id).map((e) => GRAPH.find((x) => x.id === e[0]));
+        const pars = GRAPH_EDGES_V.filter((e) => e[0] === n.id).map((e) => GRAPH.find((x) => x.id === e[1]));
         const live = this.glTable(n.id);
         return {
           name: live.table,
@@ -1997,9 +2058,9 @@ export const renderValsMethods = {
       // build was drawn against — but "24 buildings" and "1,204 documents" were typed in,
       // and a figure nobody can source reads as "—" rather than as a number.
       graphStats: this.bldVals().graphStatsLiveShow ? this.bldVals().graphStatsLive : [
-        { value: String(GRAPH.length), label: "tables in the diagram", color: "var(--color-neutral-400)" },
-        { value: String(GRAPH.reduce((a, g) => a + g.cols.length, 0)), label: "columns in the diagram", color: "var(--color-neutral-400)" },
-        { value: String(GRAPH_EDGES.length), label: "relationships drawn", color: "var(--color-neutral-400)" },
+        { value: String(GRAPH_V.length), label: "tables in the diagram", color: "var(--color-neutral-400)" },
+        { value: String(GRAPH_V.reduce((a, g) => a + g.cols.length, 0)), label: "columns in the diagram", color: "var(--color-neutral-400)" },
+        { value: String(GRAPH_EDGES_V.length), label: "relationships drawn", color: "var(--color-neutral-400)" },
         { value: "—", label: "buildings · register unreachable", color: "var(--color-neutral-500)" },
         { value: "—", label: "documents · register unreachable", color: "var(--color-neutral-500)" }
       ],
@@ -2011,14 +2072,14 @@ export const renderValsMethods = {
         { label: "reaches a building only indirectly", fill: "var(--color-accent-900)", stroke: "1.4px dashed var(--color-accent)", radius: "50%" },
         { label: "counts beside each node are read from the graph; “?” means that branch is not counted", fill: "var(--color-bg)", stroke: "1.2px dashed var(--color-neutral-700)", radius: "3px" }
       ],
-      graphCodes: "FL floors · AS assets · DO documents · CO contracts · EQ equipment · ME meters · WO work orders · CE certificates · SP spaces · IN invoices",
+      graphCodes: "FL floors · AS assets · DO documents · CO contracts · EQ equipment · ME meters · WO work orders · " + (ccOn ? "CE certificates · " : "") + "SP spaces · IN invoices",
       graphHops: [
         { n: "1", node: "Building", rel: ":HAS_FLOOR", gives: "the regulation pack and the benchmark it is held to" },
         { n: "2", node: "Floor", rel: ":HAS_ASSET", gives: "area by use, so consumption can be normalised" },
         { n: "3", node: "Asset", rel: ":METERED_BY", gives: "the plant item and its design load" },
         { n: "4", node: "Meter", rel: ":ASSIGNED_TO", gives: "half-hourly readings, weather-corrected" },
         { n: "5", node: "Work order", rel: ":SERVICES", gives: "what was actually done, and when" },
-        { n: "6", node: "Vendor", rel: ":INVOICES", gives: "who attended, their accreditation, what they charged" }
+        { n: "6", node: "Vendor", rel: ":INVOICES", gives: ccOn ? "who attended, their accreditation, what they charged" : "who attended and what they charged" }
       ].map((h, i) => ({
         n: h.n, node: h.node, rel: h.rel, gives: h.gives,
         dotBg: i === 0 ? "var(--color-accent)" : "var(--color-bg)",
@@ -2064,9 +2125,10 @@ export const renderValsMethods = {
       // for the position:fixed click-catchers inside it (8 Oct 2026 review).
       orchLeft: (s.navOpen ? 248 : 52) + "px",
 
-      // Drag the dock's right edge to widen it. Widen only: the floor is the flow's own
-      // default (orchBaseW) so a drag can never make the dock narrower than designed, and
-      // the ceiling is ORCH_MAX_W so it can never swallow the register beside it.
+      // Drag the dock's right edge to resize it. The floor is the flow's own designed width
+      // (orchBaseW) so a drag can never make the dock narrower than designed, and the ceiling
+      // is ORCH_MAX_W so it can never swallow the register beside it. It opens at the half
+      // (orchDefaultW), so a drag can narrow it as well as widen it.
       orchResizeShow: s.orchOpen && !orchFull ? "block" : "none",
       orchFullToggle: () => this.toggleOrchFull(),
       orchFullIcon: orchFull ? "ph-arrows-in-simple" : "ph-arrows-out-simple",
@@ -2075,7 +2137,8 @@ export const renderValsMethods = {
       // The handle is fixed, not absolute: the dock scrolls its own content, and an
       // absolute handle would scroll away with it.
       orchHandleLeft: ((s.navOpen ? 248 : 52) + orchW - 3) + "px",
-      orchHandleTint: orchW > orchBaseW ? "var(--color-accent)" : "transparent",
+      // Tinted while the dock is at a width the reader dragged it to, not the default.
+      orchHandleTint: s.orchW && orchW !== orchDefaultW ? "var(--color-accent)" : "transparent",
       orchResizeStart: (e) => {
         if (e.button !== undefined && e.button !== 0) return;
         e.preventDefault();
@@ -2891,7 +2954,7 @@ export const renderValsMethods = {
               label: q.label,
               when: ago(q.at),
               hint: canAsk ? "Re-run" : "Open",
-              click: () => (canAsk ? this.askScoped(question) : this.ask(question, q.k || null))
+              click: () => (canAsk ? this.askNew(question) : this.ask(question, q.k || null))
             };
           });
       })(),
@@ -3142,6 +3205,8 @@ export const renderValsMethods = {
       })(),
 
       // The conversation page's header: which session this is and where it is filed.
+      // Which conversation the chat page shows: a new one is read from its end (useFollowBottom).
+      chatSessionId: s.sessionId || "",
       chatSessionTitle: (() => { const rec = mySessions.find((x) => x.id === s.sessionId); return rec ? rec.title : (supV.supOn ? "Support" : ""); })(),
       chatSessionMeta: (() => {
         const rec = mySessions.find((x) => x.id === s.sessionId);
@@ -3156,7 +3221,7 @@ export const renderValsMethods = {
         .concat(spm.builtin.map((b) => ({ value: b.key, label: b.name })))
         .concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
       chatFileTo: (e) => { if (s.sessionId) this.fileSession(s.sessionId, e.target.value || null); },
-      isCC: s.signedIn && s.view === "cc",
+      isCC: s.signedIn && s.view === "cc" && ccOn,
       ccScan: () => this.ccRunScan(),
       ccLastRun: s.ccScanning ? "scanning…" : s.ccLastScan ? fmtTime(s.ccLastScan) + " · scan" : s.ccLoadedAt ? fmtTime(s.ccLoadedAt) + " · register read" : (s.ccLoading ? "loading…" : "not yet · seed data"),
       ccLive: !!s.ccLive,
@@ -3508,20 +3573,22 @@ export const renderValsMethods = {
       // anomalies and maintenance decisions owed, ranked by consequence (queueLive.js).
       // Seed cards only until any of those reads answers. A card opens the page it is about
       // and the dock with the email that resolves it (queueDraft.js).
-      queuePreview: (qlm.live ? qlm.items.slice(0, 3) : D.decisions.slice(0, 3)).map((d) => ({
+      // An instance's queue holds its own modules only (queueModel scopes the live one; qPool
+      // the seed); a chip the instance does not offer reads as All.
+      queuePreview: qPool.slice(0, 3).map((d) => ({
         title: d.title, meta: d.meta, money: d.money, icon: d.icon,
         color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.queueOpenItem(d)
       })),
       // Filtered by the drawer's "Show" chips (queueLive.filterQueue). The badge keeps the
       // unfiltered total — it is what is waiting, not what this view is showing.
-      queueItems: filterQueue(qlm.live ? qlm.items : D.decisions, s.queueFilter).map((d) => ({
+      queueItems: filterQueue(qPool, qFilter).map((d) => ({
         title: d.title, meta: d.meta, money: d.money, icon: d.icon, module: d.module,
         color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.queueOpenItem(d)
       })),
-      queueFilterOpts: QUEUE_FILTERS.map((f) => {
-        const pool = qlm.live ? qlm.items : D.decisions;
+      queueFilterOpts: queueFiltersFor(instReports).map((f) => {
+        const pool = qPool;
         const n = f === "All" ? pool.length : pool.filter((i) => i.module === f).length;
-        const on = (s.queueFilter || "All") === f;
+        const on = qFilter === f;
         return {
           label: f, n: String(n),
           fg: on ? "var(--color-accent)" : (n ? "var(--color-neutral-400)" : "var(--color-neutral-600)"),
@@ -3531,9 +3598,9 @@ export const renderValsMethods = {
         };
       }),
       // Live with nothing waiting is a fact worth stating; an empty drawer says nothing.
-      queueEmptyShow: qlm.live && !filterQueue(qlm.items, s.queueFilter).length ? "block" : "none",
-      queueEmptyNote: (s.queueFilter && s.queueFilter !== "All")
-        ? "Nothing in " + s.queueFilter + " is waiting on you."
+      queueEmptyShow: qlm.live && !filterQueue(qlm.items, qFilter).length ? "block" : "none",
+      queueEmptyNote: qFilter !== "All"
+        ? "Nothing in " + qFilter + " is waiting on you."
         : "Nothing is waiting on you — no pending approval, open anomaly or maintenance decision on your buildings.",
 
       // Hoist Crons. Live: what the engines raised (approvals queue) and detected (energy
@@ -3625,10 +3692,10 @@ export const renderValsMethods = {
           if (modKey === "assets" && this.asCondSetFilter) this.asCondSetFilter(f);
         }
       })) : [],
-      // askScoped, never ask() directly: a suggested question is the same question the bar
+      // askNew (askScoped in a new session), never ask() directly: a suggested question is the same question the bar
       // above it sends, so it must land in the same place. Calling ask() here sent it to the
       // seed answer page and took the whole screen over, on pages whose own ask bar docked.
-      modAsks: mod ? mod.asks.map((a) => ({ label: a, run: () => this.askScoped(a) })) : [],
+      modAsks: mod ? mod.asks.map((a) => ({ label: a, run: () => this.askNew(a) })) : [],
       modBars: this.bars(modKey).map((b) => Object.assign({ groupShow: "none", rowShow: "flex", invShow: "none", group: "", groupMeta: "", investigate: null }, b)),
       modRows: this.rows(modKey, s.filter).map((r) => Object.assign({ groupShow: "none", rowShow: "table-row", invShow: "none", group: "", groupMeta: "", groupSum: "", investigate: null }, r)),
       modInvHead: modKey === "energy" ? "table-cell" : "none",
@@ -3661,8 +3728,8 @@ export const renderValsMethods = {
       if (en) {
         // Same rule as the general chips above — the energy page swaps in its own scoped
         // questions, not a different destination for them.
-        vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.askScoped(a) }));
-        vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.askScoped(a) }));
+        vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.askNew(a) }));
+        vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.askNew(a) }));
       }
       if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s));
       if (modKey === "ops") {
@@ -3675,6 +3742,8 @@ export const renderValsMethods = {
       }
       vals.mod = {
         ...mod,
+        // Maintenance without Compliance: its triggers are named without the certificate.
+        blurb: modKey === "ops" && !ccOn ? String(mod.blurb || "").replace(", a certificate expiring", "") : mod.blurb,
         sideTitle: en ? en.enSideTitle : mod.sideTitle,
         sideFoot: en ? en.enSideFoot : mod.sideFoot,
         // "Re-read inspection reports" re-reads them: the panel computes live on every read,

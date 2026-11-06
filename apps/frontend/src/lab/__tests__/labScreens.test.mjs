@@ -47,10 +47,10 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Runs, Instance, Synthetic, Labels, Progress and Notes, plus People for admins; a question code names its run', () => {
-  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes']);
-  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'notes', 'people']);
-  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Notes']);
+test('the menu: Runs, Instance, Synthetic, Labels, Progress, Loop and Notes, plus People for admins; a question code names its run', () => {
+  assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'loop', 'notes']);
+  assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), ['runs', 'instance', 'synthetic', 'labels', 'progress', 'loop', 'notes', 'people']);
+  assert.deepEqual(L.navFor(null).map((x) => x[1]), ['Runs', 'Instance', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });

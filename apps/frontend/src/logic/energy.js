@@ -343,7 +343,7 @@ export const energyMethods = {
         : "What do we know about " + o.name + "'s energy performance, and what is missing to assess it properly?";
     }
     this.setState({ flow: null, flowDone: "" });
-    this.askScoped(q);
+    this.askNew(q);
   },
 
 

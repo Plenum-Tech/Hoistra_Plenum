@@ -66,5 +66,35 @@ export const labApi = {
   editMode: (lineage, body) => call('PUT', '/lab/modes/' + enc(lineage), { body }),
   retireMode: (lineage) => call('DELETE', '/lab/modes/' + enc(lineage)),
   platformMembers: () => call('GET', '/lab/platform-members'),
-  decidePlatformMember: (body) => call('PUT', '/lab/platform-members', { body })
+  decidePlatformMember: (body) => call('PUT', '/lab/platform-members', { body }),
+
+  // The correction loop (3 Nov 2026): traces -> notes -> failure modes -> SPEC.md -> correction -> regression -> rerun.
+  // What a coding agent proposes waits here for a person's decision; the specification in force is the newest approved
+  // version; a regression run of a failure mode is asked again after a correction and compared with what was answered.
+  syncStatus: () => call('GET', '/lab/sync-status'),
+  proposals: () => call('GET', '/lab/proposals'),
+  decideProposal: (kind, id, body) => call('POST', '/lab/proposals/' + enc(kind) + '/' + enc(id), { body }),
+  spec: () => call('GET', '/lab/spec'),
+  specDraft: () => call('GET', '/lab/spec/draft'),
+  proposeSpec: (body) => call('POST', '/lab/spec', { body }),
+  specFile: () => call('GET', '/lab/spec.md', { raw: true, timeoutMs: 60000 }),
+  corrections: (mode) => call('GET', '/lab/corrections', { query: mode ? { mode } : {} }),
+  addCorrection: (body) => call('POST', '/lab/corrections', { body }),
+  makeRegression: (lineage, body) => call('POST', '/lab/modes/' + enc(lineage) + '/regression', { body, timeoutMs: 60000 }),
+  rerun: (code, body) => call('POST', '/lab/runs/' + enc(code) + '/rerun', { body, timeoutMs: 600000 }),
+  compare: (code) => call('GET', '/lab/runs/' + enc(code) + '/compare', { timeoutMs: 60000 }),
+  loop: () => call('GET', '/lab/loop'),
+
+  // The agent, inside the Trace Lab container (Bala, 5 Nov 2026). It only proposes: failure modes and labels from
+  // people's notes, and changes to the instruction documents for a mode with an approved rule. A person approves a
+  // change (it goes under test: only reruns here read it), makes it live (every agent reads it, no rebuild), and
+  // downloads the live documents for the commit once testing is complete.
+  // run (R40): only the notes of the run the person has open.
+  proposeFromNotes: (run) => call('POST', '/lab/agent/propose-from-notes', { query: run ? { run } : {}, timeoutMs: 120000 }),
+  draftFix: (lineage) => call('POST', '/lab/modes/' + enc(lineage) + '/draft-fix', { timeoutMs: 120000 }),
+  changes: () => call('GET', '/lab/changes'),
+  approveChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/approve'),
+  rejectChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/reject'),
+  liveChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/live'),
+  exportChanges: () => call('GET', '/lab/changes/export.zip', { raw: true, timeoutMs: 60000 })
 };

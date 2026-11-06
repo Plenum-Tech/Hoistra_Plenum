@@ -36,12 +36,18 @@ export function easeStep(top, target, factor) {
   return top + (Math.abs(step) < 1 ? (dist > 0 ? 1 : -1) : step);
 }
 
-export function useFollowBottom({ container, end, busy, count }) { // eslint-disable-line no-unused-vars
+//   conversation  optional key of the conversation on screen (the chat page's session id). When
+//                 it changes - and when the page first draws one - the reader lands at its end at
+//                 once, and its messages re-engage the follow however many the last one had
+//                 (2 Nov 2026). Callers without one (the dock) behave as before.
+export function useFollowBottom({ container, end, busy, count, conversation }) { // eslint-disable-line no-unused-vars
   const stuck = useRef(true);
   const busyRef = useRef(false);
   const followRef = useRef(null);
+  const jumpRef = useRef(null);
   const lastBusy = useRef(false);
   const lastCount = useRef(-1);
+  const lastConversation = useRef(undefined);
   busyRef.current = !!busy;
 
   useEffect(() => {
@@ -52,6 +58,7 @@ export function useFollowBottom({ container, end, busy, count }) { // eslint-dis
     let raf = 0;
     let animating = false;
     let wrote = -1;
+    let settleUntil = 0;
 
     const read = () => (el
       ? { top: el.scrollTop, max: el.scrollHeight - el.clientHeight, ch: el.clientHeight, sh: el.scrollHeight }
@@ -66,11 +73,16 @@ export function useFollowBottom({ container, end, busy, count }) { // eslint-dis
       const dist = max - m.top;
       if (Math.abs(dist) > 0.5) write(reduce ? max : easeStep(m.top, max));
       else animating = false;
-      // Keep gliding while the answer is still growing; otherwise come to rest at the bottom.
-      if (busyRef.current || Math.abs(dist) > 0.5) raf = requestAnimationFrame(tick);
+      // Keep gliding while the answer is still growing, or a conversation just opened is still
+      // drawing (its answers lay out lazily); otherwise come to rest at the bottom.
+      if (busyRef.current || Math.abs(dist) > 0.5 || Date.now() < settleUntil) raf = requestAnimationFrame(tick);
     };
     const follow = () => { if (stuck.current && !raf) raf = requestAnimationFrame(tick); };
     followRef.current = follow;
+    // Straight to the end, no glide through a long conversation; written as ours, so its scroll
+    // event is not taken for the reader's.
+    // It keeps to the end for a moment while the answers finish drawing, unless the reader scrolls.
+    jumpRef.current = () => { const m = read(); write(Math.max(0, m.max)); settleUntil = Date.now() + 1500; follow(); };
 
     // Reader intent. Upward wheel, key or touch drag → stop following now. Downward wheel
     // that lands near the bottom → follow again.
@@ -122,9 +134,19 @@ export function useFollowBottom({ container, end, busy, count }) { // eslint-dis
       target.removeEventListener("scroll", onScroll);
       window.removeEventListener("keydown", onKey);
       followRef.current = null;
+      jumpRef.current = null;
     };
     // The dock's region and the window both exist for the life of the component.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Another conversation (or the first one drawn): its end, and a fresh count of its messages.
+  useEffect(() => {
+    if (conversation === lastConversation.current) return;
+    lastConversation.current = conversation;
+    stuck.current = true;
+    lastCount.current = -1;
+    if (jumpRef.current) jumpRef.current();
+  }, [conversation]);
 
   // A new turn, or a new message, means the reader wants to see what arrives next.
   useEffect(() => {

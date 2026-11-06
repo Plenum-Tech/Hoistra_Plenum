@@ -18,6 +18,7 @@ import LabelsView from './LabelsView.jsx';
 import ProgressView from './ProgressView.jsx';
 import Notes from './Notes.jsx';
 import People from './People.jsx';
+import Loop from './Loop.jsx';
 
 const COMPANY_KEY = 'tracelab.company.v1';
 const store = () => { try { return window.localStorage; } catch (e) { return null; } };
@@ -25,7 +26,7 @@ const locks = () => { try { return navigator.locks || null; } catch (e) { return
 
 // The workspace menu. People is for company admins (and the platform team).
 export function navFor(me) {
-  const items = [['runs', 'Runs'], ['instance', 'Instance'], ['synthetic', 'Synthetic'], ['labels', 'Labels'], ['progress', 'Progress'], ['notes', 'Notes']];
+  const items = [['runs', 'Runs'], ['instance', 'Instance'], ['synthetic', 'Synthetic'], ['labels', 'Labels'], ['progress', 'Progress'], ['loop', 'Loop'], ['notes', 'Notes']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
 }
@@ -53,7 +54,18 @@ function keepPlace(view, run, question) {
 }
 
 // The run picker and Sync now in the top bar: every run the person may see, newest first.
-export function RunPicker({ runs, run, onRun, onSync, syncing, synced }) {
+// The automatic sync, said in one line: how often, and when it last ran (GET /lab/sync-status).
+export function syncLine(st) {
+  if (!st || !st.enabled) return st ? 'Automatic sync is off' : '';
+  const every = Math.max(1, Math.round((st.every_s || 0) / 60));
+  const at = st.last_run_at ? new Date(st.last_run_at) : null;
+  const last = at && !Number.isNaN(at.getTime())
+    ? ' · last ' + at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) + (st.last_ok === false ? ' (failed)' : '')
+    : ' · not run yet';
+  return 'Synced automatically every ' + every + ' min' + last;
+}
+
+export function RunPicker({ runs, run, onRun, onSync, syncing, synced, auto }) {
   return (
     <div className="lab-row lab-runbar">
       <label className="lab-visually-hidden" htmlFor="lab-run-pick">{'Run'}</label>
@@ -63,6 +75,7 @@ export function RunPicker({ runs, run, onRun, onSync, syncing, synced }) {
       </select>
       <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onSync} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync now'}</button>
       {synced ? <span className="lab-small" role="status">{synced}</span> : null}
+      {auto ? <span className="lab-small lab-sync-auto">{auto}</span> : null}
     </div>
   );
 }
@@ -208,6 +221,15 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const pickInstance = React.useCallback((k) => { setInstance(k); writeInstance(k); }, []);
   const [syncing, setSyncing] = React.useState(false);
   const [synced, setSynced] = React.useState('');
+  const [auto, setAuto] = React.useState('');
+  // The service syncs new answers by itself; this says how often and when it last did. Read again every minute.
+  React.useEffect(() => {
+    let live = true;
+    const read = () => labApi.syncStatus().then((st) => { if (live) setAuto(syncLine(st)); }).catch(() => { if (live) setAuto(''); });
+    read();
+    const t = setInterval(read, 60000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
   const [stamp, setStamp] = React.useState(0);
   const loadRuns = React.useCallback(() => labApi.runs({ limit: 200 })
     .then((out) => setRuns((out && out.runs) || [])).catch(() => setRuns([])), []);
@@ -236,7 +258,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
           <div className="lab-row">
             <Mark size={22} />
             <span className="lab-company">{company}</span>
-            <RunPicker runs={runs} run={run} onRun={pickRun} onSync={sync} syncing={syncing} synced={synced} />
+            <RunPicker runs={runs} run={run} onRun={pickRun} onSync={sync} syncing={syncing} synced={synced} auto={auto} />
           </div>
           <div className="lab-row lab-bar-right">
             <span>{(user && user.email) + (me && me.role ? ' · ' + (ROLE_TEXT[me.role] || me.role) : '')}</span>
@@ -254,8 +276,10 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion} /> : null}
         {current === 'instance' ? <Instances instance={instance} onPick={pickInstance} /> : null}
         {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null}
-        {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion} /> : null}
+        {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion}
+          onOpenLoop={() => onView('loop')} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
+        {current === 'loop' ? <Loop me={me} runs={runs} run={run} onOpenQuestion={openQuestion} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}
         {current === 'people' ? <People me={me} /> : null}
       </main>

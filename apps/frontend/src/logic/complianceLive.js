@@ -24,6 +24,11 @@ import { withoutCellDuplicates } from './complianceCell.js';
 import { createFramePainter } from './framePainter.js';
 import { callNames, extractOpenUIView, viewFromEvent } from './openuiView.js';
 import { preloadOpenUI } from '../openui/host.js';
+import { traceBeacon, beaconOf } from '../api/traceBeacon.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
+
+// How many buildings the Home chat context names before saying the rest are on the register.
+const REGISTER_LINES = 25;
 
 // The backend spells the Emirates "UAE"; the shell spells it "AE" (PACKS, CC_OF).
 const COUNTRY = {
@@ -89,10 +94,12 @@ export function relDays(days, long) {
   return "in " + days + (long ? " days" : "d");
 }
 
+// One rule with the chat (svc-deepagents agents/cert_checks.py, 3 Nov 2026): a review or an edited verdict is doubt too.
+export function authenticityOf(r) { return authOf(r || {}); }
 function authOf(r) {
   const verdict = String(r.forensics_verdict || r.forensics_ccc_verdict || "").toLowerCase();
   const score = r.forensics_risk_score;
-  const flagged = /suspect|forg|fail|reject|high/.test(verdict);
+  const flagged = /suspect|forg|fail|reject|high|review|edited/.test(verdict);
   const cleared = /genuine|pass|verified|clear|low/.test(verdict);
   // authenticity_warning is a MIXED field. It carries forensic findings, but also purely
   // advisory notes — "confirm against the register via Verify now", "vendor not yet on
@@ -845,6 +852,25 @@ export const complianceLiveMethods = {
     if (this.chatView()) return this.ccAsk(q);
     return this.ask(q);
   },
+  // A question asked from the PAGE - its ask bar, a suggested question, the Home bar, a space's
+  // bar - opens a new session (Hussain, 2 Nov 2026: "make sure to open a new session when
+  // question asked"). It used to go through askScoped and join whatever conversation the dock
+  // last held, even one closed with x. Only the conversation's own composer (orchSubmitNow) and
+  // the buttons drawn inside an answer (openuiHost.ask, choice cards) carry a conversation on.
+  // The same clean start as a requirement-matrix cell (ccCellAsk): no thread, no transcript, and
+  // no draft, held document or migration card from the conversation being left. Staged files
+  // and the building chosen for them stay: they are this question's.
+  askNew(q) {
+    if (!this.chatView()) return this.ask(q);
+    // Starting clean would abandon the answer still being written; ccAsk refuses the same way.
+    // Refused (false), the caller keeps what was typed (pre-push review, 3 Nov 2026).
+    if (this.state.ccBusy) { this.flash("Still answering — stop it first, or wait for it to finish."); return false; }
+    this.ccChatReset();
+    if (typeof this.ccCaseClear === "function") this.ccCaseClear();
+    if (typeof this.mgDetach === "function") this.mgDetach();
+    this.setState({ flow: null, flowDone: "" });
+    return this.ccAsk(q);
+  },
 
   // What the orchestrator is told about the page the question came from. Live figures
   // when the backend answered; an honest note when it did not.
@@ -853,6 +879,9 @@ export const complianceLiveMethods = {
     // A support session is told it is support and given the Hoistra guide (logic/support.js),
     // wherever it was opened from.
     if (typeof this.supIsOn === "function" && this.supIsOn()) return this.supContextNow();
+    // The page is described as the instance draws it: without Compliance (Ops Brain, Assets OS)
+    // nothing here names a certificate or an accreditation (Hussain, 2 Nov 2026).
+    const ccOn = instanceShowsModule(instanceReports(s), "Compliance");
     if (s.view === "vp") {
       const vm = this.vpModel();
       const parts = ["The user is on the Hoistra vendors page (contract performance)."];
@@ -862,8 +891,11 @@ export const complianceLiveMethods = {
         const tabs = ["Scorecard", "Contract terms", "Evidence", "Coverage", "Invoices", "Accreditations", "Buildings served"];
         parts.push("It is showing live scorecards: " + vm.vendors.length +
           (vm.vendors.length === 1 ? " vendor" : " vendors") + (vm.month ? ", " + vm.month + " scorecard" : "") + " — " +
-          vm.vendors.map((v) => v.name + " " + (v.score === null ? "unscored" : v.score + "/100") + " (" + v.accred.toLowerCase() + (v.blocked ? ", blocked" : "") + ")").join("; ") + ".");
-        if (sel) parts.push("Selected vendor: " + sel.name + ", tab: " + (tabs[s.vpTab] || tabs[0]) + ".");
+          vm.vendors.map((v) => v.name + " " + (v.score === null ? "unscored" : v.score + "/100") + (ccOn
+            ? " (" + v.accred.toLowerCase() + (v.blocked ? ", blocked" : "") + ")"
+            : (v.blocked ? " (blocked)" : ""))).join("; ") + ".");
+        // Without Compliance the page has no Coverage, Accreditations or Buildings served tab (renderVals vpTab).
+        if (sel) parts.push("Selected vendor: " + sel.name + ", tab: " + (tabs[!ccOn && [3, 5, 6].indexOf(s.vpTab) > -1 ? 0 : s.vpTab] || tabs[0]) + ".");
         const t = vm.tiles;
         parts.push("Tiles — vendors blocked " + (t.blocked === null ? "—" : t.blocked) + ", pending approvals " + (t.pending === null ? "—" : t.pending) +
           ", invoice lines held " + (t.held === null ? "—" : t.held) + ", contract terms on platform default " + (t.defaults === null ? "—" : t.defaults) + ".");
@@ -880,11 +912,11 @@ export const complianceLiveMethods = {
       const b = this.glSelected();
       if (b) {
         parts.push("Selected building: " + b.name + " (" + (b.buildingId ? "building ID " + b.buildingId : "site ID " + b.id) + ").");
-        const counted = Object.entries(b.counts || {}).map(([k, n]) => n + " " + k);
+        const counted = Object.entries(b.counts || {}).filter(([k]) => ccOn || !/certificate/.test(k)).map(([k, n]) => n + " " + k);
         if (counted.length) parts.push("On record: " + counted.join(", ") + ".");
       }
       const t = this.glTable(s.gTable);
-      if (t) parts.push("Selected record type: " + String(t.table).replace(/_/g, " ") + (typeof t.rows === "number" ? " (" + t.rows + " rows)" : "") + ".");
+      if (t && (ccOn || !/certificate/.test(String(t.table)))) parts.push("Selected record type: " + String(t.table).replace(/_/g, " ") + (typeof t.rows === "number" ? " (" + t.rows + " rows)" : "") + ".");
       return parts.join(" ");
     }
     if (this.isEnergyDock()) {
@@ -989,13 +1021,43 @@ export const complianceLiveMethods = {
     if (s.view === "home" && s.orchOpen && s.orchTask) {
       parts.push("The orchestrator dock is open on the task “" + s.orchTask.label + "”.");
     }
+    // The buildings register itself (Hussain, 2 Nov 2026: "information for hoisted buildings and
+    // ingested data is not available on the home page orchestrator chat"). The chat was told
+    // only a count off the compliance register — no names, no IDs, nothing ingested, and
+    // nothing at all until that register had loaded. Newest first, so a building hoisted a
+    // minute ago is in it; cut at REGISTER_LINES and said to be cut, because the router must
+    // never take a page's list for the register (agent_router, 29 Oct 2026).
+    if (this.bldIsLive()) {
+      const rows = this.bldData().slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+      const docsOf = (b) => (typeof (b.counts || {}).documents === "number" ? b.counts.documents : null);
+      const line = (b) => {
+        const facts = [b.code || b.buildingId ? "building ID " + (b.code || b.buildingId) : null,
+          b.cc && b.cc !== "—" ? b.cc : null, typeof b.floors === "number" ? b.floors + " floors" : null].filter(Boolean);
+        const d = docsOf(b);
+        return b.name + (facts.length ? " (" + facts.join(", ") + ")" : "")
+          + (d === null ? "" : d ? " — " + d + (d === 1 ? " document" : " documents") + " ingested" : " — no documents ingested");
+      };
+      const shown = rows.slice(0, REGISTER_LINES);
+      parts.push("Buildings register (" + rows.length + (rows.length === 1 ? " building" : " buildings")
+        + ", most recently hoisted or changed first): " + shown.map(line).join("; ")
+        + (rows.length > shown.length ? "; and " + (rows.length - shown.length) + " more — the tools read the full register." : "."));
+      const counted = rows.filter((b) => docsOf(b) !== null);
+      if (counted.length) {
+        const total = counted.reduce((q, b) => q + docsOf(b), 0);
+        parts.push(total + (total === 1 ? " document" : " documents") + " ingested across the portfolio.");
+      }
+    }
     if (h.hero.buildings !== null) {
-      parts.push("Live register: " + h.hero.buildings + " buildings, " +
-        h.hero.certificates + " certificates, " + h.hero.vendors + " vendors" +
+      // With the buildings register above, this line keeps only what it alone knows.
+      parts.push((this.bldIsLive() ? "Compliance register: " : "Live register: " + h.hero.buildings + " buildings, ") +
+        (ccOn ? h.hero.certificates + " certificates, " : "") + h.hero.vendors + " vendors" +
         (h.hero.countries.length ? " across " + h.hero.countries.join(", ") : "") + ".");
     }
-    if (h.pending !== null) parts.push(h.pending + " items are pending in the approvals queue.");
-    if (h.score.value !== null) parts.push("Hoist Score " + h.score.value + "/100 — " + h.score.band + "; " + h.score.gap + ".");
+    // The pending count and the score's gap as this instance shows them (queueModel is scoped).
+    const pendingHere = ccOn ? h.pending : this.queueModel().count;
+    if (pendingHere !== null && pendingHere !== undefined) parts.push(pendingHere + " items are pending in the approvals queue.");
+    const gap = ccOn || !/certificat|complian|accreditat/i.test(String(h.score.gap || "")) ? h.score.gap : "";
+    if (h.score.value !== null) parts.push("Hoist Score " + h.score.value + "/100 — " + h.score.band + (gap ? "; " + gap : "") + ".");
     if (!h.live && !this.ccIsLive()) parts.push("The operations backend is unreachable, so the page is showing seed data.");
     return parts.join(" ");
   },
@@ -1496,6 +1558,9 @@ export const complianceLiveMethods = {
         const via = calls.map((t) => t.tool).filter(Boolean).filter((t, j, a) => a.indexOf(t) === j);
         throw Object.assign(new Error(engineError + (via.length ? " — returned by " + via.join(", ") : "")), { engine: true });
       }
+      // A turn that filed documents (or started a migration) changed what the buildings register
+      // counts: it is read again, so Buildings and the next question see it (buildingsLive.js).
+      if ((files.length || startedRuns.length) && typeof this.bldAfterChange === "function") this.bldAfterChange();
 
       // Structured payload when the compliance preflight answered; null otherwise,
       // in which case the reply falls back to rendering the markdown answer.
@@ -1603,6 +1668,7 @@ export const complianceLiveMethods = {
       clearInterval(this._ccTick);
       this._ccTick = null;
       if (this._ccAbort === ctrl) this._ccAbort = null;
+      traceBeacon(beaconOf(this.state, q, sid0, t0)); // Trace Lab, off unless VITE_TRACE_LAB=1: what the browser saw
       // Only into the conversation that asked — not one started while this answer ran.
       if (next && next.choices.length && this.state.sessionId === sid0) {
         this.setState((p) => ({ ccChat: (p.ccChat || []).concat([{ role: "bot", text: next.text, choices: next.choices }]) }));
@@ -1988,7 +2054,11 @@ export const complianceLiveMethods = {
   },
 
   // Inline question editing, in place in the transcript: the bubble becomes a box with
-  // the text, a Cancel and a Run again. Re-running drops the old answer.
+  // the text, a Cancel and a Run again. Running it again asks the edited question at the END
+  // of the conversation, where a re-run goes (corrections.rerunTranscript): the original
+  // question, its answer and every turn after it stay where they were (2 Nov 2026 - it used to
+  // cut the transcript at the edit, taking the later turns with it, and the shorter transcript
+  // never re-engaged the scroll follow).
   ccEditStart(i) {
     const m = (this.state.ccChat || [])[i];
     if (!m || m.role !== "you") return;
@@ -2001,8 +2071,8 @@ export const complianceLiveMethods = {
     const i = this.state.ccEditIdx;
     const q = String(this.state.ccEditText || "").trim();
     if (i === null || i === undefined || !q) return;
-    this.setState((p) => ({ ccChat: (p.ccChat || []).slice(0, i), ccEditIdx: null, ccEditText: "" }));
-    // Let the truncation land before the new turn appends to the transcript.
+    this.setState({ ccEditIdx: null, ccEditText: "" });
+    // Let the closed edit box land before the new turn appends to the transcript.
     setTimeout(() => this.ccAsk(q), 0);
   },
 

@@ -12,6 +12,14 @@
 import { cronsApi } from '../api/crons.js';
 import { isStaleScope } from '../api/client.js';
 import { scrubInternal } from './publicText.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
+
+// The checks an instance can schedule: its own modules' (Hussain, 2 Nov 2026 - a module's data
+// stays in the module). 'Ask a question' (module Orchestrator) is every instance's.
+export function jobsFor(s) {
+  const reports = instanceReports(s);
+  return CRON_JOBS.filter((j) => instanceShowsModule(reports, j.module));
+}
 
 // The catalogue as the service names it; read from GET /api/crons/catalogue when it answers,
 // this copy only labels the card until then.
@@ -189,7 +197,9 @@ export const cronMethods = {
   cronOpenFromChat(q, opts) {
     // From ccAsk the question is already in the transcript; from elsewhere it is added here.
     const withQuestion = !(opts && opts.appendQuestion === false);
-    const jobs = guessJobs(q);
+    // Only checks this instance has can be ticked from what was asked.
+    const own = jobsFor(this.state).map((j) => j.key);
+    const jobs = guessJobs(q).filter((k) => own.indexOf(k) > -1);
     const cad = guessCadence(q);
     // "Send me a compliance summary every morning" is a question on a schedule, not a scan.
     const asks = /\b(ask|send me|brief me|summar\w*|report on)\b/i.test(q);
@@ -433,7 +443,7 @@ export function cronVals(c) {
     cronOpen: !!s.cronOpen,
     cronBusy: !!s.cronBusy,
     cronMsg: s.cronMsg || '',
-    cronJobOpts: CRON_JOBS.map((j) => ({
+    cronJobOpts: jobsFor(s).map((j) => ({
       key: j.key, label: (byKey[j.key] && byKey[j.key].label) || j.label, module: j.module,
       desc: (byKey[j.key] && byKey[j.key].description) || '',
       // With a building chosen, a company-wide-only job says so instead of being ticked.

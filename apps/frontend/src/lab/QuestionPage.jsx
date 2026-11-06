@@ -15,6 +15,7 @@ import { Clamp } from './AllLabels.jsx';
 import { NOTE_MAX, ROLE_TEXT, errText, isStale, selectedIn } from './logic/labelling.js';
 import { SCENARIO, blockIndex, blockOf, buildSteps, stepIO } from './logic/steps.js';
 import { pretty } from '../tracelab/logic/timeline.js';
+import { Derivation } from './Loop.jsx';
 import './runs.css';
 
 export const EXPECTED_ANSWER_MAX = 8000;
@@ -155,6 +156,19 @@ function parseEvidence(s) {
   if (!t) return null;
   try { return JSON.parse(t); } catch (e) { return { reference: t }; }
 }
+
+// The evidence saved with an expected answer (3 Nov 2026): what was typed in Evidence, with the rule of the approved
+// specification and the company records it was derived from on top. null when there is nothing.
+export function evidenceWith(text, rule, data) {
+  const base = parseEvidence(text);
+  const out = base && typeof base === 'object' && !Array.isArray(base) ? Object.assign({}, base) : (base ? { reference: base } : {});
+  if (String(rule || '').trim()) out.spec_rule = String(rule).trim();
+  if (String(data || '').trim()) out.data = String(data).trim();
+  return Object.keys(out).length ? out : null;
+}
+
+const evOf = (e) => (e && e.evidence && typeof e.evidence === 'object' && !Array.isArray(e.evidence) ? e.evidence : {});
+const dataText = (v) => (v === null || v === undefined ? '' : (typeof v === 'string' ? v : pretty(v)));
 
 function expectedLine(e) {
   return [e.source ? 'Source: ' + (SOURCES[e.source] || e.source) : '', e.author_email ? 'by ' + e.author_email : '',
@@ -405,19 +419,27 @@ const BlockRow = React.memo(function BlockRow({ b, selected, notes, editor, busy
 
 // The expected answer, right under the question: the newest version (its id in bold), its evidence behind "Show evidence",
 // where it came from, who wrote it and when, earlier versions, and an editor that saves a new version.
-export function ExpectedAnswer({ expected, history, onSave, openAll }) {
+export function ExpectedAnswer({ expected, history, onSave, openAll, pending, specRules, canDecide, onDecide }) {
   const e = expected || null;
   const past = Array.isArray(history) ? history : [];
   const [form, setForm] = React.useState(null);
   const [showEvidence, setShowEvidence] = React.useState(!!openAll);
   const [showPast, setShowPast] = React.useState(!!openAll);
   const hasEvidence = !!e && e.evidence !== null && e.evidence !== undefined && e.evidence !== '';
-  const begin = () => setForm({ text: e ? e.expected || '' : '', id: (e && e.expected_id) || '',
-    evidence: hasEvidence ? pretty(e.evidence) : '', saving: false, error: '' });
+  const rules = Array.isArray(specRules) ? specRules : [];
+  const begin = () => {
+    const ev = Object.assign({}, evOf(e));
+    const rule = ev.spec_rule || '';
+    const data = dataText(ev.data);
+    delete ev.spec_rule;
+    delete ev.data;
+    const rest = Object.keys(ev).length ? pretty(ev) : (hasEvidence && typeof e.evidence !== 'object' ? pretty(e.evidence) : '');
+    setForm({ text: e ? e.expected || '' : '', id: (e && e.expected_id) || '', rule, data, evidence: rest, saving: false, error: '' });
+  };
   const field = (k) => (ev) => { const v = ev.target.value; setForm((c) => (c ? Object.assign({}, c, { [k]: v }) : c)); };
   const save = async () => {
     if (!form || form.saving || !form.text.trim()) return;
-    const body = { expected: form.text.trim(), expected_id: form.id.trim() || null, evidence: parseEvidence(form.evidence) };
+    const body = { expected: form.text.trim(), expected_id: form.id.trim() || null, evidence: evidenceWith(form.evidence, form.rule, form.data) };
     setForm(Object.assign({}, form, { saving: true, error: '' }));
     try {
       await (onSave || resolved)(body);
@@ -446,6 +468,16 @@ export function ExpectedAnswer({ expected, history, onSave, openAll }) {
             <input className="lab-input" type="text" maxLength={200} value={form.id} placeholder="e.g. EXP-12" onChange={field('id')}
               disabled={form.saving} />
           </label>
+          <label className="lab-field"><span>{'Spec rule'}</span>
+            <select className="lab-input" value={form.rule} onChange={field('rule')} disabled={form.saving}>
+              <option value="">{rules.length ? 'Choose the rule it is derived from' : 'No approved specification yet'}</option>
+              {rules.map((r) => <option key={r.code} value={r.code}>{r.code + (r.title ? ' · ' + r.title : '')}</option>)}
+            </select>
+          </label>
+          <label className="lab-field"><span>{'Company records it was read from'}</span>
+            <textarea className="lab-note lab-qp-evidence" rows={2} value={form.data} onChange={field('data')} disabled={form.saving}
+              placeholder="The query or the records (ids, codes) the expected answer was read from — never the model's answer" />
+          </label>
           <label className="lab-field"><span>{'Evidence (optional)'}</span>
             <textarea className="lab-note lab-qp-evidence" rows={3} value={form.evidence} onChange={field('evidence')} disabled={form.saving}
               placeholder="JSON, or plain text kept as a reference" />
@@ -465,6 +497,7 @@ export function ExpectedAnswer({ expected, history, onSave, openAll }) {
             {e.expected_id ? <strong className="lab-qp-eid">{e.expected_id}</strong> : null}
             <LongText text={e.expected} className="lab-qp-expected-text" />
           </div>
+          <Derivation d={e.derivation} />
           {hasEvidence ? (
             <div>
               <button type="button" className="lab-link" aria-expanded={showEvidence ? 'true' : 'false'} onClick={() => setShowEvidence(!showEvidence)}>
@@ -476,6 +509,22 @@ export function ExpectedAnswer({ expected, history, onSave, openAll }) {
           <p className="lab-small">{expectedLine(e)}</p>
         </>
       ) : <p className="lab-small">{'No expected answer yet.'}</p>}
+      {pending ? (
+        <div className="lab-qp-pending" aria-label="Expected answer proposed by a coding agent">
+          <p className="lab-small"><strong>{'Proposed by a coding agent'}</strong>{' · it counts only once a person approves it'}</p>
+          <LongText text={pending.expected} className="lab-qp-expected-text" />
+          <Derivation d={pending.derivation} />
+          <p className="lab-small">{expectedLine(pending)}</p>
+          {canDecide && onDecide ? (
+            <div className="lab-row">
+              <button type="button" className="lab-btn lab-btn-sm" disabled={!(pending.derivation && pending.derivation.derived)}
+                title={pending.derivation && pending.derivation.derived ? undefined : 'Approve needs a rule of the approved specification and the company records it was read from.'}
+                onClick={() => onDecide(pending.id, 'approved')}>{'Approve'}</button>
+              <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={() => onDecide(pending.id, 'rejected')}>{'Reject'}</button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {past.length ? (
         <div className="lab-qp-past">
           <button type="button" className="lab-link" aria-expanded={showPast ? 'true' : 'false'} onClick={() => setShowPast(!showPast)}>
@@ -499,6 +548,31 @@ export function ExpectedAnswer({ expected, history, onSave, openAll }) {
 }
 
 // The recorded answers a curator can link, as the picker lists them: the same question asked word for word is marked.
+// What the person's browser saw of this question's answers (3 Nov 2026): when the answer finished, how long it took, a
+// stop, or the error shown — kept beside the backend's recorded trace.
+const BROWSER_KIND = { answer_shown: 'Answer shown', error: 'Error shown', stopped: 'Stopped' };
+const secs = (n) => (n === null || n === undefined ? null : (n / 1000).toFixed(1) + ' s');
+export function BrowserEvents({ events }) {
+  const list = Array.isArray(events) ? events : [];
+  if (!list.length) return null;
+  return (
+    <section className="lab-qp-browser" aria-labelledby="lab-qp-browser-h">
+      <h3 id="lab-qp-browser-h" className="lab-qp-h">{'In the browser'}</h3>
+      <ul className="lab-qp-browser-list">
+        {list.map((x) => (
+          <li key={x.id}>
+            <strong>{BROWSER_KIND[x.kind] || x.kind}</strong>
+            <span className="lab-small">{[x.ms_first_text !== null && x.ms_first_text !== undefined ? 'first text after ' + secs(x.ms_first_text) : '',
+              x.ms_total !== null && x.ms_total !== undefined ? 'took ' + secs(x.ms_total) : '', x.view ? 'on ' + x.view : '',
+              x.instance ? 'in ' + x.instance : '', x.at ? fmtWhen(x.at) : ''].filter(Boolean).join(' · ')}</span>
+            {x.error ? <div className="lab-small lab-qp-browser-error">{x.error}</div> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function AnswerPicks({ picks, busy, onPick }) {
   if (!picks) return <p className="lab-small">{'Reading the recorded answers…'}</p>;
   if (!picks.length) return <p className="lab-small">{'No recorded answers match. Ask the question in the chat first, then search again.'}</p>;
@@ -618,7 +692,7 @@ function NoAnswer({ active, curator }) {
 }
 
 const DEFAULT_ON = Object.freeze({
-  turn: noop, link: resolved, candidates: async () => ({ candidates: [] }), saveExpected: resolved, saveScenario: resolved, select: noop, openEditor: noop, blockUp: noop,
+  turn: noop, link: resolved, candidates: async () => ({ candidates: [] }), saveExpected: resolved, decideExpected: resolved, saveScenario: resolved, select: noop, openEditor: noop, blockUp: noop,
   blockDouble: noop, editorText: noop, editorSave: noop, editorCancel: noop, editNote: noop, askDelete: noop, deleteNote: noop
 });
 
@@ -672,7 +746,8 @@ export function QuestionView(props) {
         ))}
       </section>
 
-      <ExpectedAnswer expected={d.expected} history={d.expected_history} onSave={on.saveExpected} openAll={openAll} />
+      <ExpectedAnswer expected={d.expected} history={d.expected_history} onSave={on.saveExpected} openAll={openAll}
+        pending={d.expected_pending || null} specRules={d.spec_rules || []} canDecide={!!curator} onDecide={on.decideExpected} />
 
       <section className="lab-qp-answers" aria-label="Supporting answers">
         <span className="lab-qp-label">{'Supporting answers:'}</span>
@@ -681,12 +756,14 @@ export function QuestionView(props) {
             {traces.map((t, i) => (
               <button key={t.turn_id} type="button" className={'lab-turn' + (t.turn_id === turnId ? ' lab-on' : '')}
                 aria-pressed={t.turn_id === turnId ? 'true' : 'false'} title={[t.turn_id, SOURCES[t.source] || t.source, t.linked_by].filter(Boolean).join(' · ')}
-                onClick={() => { if (t.turn_id !== turnId) on.turn(t.turn_id); }}>{'Answer ' + (i + 1)}</button>
+                onClick={() => { if (t.turn_id !== turnId) on.turn(t.turn_id); }}>{'Answer ' + (i + 1) + (i === 0 && traces.length > 1 ? ' (newest)' : '')}</button>
             ))}
           </div>
         ) : <span className="lab-small">{'None yet'}</span>}
         {curator ? <LinkAnswer onLink={on.link} onSearch={on.candidates} /> : null}
       </section>
+
+      <BrowserEvents events={d.browser} />
 
       {turnId && !missing ? (
         <ScenarioBox onSave={on.saveScenario}>
@@ -794,6 +871,15 @@ export default function QuestionPage({ code, me, onChanged, onLinked }) {
       await labApi.setExpected(code, body);
       await load(turnId);
       changed('expected');
+    },
+    decideExpected: async (id, decision) => {
+      try {
+        await labApi.decideProposal('expected_answer', id, { decision });
+        await load(turnId);
+        changed('expected');
+      } catch (e) {
+        setSt((p) => Object.assign({}, p, { error: 'Could not record the decision: ' + errText(e) }));
+      }
     },
     saveScenario: async (text) => {
       if (!turnId) return;

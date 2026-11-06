@@ -52,7 +52,7 @@ export default function Vendors({ vals }) {
                 {"Vendors"}
               </h2>
               <p style={{ fontSize: "13px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "84ch", lineHeight: "1.55" }}>
-                {"Contract terms, monthly scorecards, compliance coverage and invoice checking for every vendor serving your buildings. No score is asserted — each one decomposes to the clause it was measured against and the work orders behind it."}
+                {vals.vpIntro}
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
@@ -298,12 +298,12 @@ export default function Vendors({ vals }) {
                 <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
                   <span style={{ fontSize: "12.5px" }}>{"Vendor directory"}</span>
                   <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums", flex: "1" }}>{vals.vpDirCount}</span>
-                  <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{"score · coverage"}</span>
+                  <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{vals.vpDirCols}</span>
                 </div>
                 <div style={{ position: "relative" }}>
                   <i className="ph ph-magnifying-glass" aria-hidden="true" style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", fontSize: "13px", color: "var(--color-neutral-500)" }}></i>
                   <input className="input" value={vals.vpDirQ} onChange={vals.vpDirSetQ} onKeyDown={(e) => { if (e.key === "Escape") vals.vpDirClear(); }}
-                    placeholder="Search vendors, contracts, accreditation" aria-label="Search the vendor directory"
+                    placeholder={vals.vpDirPh} aria-label="Search the vendor directory"
                     style={{ width: "100%", boxSizing: "border-box", fontFamily: "var(--font-body)", fontSize: "12px", padding: "7px 10px 7px 30px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", outline: "none" }} />
                 </div>
                 <div role="group" aria-label="Filter the vendor directory" style={{ display: "flex", gap: "5px", flexWrap: "wrap" }}>
@@ -317,9 +317,11 @@ export default function Vendors({ vals }) {
                 </div>
               </div>
               <DirectoryList rows={vals.vpList || []} empty={vals.vpDirEmpty} clear={vals.vpDirClear} />
-              <div style={{ padding: "9px 14px", fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.5", borderTop: "1px solid var(--color-divider)", flexShrink: "0" }}>
-                {"Coverage is the accreditation types a vendor holds against those its work requires. A mandatory lapse caps the score at 60."}
-              </div>
+              {vals.vpDirFoot ? (
+                <div style={{ padding: "9px 14px", fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.5", borderTop: "1px solid var(--color-divider)", flexShrink: "0" }}>
+                  {vals.vpDirFoot}
+                </div>
+              ) : null}
             </div>
             <div style={{ minWidth: "0", display: "flex", flexDirection: "column", gap: "14px" }}>
               <div style={{ borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
@@ -437,7 +439,7 @@ export default function Vendors({ vals }) {
                     </div>
                     <div style={{ gridTemplateColumns: "minmax(0,1fr) auto", gap: "12px", alignItems: "baseline", padding: "11px 16px", borderBottom: "1px solid var(--color-divider)", background: "var(--color-bg)", display: vals.vp.capRowShow }}>
                       <span style={{ fontSize: "12.5px", color: "var(--st-risk)" }}>
-                        {"Accreditation cap applied"}
+                        {vals.vp.capRowLabel}
                       </span>
                       <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "13.5px", color: "var(--st-risk)" }}>
                         {"ceiling 60 pts"}
@@ -981,14 +983,14 @@ function DirectoryList({ rows, empty, clear }) {
       {rows.map((v, i) => (
         <div key={v.name + i} data-active={v.active ? "true" : "false"} className="hv2 vp-dir-row" role="button" tabIndex={0} aria-current={v.active ? "true" : undefined} onClick={v.pick}
           onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); v.pick(); } }}
-          style={{ position: "relative", display: "grid", gridTemplateColumns: "minmax(0,1fr) 44px 64px", gap: "10px", alignItems: "center", padding: "7px 14px 7px 17px", borderBottom: "1px solid var(--color-divider)", cursor: "pointer", background: v.bg }}>
+          style={{ position: "relative", display: "grid", gridTemplateColumns: v.covShow === false ? "minmax(0,1fr) 44px" : "minmax(0,1fr) 44px 64px", gap: "10px", alignItems: "center", padding: "7px 14px 7px 17px", borderBottom: "1px solid var(--color-divider)", cursor: "pointer", background: v.bg }}>
           <div style={{ position: "absolute", left: "0", top: "0", bottom: "0", width: "3px", background: v.edge }}></div>
           <div style={{ minWidth: "0" }}>
             <div style={{ fontSize: "12.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</div>
             <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px", minWidth: "0" }}>
               <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0", flex: "0 1 auto" }}>{v.meta}</span>
               {v.capShow !== "none" ? (
-                <span style={{ flex: "none", fontSize: "9.5px", color: v.capFg, whiteSpace: "nowrap" }}>{"· ceiling 60"}</span>
+                <span style={{ flex: "none", fontSize: "9.5px", color: v.capFg, whiteSpace: "nowrap" }}>{v.capTag || "· ceiling 60"}</span>
               ) : null}
               {v.termsShow !== "none" ? (
                 <button type="button" className="hv3" onClick={v.goConfirm} title={v.termsTitle}
@@ -1003,6 +1005,8 @@ function DirectoryList({ rows, empty, clear }) {
             <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "14px", lineHeight: "1", color: v.scoreFg }}>{v.score}</div>
             <div style={{ fontSize: "9px", color: "var(--color-neutral-500)", marginTop: "2px", whiteSpace: "nowrap" }}>{v.trend}</div>
           </div>
+          {/* Coverage is the compliance register's figure: not drawn where the module has no Compliance. */}
+          {v.covShow === false ? null : (
           <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "4px" }}>
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: v.covFg }}>{v.cov}</span>
@@ -1012,6 +1016,7 @@ function DirectoryList({ rows, empty, clear }) {
               <div style={{ height: "100%", borderRadius: "2px", width: v.covBar, background: v.covFg }}></div>
             </div>
           </div>
+          )}
         </div>
       ))}
       {empty ? (

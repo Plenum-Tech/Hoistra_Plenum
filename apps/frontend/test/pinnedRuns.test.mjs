@@ -22,7 +22,8 @@ const boot = (cards) => {
   c.setState({ signedIn: true, view: 'home', account: { email: ME }, reportsOwner: ME,
     reports: [{ id: 'r1', name: 'My report', cards: cards }] });
   const asked = [];
-  c.askScoped = (q) => { asked.push(q); };
+  // askNew: a chip on the page asks its question in a new session (2 Nov 2026).
+  c.askNew = (q) => { asked.push(q); };
   return asked;
 };
 

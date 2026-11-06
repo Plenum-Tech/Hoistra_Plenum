@@ -33,6 +33,7 @@ const { HoistraLogic } = await import('../src/logic/HoistraLogic.js');
 const { shapeLiveBuildings } = await import('../src/logic/buildingsLive.js');
 
 const RUN_WITH_FILES = 'POST /backend/deep-agents/api/workflow/run-stateful-with-files';
+const BUILDINGS = 'GET /backend/ops-intelligence/api/energy/buildings';
 
 let c;
 beforeEach(() => {
@@ -109,6 +110,8 @@ test('starting ingestion with a file and a building sends a real request and clo
     assert.equal(opts.body.get('files').name, 'EICR.pdf');
     return [200, { session_id: 's-1', answer: 'Queued EICR.pdf for indexing against Bishopsgate Tower.', tool_calls: [], success: true }];
   };
+  // The upload changes what the buildings register counts, so it is read again (2 Nov 2026).
+  handlers[BUILDINGS] = [200, { ok: true, count: 0, buildings: [] }];
   c.renderVals().ingestDocuments();
   c.renderVals().setIBuilding({ target: { value: 'Bishopsgate Tower' } });
   c.renderVals().orchPickFiles({ target: { files: [aFile('EICR.pdf')], value: '' } });
@@ -117,7 +120,8 @@ test('starting ingestion with a file and a building sends a real request and clo
   assert.equal(c.state.flow, null, 'the card closes immediately — the answer streams into the transcript instead');
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(calls, [RUN_WITH_FILES]);
+  assert.deepEqual(calls.filter((k) => !k.startsWith('GET ')), [RUN_WITH_FILES], 'the upload is the one write it sends');
+  assert.ok(calls.includes(BUILDINGS), 'and the buildings register is read again after it');
   const v = c.renderVals();
   assert.ok(v.orchChat.some((m) => /Queued EICR\.pdf/.test(m.text)), 'the real answer landed in the transcript');
   cleanup();

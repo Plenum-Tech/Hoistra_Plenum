@@ -22,7 +22,8 @@ globalThis.WebSocket = class { constructor() { throw new Error('no sockets in te
 // run. This is the part of the API those tests need: exclusive, FIFO per name, the lock held
 // until the callback's promise settles, and `signal` aborting the WAIT rather than the holder.
 const lockQueues = new Map();
-navigator.locks = {
+// Defined, not assigned: Node 24 has a read-only navigator.locks getter, and assigning to it throws.
+Object.defineProperty(navigator, 'locks', { configurable: true, value: {
   request(name, optionsOrFn, maybeFn) {
     const fn = typeof optionsOrFn === 'function' ? optionsOrFn : maybeFn;
     const signal = typeof optionsOrFn === 'function' ? null : (optionsOrFn || {}).signal;
@@ -42,7 +43,7 @@ navigator.locks = {
       // behind a lock nobody holds.
       (err) => { release(); throw err; });
   }
-};
+} });
 globalThis.fetch = async (url, opts) => {
   const u = new URL(String(url));
   const method = (opts && opts.method) || 'GET';

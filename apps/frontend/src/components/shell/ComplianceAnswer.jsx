@@ -12,7 +12,7 @@
 // but nothing on a `steps` entry says which ledger entry is its own, so attributing a step to
 // a specific call would be a guess, not a fact. `cost` is a turn-level total instead: real
 // numbers, scoped to what they actually describe.
-import React, { useMemo } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import { sev, LABEL, CARD } from './cardStyles.js';
 import { richHasCards, costSummary, stepCostLabel } from '../../logic/complianceLive.js';
 import LazyOpenUIAnswer from '../../openui/LazyOpenUIAnswer.jsx';
@@ -63,6 +63,74 @@ function OfferButton({ o, named }) {
 }
 // Whether any two offers in a list share a label: then each says which certificate it is for.
 const sameLabels = (list) => list.some((o, i) => list.findIndex((x) => x.label === o.label) !== i);
+
+// Offers sharing one label fold into one menu from this many (2 Nov 2026: nine "Draft renewal
+// email" buttons stacked under one answer read as a wall the reader had to scan to find one name).
+const MENU_AT = 3;
+const ROW_STATE_ICON = { busy: 'ph-circle-notch', done: 'ph-check', error: 'ph-arrow-clockwise' };
+
+// One certificate in an open menu: the certificate on the first line, its holder and code on the
+// second (forName is "name · holder · code"), and on the right what pressing it does - the label's
+// verb ("Draft"), or its status while it runs, is open or failed, or "Done" once it has run.
+function OfferRow({ o }) {
+  const [what, ...rest] = String(o.forName || o.label).split(' · ');
+  const act = o.status || (o.state === 'done' ? 'Done' : String(o.label || '').split(' ')[0]);
+  return (
+    <button type="button" className={'ans-offer-row' + (o.state ? ' is-' + o.state : '')} onClick={o.run} disabled={!o.run}
+      aria-busy={o.state === 'busy' || undefined} aria-label={o.aria || undefined} title={o.reason || undefined}>
+      <span className="ans-offer-row-text">
+        <span className="ans-offer-row-what">{what}</span>
+        {rest.length ? <span className="ans-offer-row-who">{rest.join(' · ')}</span> : null}
+      </span>
+      <span className="ans-offer-row-act">{o.status || o.state ? act : <span className="ans-offer-row-verb">{act}</span>}<i className={'ph ' + (ROW_STATE_ICON[o.state] || 'ph-arrow-right')} aria-hidden="true"></i></span>
+    </button>
+  );
+}
+
+// Many offers with one label, as one button that opens the list in place (not a floating menu: the
+// dock and the chat column both clip and scroll, and the list must stay where the answer is). It is
+// drawn open while one of its offers is running, open below or failed, so its status is in view.
+function OfferMenu({ label, items }) {
+  const id = useId();
+  const live = items.some((o) => o.state === 'busy' || o.state === 'open' || o.state === 'error');
+  const [open, setOpen] = useState(live);
+  useEffect(() => { if (live) setOpen(true); }, [live]);
+  const done = items.filter((o) => o.state === 'done').length;
+  return (
+    <div className={'ans-offer-menu' + (open ? ' is-open' : '')}>
+      <button type="button" className="ans-offer ans-offer-menu-trigger" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+        <i className={'ph ' + (OFFER_ICON[items[0].kind] || 'ph-arrow-right')} aria-hidden="true"></i>
+        <span className="ans-offer-text">
+          <span className="ans-offer-label">{label}<span className="ans-offer-count">{items.length}</span></span>
+          <span className="ans-offer-for">{done ? done + ' of ' + items.length + ' done' : 'Choose one of ' + items.length + ' certificates'}</span>
+        </span>
+        <i className="ph ph-caret-down ans-offer-caret" aria-hidden="true"></i>
+      </button>
+      {open ? (
+        <ul id={id} className="ans-offer-list" aria-label={label}>
+          {items.map((o, j) => <li key={o.cert_id || j}><OfferRow o={o} /></li>)}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// A list of offers: those sharing a label with MENU_AT or more fold into one menu, in the place the
+// first of them stood; the rest stay buttons. `named` says each button's certificate (always, under
+// the answer; on an owner card, only where two share a label).
+function OfferList({ list, named, label }) {
+  const counts = {};
+  list.forEach((o) => { counts[o.label] = (counts[o.label] || 0) + 1; });
+  const seen = {};
+  const cells = [];
+  list.forEach((o, j) => {
+    if (counts[o.label] < MENU_AT) { cells.push(<OfferButton key={'b' + j} o={o} named={named} />); return; }
+    if (seen[o.label]) return;
+    seen[o.label] = true;
+    cells.push(<OfferMenu key={'m' + j} label={o.label} items={list.filter((x) => x.label === o.label)} />);
+  });
+  return <div className="ans-offers" role={label ? 'group' : undefined} aria-label={label}>{cells}</div>;
+}
 
 // `fallbackText` is the orchestrator's own markdown answer (`m.text`). The compliance
 // preflight (compliance_response) does not always fire — some turns route through the
@@ -404,8 +472,8 @@ export default function ComplianceAnswer({ rich, ms, open, onToggle, fallbackTex
               </div>
             ) : null}
             {offers.length ? (
-              <div className="ans-offers" style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--color-divider)' }}>
-                {offers.map((o, j) => <OfferButton key={j} o={o} named={sameLabels(offers)} />)}
+              <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--color-divider)' }}>
+                <OfferList list={offers} named={sameLabels(offers)} />
               </div>
             ) : null}
           </div>
@@ -437,9 +505,7 @@ export default function ComplianceAnswer({ rich, ms, open, onToggle, fallbackTex
       {/* ── offers whose owner card is drawn in the view ────────────────── */}
       {/* Standing on their own under the answer, these always say which certificate each is for. */}
       {looseOffers.length ? (
-        <div className="ans-offers" role="group" aria-label="Actions on these certificates">
-          {looseOffers.map((o, j) => <OfferButton key={j} o={o} named />)}
-        </div>
+        <OfferList list={looseOffers} named label="Actions on these certificates" />
       ) : null}
 
       {/* ── certificates in scope ──────────────────────────────────────── */}

@@ -77,8 +77,9 @@ export const opsApi = {
     apiFetch(B, '/api/contract-performance/scorecards', { query: withOrg(query) }),
   // The scored work orders behind the scorecards (vendor_wo_scores), each with the work
   // order's hours and the confirmed contract's targets — the Evidence tab. Read-only.
-  woScores: (query) =>
-    apiFetch(B, '/api/contract-performance/wo-scores', { query: withOrg(query) }),
+  // `opts` (timeoutMs) for the Vendors page's read: the slowest on the page.
+  woScores: (query, opts) =>
+    apiFetch(B, '/api/contract-performance/wo-scores', Object.assign({ query: withOrg(query) }, opts || {})),
   // The Vendors saved-space summary: the newest 200 scorecards, the weights, the pending
   // Feature B approvals and unapproved asset criticalities, one read.
   contractSummary: () =>

@@ -72,10 +72,13 @@ export function errorFromAnswer(answer) {
 }
 
 export const chatMethods = {
-  // The conversation is the page: no dock, no drawers over it.
+  // The conversation is the page: no dock, no drawers over it. Where the reader lands is the
+  // chat page's to decide (useFollowBottom's `conversation`): a conversation opened or switched
+  // to lands at its end, and reopening the one already on screen leaves the reader where they
+  // were. It used to scroll to the top here (2 Nov 2026), which also switched the follow off,
+  // so a session no longer than the last one stayed at its first question.
   openChat() {
     this.setState({ view: "chat", orchOpen: false, queueOpen: false, paletteOpen: false, detail: null });
-    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
     this.chatConnect();
     // A run restored from the session has an id and no document until something reads it,
     // and a run that was being followed has a document that stopped being read the moment

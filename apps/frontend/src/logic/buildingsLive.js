@@ -19,6 +19,8 @@ import { isStaleScope } from '../api/client.js';
 import { isUnallocated } from './auth.js';
 
 const RETRY_MS = 30000;
+// Opening Buildings or Home re-reads a register older than this (bldIfStale).
+const BLD_STALE_MS = 60000;
 const RETRY_MAX = 6;
 export const PAGE_SIZE = 20;
 
@@ -219,6 +221,26 @@ export const buildingsLiveMethods = {
   },
 
   bldRetryNow() { this._bldAttempts = 0; return this.bldLoad({ announce: true }); },
+
+  // The register is read again when it may have changed (Hussain, 2 Nov 2026: "Buildings is
+  // not automatically updated"). It was read at sign-in and after a hoist, an edit or a
+  // document delete in this tab - never after a document ingested through the chat, a
+  // migration that wrote buildings, or a building hoisted in another tab or by someone else.
+  // Now: after a change this tab knows of (bldAfterChange: a chat turn that carried files, a
+  // migration that completed), and on opening Buildings or Home with a read older than
+  // BLD_STALE_MS (bldIfStale, from HoistraLogic.setState). The per-building rows (bgTree) are
+  // dropped with it, so an open building shows its new documents too.
+  // Only a register already read: the first read is loadLiveData's.
+  bldAfterChange() {
+    if (!this.state.signedIn || !this.state.bldLive) return undefined;
+    this.setState({ bgTree: {} });
+    return this.bldLoad();
+  },
+  bldIfStale() {
+    const at = Date.parse(this.state.bldLoadedAt || '');
+    if (isNaN(at) || Date.now() - at < BLD_STALE_MS) return undefined;
+    return this.bldAfterChange();
+  },
 
   // The Hoist Graph panel is a picture of the schema. Read it rather than compiling it in:
   // a hardcoded table count goes stale the first time a migration runs, silently, because

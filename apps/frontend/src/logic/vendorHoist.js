@@ -34,6 +34,7 @@
 // The shapers are pure and tested in test/vendorHoist.test.mjs; the methods are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { canAdmin, accountCanIngest } from './auth.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
 import { complianceApi } from '../api/compliance.js';
 import { connectorApi } from '../api/connector.js';
 
@@ -432,7 +433,9 @@ export const vendorHoistMethods = {
   },
 
   vhVals(s) {
-    const can = this.vhCan(s);
+    // Hoist vendors works from the certificate register (vendors named on certificates), so an
+    // instance without Compliance does not offer it (2 Nov 2026).
+    const can = this.vhCan(s) && instanceShowsModule(instanceReports(s), 'Compliance');
     const reg = s.ccLive || null;
     const org = this.vhOrg(s);
     const mine = Object.assign({ dismissed: [], prepared: [] }, this.vhStore()[org] || {});

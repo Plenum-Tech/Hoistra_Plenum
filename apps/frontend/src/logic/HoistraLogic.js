@@ -57,7 +57,7 @@ import { superAdminLiveMethods } from './superAdminLive.js';
 import { platformCostMethods } from './platformCost.js';
 import { choiceMethods } from './choiceCards.js';
 import { supportMethods, SUPPORT_TOPICS } from './support.js';
-import { instancesMethods, INSTANCE_KEYS, usesInstances } from './instances.js';
+import { instancesMethods, INSTANCE_KEYS, usesInstances, instanceReports, instanceShowsModule } from './instances.js';
 import { vendorHoistMethods } from './vendorHoist.js';
 import { vendorMasterMethods } from './vendorMaster.js';
 import { hoistGraphMethods } from './hoistGraph.js';
@@ -114,8 +114,9 @@ export class HoistraLogic extends Controller {
     signedIn: false, email: "", openObj: 0, frame: 0,
     orchOpen: false, orchTask: null, orchDone: 0, orchQuery: "",
     // Dock chat transcript (compliance orchestrator) and its drag-resized width.
-    // orchW null = use the flow's default width; the drag only ever widens it.
-    ccChat: [], ccBusy: false, orchW: null, ccStepsOpen: {},
+    // orchW null = the default width: half the space beside the navigator, never under the
+    // flow's own (renderVals orchDefaultW). vw is the window width the resize listener keeps.
+    ccChat: [], ccBusy: false, orchW: null, ccStepsOpen: {}, vw: null,
     // Certificate ids whose evidence request has been approved into the queue.
     ccRequested: {}, emCertId: null,
     // The "Record result" panel under a certificate row: which row, the finding, the note.
@@ -345,6 +346,9 @@ export class HoistraLogic extends Controller {
     // it here, or every report keeps reading the account's own company regardless of what
     // state.viewOrgId now says.
     setActingOrg(this.state.viewOrgId || null);
+    // The same for the instance (2 Nov 2026): setState hands it on only when it changes, so after
+    // a reload every question went out with no space and Ops Brain answered certificate questions.
+    setActiveSpace(this.state.instance || null);
     // The session list has its own store. The active session's transcript comes back from
     // its record, so the conversation page resumes as it was. Reports are server-owned now
     // (logic/reports.js's rpLoad, kicked off from componentDidMount) — nothing to restore
@@ -367,6 +371,18 @@ export class HoistraLogic extends Controller {
   setState(patch, cb) {
     const prev = this.state;
     super.setState(patch, cb);
+    // A compliance view in an instance without Compliance IS Home, not only drawn as Home: left
+    // as `cc`, the orchestrator was told the person was on the compliance page and Home's own
+    // reads never ran (renderVals ccBlocked; pre-push review, 3 Nov 2026).
+    // Done last (below), after this update's own hooks have run.
+    const st = this.state;
+    const toHome = (prev.view !== st.view || prev.instance !== st.instance || prev.module !== st.module)
+      && (st.view === "cc" || st.view === "hg" || (st.view === "module" && st.module === "compliance"))
+      && !instanceShowsModule(instanceReports(st), "Compliance");
+    // Opening Buildings or Home re-reads a buildings register older than a minute
+    // (buildingsLive.js bldIfStale), so what was hoisted or ingested elsewhere shows up.
+    if (prev.view !== this.state.view && (this.state.view === "buildings" || this.state.view === "home")
+      && typeof this.bldIfStale === "function") this.bldIfStale();
     // The backend answers from the active space's modules only, and can only do that if it is
     // told which space this is. Set here rather than at each switch so a restored session, a
     // sign-in and a company change all carry it too (api/client.js, agents/spaces.py).
@@ -381,6 +397,7 @@ export class HoistraLogic extends Controller {
     // and the key is removed exactly once, on the way out. `prev` lets saveSession tell,
     // on that way out, whether the SHARED slot still belongs to this tab's own account.
     if (this.state.signedIn || prev.signedIn) saveSession(this.state, prev);
+    if (toHome) this.setState({ view: "home" });
   }
 }
 

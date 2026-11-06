@@ -746,6 +746,8 @@ export const migrationMethods = {
     // invoices and telemetry - reading it now only if nothing has picked it up.
     if (String(doc.status || '') === 'complete' && this._mgExtrasFor !== id) {
       this._mgExtrasFor = id;
+      // A finished run wrote rows the buildings register counts (and may have added buildings).
+      if (typeof this.bldAfterChange === 'function') this.bldAfterChange();
       this.setState({ mgExtras: null });
       this.mgLoadExtras(id);
     }

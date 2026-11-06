@@ -121,6 +121,38 @@ test('a busy offer is disabled and announced; one with nothing to run (a live an
   assert.equal((live.match(/<button type="button" class="ans-offer" disabled=""/g) || []).length, 3);
 });
 
+// 2 Nov 2026: nine "Draft renewal email" buttons stacked under one answer read as a wall. Three or
+// more offers with one label fold into one control that opens a list, a row per certificate.
+const MANY = Object.assign({}, RICH, {
+  pending: [],
+  offers: ['Fire Risk Assessment (FRA)', 'BAFE SP203-1 Registration Certificate · ProudCastle Fire · BAFE_SP203_1-PCFR-25',
+    'NICEIC Approved Contractor Certificate · Northgate Electrical', 'Fire Alarm System Service Certificate'].map((f, i) => (
+    { cert_id: 'm-' + i, kind: 'renewal_email', label: 'Draft renewal email', forName: f, aria: 'Draft renewal email — ' + f, state: '', run: noop }))
+    .concat([{ cert_id: 'v-1', kind: 'verify_now', label: 'Verify with the issuer', forName: 'Gas Safety', aria: 'Verify — Gas Safety', state: '', run: noop }])
+});
+
+test('three or more offers with one label fold into one menu; the rest stay buttons', () => {
+  const h = answer(MANY);
+  assert.match(h, /<div class="ans-offer-menu">/);
+  assert.match(h, /<button type="button" class="ans-offer ans-offer-menu-trigger" aria-expanded="false" aria-controls="[^"]+"><i class="ph ph-envelope-simple" aria-hidden="true"><\/i><span class="ans-offer-text"><span class="ans-offer-label">Draft renewal email<span class="ans-offer-count">4<\/span><\/span><span class="ans-offer-for">Choose one of 4 certificates<\/span><\/span><i class="ph ph-caret-down ans-offer-caret" aria-hidden="true"><\/i><\/button>/);
+  assert.doesNotMatch(h, /ans-offer-row/); // closed until asked
+  assert.equal((h.match(/aria-label="Draft renewal email — /g) || []).length, 0);
+  // a lone offer of another kind is still its own button
+  assert.match(h, /<button type="button" class="ans-offer" aria-label="Verify — Gas Safety">/);
+});
+
+test('a menu with an offer running or open below is drawn open, each row its own button', () => {
+  const offers = MANY.offers.map((o, i) => (i === 1 ? Object.assign({}, o, { state: 'busy', status: 'Drafting…', run: undefined })
+    : i === 2 ? Object.assign({}, o, { state: 'done' }) : o));
+  const h = answer(Object.assign({}, MANY, { offers }));
+  assert.match(h, /<div class="ans-offer-menu is-open">/);
+  assert.match(h, /aria-expanded="true"/);
+  assert.match(h, /<span class="ans-offer-for">1 of 4 done<\/span>/);
+  assert.match(h, /<button type="button" class="ans-offer-row" aria-label="Draft renewal email — Fire Risk Assessment \(FRA\)"><span class="ans-offer-row-text"><span class="ans-offer-row-what">Fire Risk Assessment \(FRA\)<\/span><\/span><span class="ans-offer-row-act"><span class="ans-offer-row-verb">Draft<\/span><i class="ph ph-arrow-right" aria-hidden="true"><\/i><\/span><\/button>/);
+  assert.match(h, /<button type="button" class="ans-offer-row is-busy" disabled="" aria-busy="true"[^>]*><span class="ans-offer-row-text"><span class="ans-offer-row-what">BAFE SP203-1 Registration Certificate<\/span><span class="ans-offer-row-who">ProudCastle Fire · BAFE_SP203_1-PCFR-25<\/span><\/span><span class="ans-offer-row-act">Drafting…<i class="ph ph-circle-notch" aria-hidden="true"><\/i><\/span><\/button>/);
+  assert.match(h, /class="ans-offer-row is-done"[^>]*>.*?<span class="ans-offer-row-act">Done<i class="ph ph-check" aria-hidden="true"><\/i><\/span>/);
+});
+
 test('a pending card\'s offer does not repeat the certificate its title already names', () => {
   const h = answer();
   assert.match(h, /<button type="button" class="ans-offer is-done" aria-label="Mark reviewed — Gas Safety"><i class="ph ph-check" aria-hidden="true"><\/i><span class="ans-offer-text"><span class="ans-offer-label">Mark reviewed<\/span><\/span><\/button>/);
@@ -136,8 +168,10 @@ test('the dock and the chat page draw the one card; the dock\'s div controls are
   assert.match(chat, /<EmailComposer em=\{vals\.em\} onCancel=\{vals\.fCancel\} variant="page" done=\{vals\.fDoneText\} doneTone=\{vals\.fDoneTone\} \/>/);
   assert.match(chat, /\{vals\.emChatAt === m\.key \? draftHere : null\}/);
   assert.match(chat, /\{vals\.emChatAt === -1 \? draftHere : null\}/);
-  // The offers' one button, in all three places.
+  // The offers' one button: drawn by OfferList (an owner card's offers and the loose ones, which fold
+  // into a menu when three or more share a label) and on the pending cards.
   const ca = src('components/shell/ComplianceAnswer.jsx');
-  assert.equal((ca.match(/<OfferButton /g) || []).length, 3);
+  assert.equal((ca.match(/<OfferButton /g) || []).length, 2);
+  assert.equal((ca.match(/<OfferList /g) || []).length, 2);
   assert.doesNotMatch(ca, /className="hv13" onClick=\{o\.run\}/);
 });

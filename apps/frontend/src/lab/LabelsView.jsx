@@ -27,17 +27,25 @@ const whoOf = (e) => (e.author_email || (e.source === 'coding_agent' ? 'Coding a
   + (e.author_role ? ' (' + (ROLE[e.author_role] || e.author_role) + ')' : '');
 const atOf = (e) => (when(e.at) ? ', annotated at ' + when(e.at) : '');
 
+// A coding agent's value (3 Nov 2026): a suggestion a person accepts by setting the same value, never a person's label.
+const isSuggestion = (e) => !!e && (e.suggestion === true || e.source === 'coding_agent');
+
 // One cell as shown: the caller's value, everyone else's counted, whether people disagree, and who said what and when.
+// A coding agent's suggestion is kept apart (`suggested`): it is never counted among people's values.
 export function cellView(entries, meId) {
-  const list = (entries || []).filter((e) => e && (e.value === 'positive' || e.value === 'negative'));
+  const all = (entries || []).filter((e) => e && (e.value === 'positive' || e.value === 'negative'));
+  const sug = all.find(isSuggestion) || null;
+  const list = all.filter((e) => !isSuggestion(e));
   const mine = list.find((e) => isMine(e, meId)) || null;
   const others = list.filter((e) => e !== mine).sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
   const pos = others.filter((e) => e.value === 'positive').length;
-  return {
+  const out = {
     mine: mine ? mine.value : null, mineAt: mine ? mine.at || null : null, pos, neg: others.length - pos, others: others.length,
     disagree: new Set(list.map((e) => e.value)).size > 1,
     who: (mine ? ['You: ' + mine.value + atOf(mine)] : []).concat(others.map((e) => whoOf(e) + ': ' + e.value + atOf(e))).join('\n')
   };
+  if (sug) Object.assign(out, { suggested: sug.value, suggestedBy: whoOf(sug) + atOf(sug) });
+  return out;
 }
 
 // The matrix with the caller's value in one cell replaced (entry) or cleared (null), as a copy: everything else is kept.
@@ -143,6 +151,15 @@ function Cell({ q, mode, c, busy, onCell }) {
           );
         })}
       </div>
+      {c.suggested ? (
+        <div className="lab-lv-suggest" title={c.suggestedBy}>
+          <span>{'Suggested by agent: ' + c.suggested}</span>
+          {c.mine !== c.suggested ? (
+            <button type="button" className="lab-link" disabled={!!busy} aria-label={'Accept the suggestion ' + c.suggested + ' for ' + q.code + ', ' + mode.name}
+              onClick={() => onCell && onCell(q, mode, c.suggested)}>{'Accept'}</button>
+          ) : null}
+        </div>
+      ) : null}
       {c.others ? (
         <div className="lab-lv-others" title={c.who}>
           {c.disagree ? <span className="lab-lv-disagree">{'Disagree'}</span> : null}
@@ -158,7 +175,7 @@ function Cell({ q, mode, c, busy, onCell }) {
 // The page for one run, from what the service returned (GET /lab/runs/{code}/labels). Nothing here reads the service:
 // LabelsView does, and hands the clicks back through onCell and the onAddMode / onEditMode / onRetireMode promises.
 export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, onOpenQuestion, onAddMode, onEditMode, onRetireMode,
-  onRetry }) {
+  onRetry, waiting, onOpenLoop }) {
   const [form, setForm] = React.useState(null);        // null, { add: true }, or { mode } while one column is edited
   const [asking, setAsking] = React.useState(null);    // the column whose retirement is being confirmed
   const [modeBusy, setModeBusy] = React.useState(false);
@@ -225,6 +242,12 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
   return (
     <div className="lab-page-body lab-page-full lab-lv-page">
       {head}
+      {waiting ? (
+        <div className="lab-lv-waiting" role="status">
+          <span>{waiting + (waiting === 1 ? ' proposal waits' : ' proposals wait') + ' for a person’s decision (failure modes, the specification or expected answers).'}</span>
+          {onOpenLoop ? <button type="button" className="lab-link" onClick={onOpenLoop}>{'Open the loop'}</button> : null}
+        </div>
+      ) : null}
       <div className="lab-lv-bar">
         <span>{data.last_updated ? 'Last updated ' + when(data.last_updated) : 'No cells labelled yet'}</span>
         {questions.length && modes.length ? <span>{'You have labelled ' + mineN + ' of ' + questions.length * modes.length + ' cells'}</span> : null}
@@ -285,8 +308,15 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
 
 // Reads the run's labels, sets the caller's cells (shown at once, put back with the reason if refused) and, for the
 // platform team and the consultant, adds, edits and retires failure modes, reading the matrix again after each.
-export default function LabelsView({ me, run, onOpenQuestion }) {
+export default function LabelsView({ me, run, onOpenQuestion, onOpenLoop }) {
   const [res, setRes] = React.useState({ data: null, loading: !!run, error: '' });
+  const [waiting, setWaiting] = React.useState(0);
+  React.useEffect(() => {
+    let live = true;
+    labApi.proposals().then((p) => { if (live) setWaiting(((p && p.modes) || []).length + ((p && p.spec) || []).length + ((p && p.expected) || []).length); })
+      .catch(() => { if (live) setWaiting(0); });
+    return () => { live = false; };
+  }, [run]);
   const [saving, setSaving] = React.useState({});
   const [cellError, setCellError] = React.useState('');
   const ask = React.useRef(0);
@@ -343,6 +373,7 @@ export default function LabelsView({ me, run, onOpenQuestion }) {
 
   return (
     <LabelsMatrix run={run} data={res.data} me={me} loading={res.loading} error={cellError || res.error} saving={saving} onCell={onCell}
-      onOpenQuestion={onOpenQuestion} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)} />
+      onOpenQuestion={onOpenQuestion} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
+      waiting={waiting} onOpenLoop={onOpenLoop} />
   );
 }

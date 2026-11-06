@@ -39,6 +39,7 @@
 import { workOrderApi } from '../api/workOrder.js';
 import { isStaleScope } from '../api/client.js';
 import { isUnallocated } from './auth.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -110,6 +111,52 @@ export function shapeDecision(d) {
         + (cert.matched_on ? " · matched on " + String(cert.matched_on).replace(/_/g, " ") : "")
       : ""
   };
+}
+
+// The maintenance model as an instance without Compliance sees it (Hussain, 2 Nov 2026: a
+// module's data stays in the module). Decisions Compliance raised leave the grid, the groups,
+// the counts, the Compliance source chip and the two cards that count them; a decision forced
+// by a statutory certificate stays statutory work, without the certificate's name or expiry.
+// `ccOn` true returns the model untouched.
+export function scopeMaintenance(model, ccOn) {
+  if (ccOn || !model || !model.live) return model;
+  const isCc = (d) => d.src === "Compliance";
+  const strip = (d) => Object.assign({}, d, { statutoryNote: d.statutory ? "Statutory work" : "", ccOff: true });
+  const gone = (model.decisions || []).filter(isCc);
+  const goneBy = (st) => gone.filter((d) => d.state === st).length;
+  const less = (v, n) => (v === null || v === undefined ? v : Math.max(0, v - n));
+  const byState = Object.assign({}, model.byState);
+  Object.keys(byState).forEach((k) => { byState[k] = less(byState[k], goneBy(k)); });
+  const bySource = Object.assign({}, model.bySource);
+  delete bySource.Compliance;
+  const avail = model.available || { state: [], source: [] };
+  const groups = model.groups
+    ? model.groups.filter((g) => g.name !== "Compliance").map((g) => {
+        const out = (g.items || []).filter(isCc);
+        const by = (st) => out.filter((d) => d.state === st).length;
+        return Object.assign({}, g, {
+          n: less(g.n, out.length), blocked: less(g.blocked, by("Blocked")), toRaise: less(g.toRaise, by("To raise")),
+          deviating: less(g.deviating, by("Deviation")), awaiting: less(g.awaiting, by("Awaiting approval")),
+          items: (g.items || []).filter((d) => !isCc(d)).map(strip)
+        });
+      })
+    : null;
+  const cards = (model.cards || []).map((c) => {
+    if (!gone.length) return c;
+    if (c.k === "decisions_owed") return Object.assign({}, c, { v: less(c.v, gone.length), s: null });
+    if (c.k === "statutory") return Object.assign({}, c, { v: less(c.v, gone.filter((d) => d.statutory).length), s: null });
+    return c;
+  });
+  return Object.assign({}, model, {
+    cards: cards,
+    decisions: (model.decisions || []).filter((d) => !isCc(d)).map(strip),
+    groups: groups,
+    total: less(model.total, gone.length),
+    count: less(model.count, gone.length),
+    byState: byState,
+    bySource: bySource,
+    available: { state: avail.state || [], source: (avail.source || []).filter((k) => k !== "Compliance") }
+  });
 }
 
 // The four cards across the top. Each value is the backend's, and `null` stays null — a
@@ -352,10 +399,12 @@ export const maintenanceLiveMethods = {
     // The company the header says is being viewed. In the memo key because switching it must
     // re-shape — even though, on this service, it changes nothing about what came back.
     const acting = this.state.viewOrgId ? (this.state.viewOrgName || null) : null;
+    // An instance without Compliance leaves out the decisions Compliance raised (scopeMaintenance).
+    const ccOn = instanceShowsModule(instanceReports(this.state), "Compliance");
     const m = this._mxMemo;
-    if (m && m.raw === raw && m.acct === acct && m.acting === acting) return m.model;
-    const model = shapeLiveMaintenance(raw, acct, acting);
-    this._mxMemo = { raw: raw, acct: acct, acting: acting, model: model };
+    if (m && m.raw === raw && m.acct === acct && m.acting === acting && m.ccOn === ccOn) return m.model;
+    const model = scopeMaintenance(shapeLiveMaintenance(raw, acct, acting), ccOn);
+    this._mxMemo = { raw: raw, acct: acct, acting: acting, ccOn: ccOn, model: model };
     return model;
   },
   mxIsLive() { return !!this.state.mxRaw; },

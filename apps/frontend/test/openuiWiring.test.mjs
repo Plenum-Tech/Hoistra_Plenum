@@ -130,7 +130,7 @@ test('a dashboard answer hands its narrative to the view, and the live draft str
   assert.match(s, /\{!drawn && rich\.kpis\.length/);
   assert.match(s, /<LazyOpenUIAnswer text=\{auto\} fallbackText=\{fallbackText \|\| rich\.narrative\} streaming=\{!!live\} \/>/);
   // What runs something stays a real button.
-  assert.match(s, /looseOffers\.map/);
+  assert.match(s, /<OfferList list=\{looseOffers\}/);
   assert.match(s, /rich\.pending\.length \? \(/);
 });
 

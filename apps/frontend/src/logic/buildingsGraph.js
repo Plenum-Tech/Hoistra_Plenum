@@ -1,4 +1,5 @@
 import { energyApi } from '../api/energy.js';
+import { instanceReports, instanceShowsModule } from './instances.js';
 
 // A failed read is still an answer about this building, and re-asking will not change it.
 // The guards below used to read "cached and not an error", so an error cached one render
@@ -206,6 +207,7 @@ export const buildingsGraphMethods = {
 
   // One building's branches, each with its count or the reason it has none.
   bgBranches(b) {
+    const ccOn = instanceShowsModule(instanceReports(this.state), "Compliance");
     return BRANCHES.map((br) => {
       const shape = (node) => {
         const { n, counted } = readBranch(b, node);
@@ -224,7 +226,8 @@ export const buildingsGraphMethods = {
         };
       };
       const top = shape(br);
-      top.children = (br.children || []).map(shape);
+      // Certificates are Compliance's branch: not listed where the instance has no Compliance.
+      top.children = (br.children || []).filter((c) => c.key !== "certificates" || ccOn).map(shape);
       return top;
     });
   },

@@ -37,6 +37,9 @@ const RETRY_MAX = 6;
 // Scorecards are monthly and the queue moves on cron cycles; the Home page re-reads on the
 // same cadence.
 const REFRESH_MS = 15 * 60 * 1000;
+// A read that failed while the rest of the page answered: read again on its own (vpReadMissing).
+const VP_PARTIAL_MS = 5000;
+const VP_PARTIAL_MAX = 3;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTH_IDX = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
@@ -889,18 +892,9 @@ export const vendorsLiveMethods = {
   },
   vpIsLive() { return !!this.state.vpRaw; },
 
-  // Every read is independent: the page goes live when any contract-performance read
-  // answers, and stays empty — saying so — when none of them did.
-  async vpLoad(opts) {
-    if (this._vpLoading) return;
-    this._vpLoading = true;
-    clearTimeout(this._vpRetry);
-    clearTimeout(this._vpRefresh);
-    this.setState({ vpLoading: true });
-    // The latest migration's read, for the highlight - apart from the page's own reads, so a
-    // service that does not know the route yet cannot mark the page as partly failed.
-    opsApi.latestWorkbookExtras().then((r) => this.setState({ vpExtras: r || null })).catch(() => {});
-    const reads = {
+  // The page's own reads, by the key each is kept under in vpRaw.
+  vpReads() {
+    return {
       summary: () => opsApi.contractSummary(),
       contracts: () => opsApi.contracts(),
       weights: () => opsApi.weights(),
@@ -908,9 +902,84 @@ export const vendorsLiveMethods = {
       certificates: () => complianceApi.listCertificates({ cert_scope: "vendor" }),
       // Each vendor's newest scored month only — what the cards beside it show. A
       // portfolio-wide read under one limit let one vendor's history crowd out another's.
-      woScores: () => opsApi.woScores({ limit: 1000, latest: true })
+      // Its own longer timer: it is the slowest read on the page (14-25 s seen, 2 Nov 2026).
+      woScores: () => opsApi.woScores({ limit: 1000, latest: true }, { timeoutMs: 45000 })
     };
-    const keys = Object.keys(reads);
+  },
+
+  // The slow read of a load (wo-scores), merged into that load's page when it answers. A newer
+  // load wins; a failure is read again like any other (vpReadMissing).
+  async vpLateRead(loadedAt, late) {
+    let value = null, error = null;
+    try { value = await late; } catch (e) {
+      if (isStaleScope(e)) return;
+      error = (e && e.message) || String(e);
+    }
+    const cur = this.state.vpRaw;
+    if (!cur || cur.fetchedAt !== loadedAt) return;
+    const next = Object.assign({}, cur, { errors: Object.assign({}, cur.errors) });
+    if (error === null) { next.woScores = value; delete next.errors.woScores; }
+    else next.errors.woScores = error;
+    this.setState({ vpRaw: next });
+    if (error !== null) this.vpReadMissing();
+  },
+
+  // A read that failed while the others answered is read again on its own — a few times, a few
+  // seconds apart — instead of leaving its cards on "—" until the next refresh, fifteen minutes
+  // away (2 Nov 2026: Pending tasks, Terms on default and Contracts sat on "—" after one timeout).
+  // What answers is merged into the page's read; a full load that lands meanwhile wins.
+  vpReadMissing() {
+    const raw = this.state.vpRaw;
+    if (!raw || !raw.errors) return;
+    const reads = this.vpReads();
+    const missing = Object.keys(reads).filter((k) => raw.errors[k]);
+    if (!missing.length || (this._vpPartial || 0) >= VP_PARTIAL_MAX) return;
+    // Its own timer: sharing vpLoad's _vpRetry, a late error here cancelled a full load's retry
+    // (pre-push review, 3 Nov 2026).
+    clearTimeout(this._vpPartialTimer);
+    this._vpPartialTimer = setTimeout(async () => {
+      this._vpPartial = (this._vpPartial || 0) + 1;
+      const settled = await Promise.allSettled(missing.map((k) => reads[k]()));
+      if (settled.some((r) => r.status === "rejected" && isStaleScope(r.reason))) return;
+      // A full load replaced the read these were missing from: it is the newer one.
+      const cur = this.state.vpRaw;
+      if (!cur || cur.fetchedAt !== raw.fetchedAt) return;
+      const next = Object.assign({}, cur, { errors: Object.assign({}, cur.errors) });
+      settled.forEach((r, i) => {
+        const k = missing[i];
+        if (r.status === "fulfilled") {
+          // Kept as vpLoad keeps it: the certificate rows, not the envelope.
+          next[k] = k === "certificates" ? ((r.value && r.value.certificates) || null) : r.value;
+          delete next.errors[k];
+        } else {
+          next.errors[k] = (r.reason && r.reason.message) || String(r.reason);
+        }
+      });
+      this.setState({ vpRaw: next });
+      this.vpReadMissing();
+    }, VP_PARTIAL_MS);
+  },
+
+  // Every read is independent: the page goes live when any contract-performance read
+  // answers, and stays empty — saying so — when none of them did.
+  async vpLoad(opts) {
+    if (this._vpLoading) return;
+    this._vpLoading = true;
+    // Which load this is: a load discarded as stale (below) reads again only if no newer one started.
+    const seq = this._vpSeq = (this._vpSeq || 0) + 1;
+    clearTimeout(this._vpRetry); clearTimeout(this._vpPartialTimer);
+    clearTimeout(this._vpRefresh);
+    this.setState({ vpLoading: true });
+    // The latest migration's read, for the highlight - apart from the page's own reads, so a
+    // service that does not know the route yet cannot mark the page as partly failed.
+    opsApi.latestWorkbookExtras().then((r) => this.setState({ vpExtras: r || null })).catch(() => {});
+    const reads = this.vpReads();
+    // wo-scores is the slow one (14-25 s, 2 Nov 2026): the page is drawn from the other reads as
+    // soon as they land, and the scored work orders are merged in when it answers (vpLateRead).
+    // Waiting on it held the whole page on "Reading…" for forty seconds.
+    const late = reads.woScores();
+    late.catch(() => {});
+    const keys = Object.keys(reads).filter((k) => k !== "woScores");
     const settled = await Promise.allSettled(keys.map((k) => reads[k]()));
     const raw = { fetchedAt: new Date().toISOString(), errors: {} };
     let answered = 0;
@@ -951,7 +1020,14 @@ export const vendorsLiveMethods = {
     // A company switch mid-load: api/client.js disowned every read that was in flight and
     // loadLiveData() has already started correctly-scoped ones. Reporting these would put a
     // spurious error on the new company's register and retry against the old one.
-    if (stale) return;
+    if (stale) {
+      // A newer load started for the new company (resetLiveData cleared the guard, loadLiveData
+      // called again) replaces this one. When none did, nothing would ever clear the guard and
+      // the page sat on "Reading…" for good (2 Nov 2026) - so this one reads again, for the
+      // company now in force.
+      if (this._vpSeq === seq) { this._vpLoading = false; this.vpLoad(opts); }
+      return;
+    }
     this._vpLoading = false;
     if (!answered) {
       const msg = raw.errors[keys[0]] || "unreachable";
@@ -963,6 +1039,10 @@ export const vendorsLiveMethods = {
     }
     this._vpAttempts = 0;
     this.setState({ vpRaw: raw, vpLoading: false, vpError: "", vpLoadedAt: raw.fetchedAt });
+    // Any read that failed while the rest answered is read again on its own (vpReadMissing).
+    this._vpPartial = 0;
+    this.vpReadMissing();
+    this.vpLateRead(raw.fetchedAt, late);
     // A reload (Rebuild scorecards, the timer) can change any month's scores. The month on
     // screen is read again, its jobs staying up meanwhile; every other month is forgotten and
     // read afresh when chosen.
