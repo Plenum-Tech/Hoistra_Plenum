@@ -1,7 +1,8 @@
 "use client";
+import { useState } from "react";
 import { CheckCircle, Download, RotateCcw, BarChart3, Database, ShieldCheck } from "lucide-react";
 import type { MigrationStatusResponse } from "../../chat-api";
-import { migrationFullExportUrl } from "../../chat-api";
+import { downloadMigrationFullExport } from "../../chat-api";
 import UdrTestsPanel from "./udr-tests-panel";
 import MigrationAnalysis from "./migration-analysis";
 
@@ -15,6 +16,21 @@ interface Props {
 }
 
 export default function ResultsPanel({ migration, onReset, onRefresh, hideReset = false }: Props) {
+  // The full-table download is fetched as the signed-in person (see downloadMigrationFullExport):
+  // which format is on its way, and what went wrong if it did not arrive.
+  const [exporting, setExporting] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportAs = async (fmt: "csv" | "json" | "sql") => {
+    setExporting(fmt);
+    setExportError(null);
+    try {
+      await downloadMigrationFullExport(migration.migration_id, fmt);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(null);
+    }
+  };
   const totalMapped =
     migration.t1_mapped_count + migration.t2_auto_count + migration.t2_human_count;
   // Coverage can exceed 100% when the user adds new columns (T1_new_table /
@@ -221,18 +237,21 @@ export default function ResultsPanel({ migration, onReset, onRefresh, hideReset 
         </p>
         <div className="grid grid-cols-3 gap-2">
           {(["csv", "json", "sql"] as const).map((fmt) => (
-            <a
+            <button
               key={fmt}
-              href={migrationFullExportUrl(migration.migration_id, fmt)}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-emerald-200 bg-white text-sm text-slate-700 hover:bg-emerald-50 transition-colors"
+              type="button"
+              onClick={() => void exportAs(fmt)}
+              disabled={exporting !== null}
+              className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-emerald-200 bg-white text-sm text-slate-700 hover:bg-emerald-50 transition-colors disabled:opacity-60 disabled:cursor-wait"
             >
               <Download size={14} className="text-emerald-500" />
-              {fmt === "csv" ? "CSV (zip)" : fmt.toUpperCase()}
-            </a>
+              {exporting === fmt ? "Preparing…" : fmt === "csv" ? "CSV (zip)" : fmt.toUpperCase()}
+            </button>
           ))}
         </div>
+        {exportError && (
+          <p role="alert" className="text-xs text-rose-600 mt-2">{exportError}</p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 text-xs text-slate-400 mb-5">

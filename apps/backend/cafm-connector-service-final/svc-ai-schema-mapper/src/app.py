@@ -612,6 +612,26 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.debug else None,
     )
 
+    # ── Who is calling, and may they — every route, one place ──────────────────────────────
+    # Registered BEFORE CORS on purpose: the last middleware added is the outermost, so CORS
+    # wraps this and a 401 still carries CORS headers — a browser on another origin sees the
+    # 401 its refresh logic answers, not an opaque CORS failure. The rules and why they exist
+    # are in services/run_access.py.
+    from .services import run_access as _run_access
+
+    @app.middleware("http")
+    async def _authorize(request: Request, call_next):
+        refused = await _run_access.authorize(request)
+        if refused is not None:
+            logger.warning(
+                "access_refused",
+                method=request.method,
+                path=request.url.path,
+                status=refused.status_code,
+            )
+            return refused
+        return await call_next(request)
+
     # Add CORS middleware
     app.add_middleware(
         CORSMiddleware,
@@ -1023,15 +1043,17 @@ def create_app() -> FastAPI:
     async def start_migration_with_upload(
         file: UploadFile = File(..., description="CSV or Excel file to migrate"),
         cmms_name: str = Form("Custom", description="Source CMMS system name"),
-        organization_id: str = Form(
-            "00000000-0000-0000-0000-000000000001",
-            description="Organization UUID",
+        organization_id: str | None = Form(
+            None,
+            description="Organization UUID. Omitted: the caller's own company. Only a "
+                        "superadmin may name another.",
         ),
         building_id: str | None = Form(
             None,
             description="The building the uploader had selected. Used only for rows that "
                         "name no site of their own; a Sites sheet in the file always wins.",
         ),
+        principal: "Principal" = Depends(_run_access.starter_of),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
         """
@@ -1041,8 +1063,16 @@ def create_app() -> FastAPI:
         directly into the migration pipeline's initial state so Node 1 does not need
         to download from Azure Blob.  The graph runs in an asyncio background task.
         Poll GET /api/migration/{id}/status for progress.
+
+        The company is the caller's (a superadmin may name one), checked BEFORE the file is
+        read or stored -- a refused start must not leave an upload in blob storage. The form
+        used to default to the platform's default company, so a caller who left it out landed
+        their rows in somebody else's.
         """
-        from uuid import UUID as _UUID
+        org_uuid = _run_access.company_for(principal, organization_id)
+        # Rebound, not just checked: the graph's initial state, the tags and the metadata below
+        # all read `organization_id`, and the writer stamps the state's onto every row.
+        organization_id = str(org_uuid)
 
         # Validate file extension
         filename = file.filename or "upload.csv"
@@ -1068,14 +1098,6 @@ def create_app() -> FastAPI:
         source_blob_path = await _store_migration_source(str(migration_id), filename, file_bytes)
 
         try:
-            org_uuid = _UUID(organization_id)
-        except ValueError:
-            try:
-                org_uuid = _UUID(int=int(organization_id))
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail=f"Invalid organization_id UUID: {organization_id}")
-
-        try:
             migration_job = MigrationJob(
                 id=migration_id,
                 organization_id=org_uuid,
@@ -1095,6 +1117,7 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
             raise HTTPException(status_code=500, detail="Failed to create migration job")
+        await _run_access.record_starter(session, "migration", migration_id, principal)
 
         # Try to enqueue via ARQ; fall back to inline asyncio task
         try:
@@ -1234,15 +1257,17 @@ def create_app() -> FastAPI:
     async def start_migration_with_upload_multi(
         files: list[UploadFile] = File(..., description="CSV/Excel files to migrate as ONE job"),
         cmms_name: str = Form("Custom", description="Source CMMS system name"),
-        organization_id: str = Form(
-            "00000000-0000-0000-0000-000000000001",
-            description="Organization UUID",
+        organization_id: str | None = Form(
+            None,
+            description="Organization UUID. Omitted: the caller's own company. Only a "
+                        "superadmin may name another.",
         ),
         building_id: str | None = Form(
             None,
             description="The building the uploader had selected. Used only for rows that "
                         "name no site of their own; a Sites sheet in the file always wins.",
         ),
+        principal: "Principal" = Depends(_run_access.starter_of),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
         """
@@ -1255,9 +1280,13 @@ def create_app() -> FastAPI:
         """
         import io as _io
         from pathlib import Path as _Path
-        from uuid import UUID as _UUID
 
         import pandas as _pd
+
+        # Before any file is read: see start_migration_with_upload. Rebound so the graph state,
+        # tags, metadata and the background task all carry the resolved company.
+        org_uuid = _run_access.company_for(principal, organization_id)
+        organization_id = str(org_uuid)
 
         if not files:
             raise HTTPException(status_code=400, detail="No files uploaded")
@@ -1296,14 +1325,6 @@ def create_app() -> FastAPI:
         if not raw_files:
             raise HTTPException(status_code=400, detail="No files uploaded")
 
-        try:
-            org_uuid = _UUID(organization_id)
-        except ValueError:
-            try:
-                org_uuid = _UUID(int=int(organization_id))
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail=f"Invalid organization_id UUID: {organization_id}")
-
         combined_filename = ", ".join(source_names)[:240] or "combined.xlsx"
         migration_id = uuid4()
         try:
@@ -1328,6 +1349,7 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
             raise HTTPException(status_code=500, detail="Failed to create migration job")
+        await _run_access.record_starter(session, "migration", migration_id, principal)
 
         graph = get_migration_graph_instance()
         session_factory = get_session_factory()
@@ -4853,21 +4875,21 @@ def create_app() -> FastAPI:
         summary="List migrations for organization",
     )
     async def list_migrations(
-        organization_id: str = Query(..., description="Organization UUID"),
+        organization_id: Optional[str] = Query(
+            None, description="Organization UUID. Only a superadmin's is honoured; anyone else "
+                              "gets their own company, and naming another is refused."),
         status: Optional[str] = Query(None, description="Filter by status"),
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
         session: AsyncSession = Depends(get_db_session),
+        principal: "Principal" = Depends(_run_access.principal_of),
     ) -> MigrationListResponse:
-        """List all migrations for an organization, optionally filtered by status."""
+        """List migrations: the caller's company's, or -- for a user who is not an admin -- the
+        ones they started. The company used to come from the query string unchecked, and the
+        deployed list answered anyone (6 Nov 2026); see services/run_access.py."""
         try:
-            try:
-                org_id = UUID(organization_id)
-            except (ValueError, TypeError):
-                try:
-                    org_id = UUID(int=int(organization_id))
-                except (ValueError, TypeError):
-                    raise HTTPException(status_code=400, detail=f"Invalid organization_id UUID: {organization_id}")
+            org_id = _run_access.company_for(principal, organization_id)
+            mine = _run_access.only_mine(principal)
 
             # NINE COLUMNS, NOT THE WHOLE ROW.
             #
@@ -4891,16 +4913,20 @@ def create_app() -> FastAPI:
                 MigrationJob.completed_at,
             )
             query = select(*cols).where(MigrationJob.organization_id == org_id)
+            count_query = select(func.count()).select_from(MigrationJob).where(
+                MigrationJob.organization_id == org_id
+            )
+            if mine is not None:
+                if not await _run_access.has_starter_column("migration"):
+                    return MigrationListResponse(total_count=0, migrations=[])
+                query = query.where(_run_access.started_by("migration", mine))
+                count_query = count_query.where(_run_access.started_by("migration", mine))
 
             if status:
                 query = query.where(MigrationJob.status == status)
 
             # Get total count
-            count_result = await session.execute(
-                select(func.count()).select_from(MigrationJob).where(
-                    MigrationJob.organization_id == org_id
-                )
-            )
+            count_result = await session.execute(count_query)
             total_count = count_result.scalar() or 0
 
             # Fetch paginated results
@@ -6797,6 +6823,7 @@ def create_app() -> FastAPI:
     )
     async def start_schema_mapping(
         request: dict = {},
+        principal: "Principal" = Depends(_run_access.starter_of),
         session: AsyncSession = Depends(get_db_session),
     ):
         """
@@ -6826,13 +6853,17 @@ def create_app() -> FastAPI:
         from .models.migration import SchemaMappingJob
         from .services.job_progress import update_schema_mapping_job_progress
 
+        # Before the broad try below, so a refusal is a 403 and not a 500. The company used to be
+        # the request's, and a RANDOM uuid when it named none -- a run nobody's company owned.
+        resolved_org = _run_access.company_for(principal, (request or {}).get("organization_id"))
+
         schema_mapping_id = uuid4()
 
         try:
             # Extract schema mapping request parameters
             external_cmms_name = request.get("external_cmms_name", "Unknown")
             connector_type = request.get("connector_type", "upload")  # "fiix" or "upload"
-            organization_id = request.get("organization_id")
+            organization_id = str(resolved_org)
 
             # ── Fetch schema from connector ──────────────────────────────────
             schema_content = None
@@ -6930,14 +6961,7 @@ def create_app() -> FastAPI:
             # ── Step 1: Create SchemaMappingJob record in DB ──────────────────
             settings = get_settings()
 
-            # Parse organization_id, generating a UUID if not provided or invalid
-            try:
-                org_uuid = UUID(organization_id) if organization_id else uuid4()
-            except (ValueError, TypeError):
-                try:
-                    org_uuid = UUID(int=int(organization_id))
-                except (ValueError, TypeError):
-                    org_uuid = uuid4()
+            org_uuid = resolved_org
 
             job = SchemaMappingJob(
                 id=schema_mapping_id,
@@ -6956,6 +6980,7 @@ def create_app() -> FastAPI:
             session.add(job)
             await session.commit()
             logger.info(f"[Schema Mapping] Created job record: {schema_mapping_id}")
+            await _run_access.record_starter(session, "schema-mapping", schema_mapping_id, principal)
 
             # Initialize state for the schema mapping pipeline
             # db_url is the plenum_cafm database URL (for Node 0 canonical schema fetch)
@@ -7254,34 +7279,35 @@ def create_app() -> FastAPI:
         summary="List schema mapping sessions",
     )
     async def list_schema_mappings(
-        organization_id: Optional[str] = Query(None, description="Filter by organization UUID"),
+        organization_id: Optional[str] = Query(
+            None, description="Organization UUID. Only a superadmin's is honoured."),
         status: Optional[str] = Query(None, description="Filter by status (e.g. complete, awaiting_review, error)"),
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
         session: AsyncSession = Depends(get_db_session),
+        principal: "Principal" = Depends(_run_access.principal_of),
     ):
-        """List all schema mapping sessions, optionally filtered by organization or status."""
+        """List schema mapping sessions: the caller's company's, or the ones they started.
+
+        Without organization_id this used to list EVERY company's runs. The company is now
+        always the caller's (a superadmin may name one) -- see services/run_access.py."""
         from .models.migration import SchemaMappingJob
 
         try:
-            query = select(SchemaMappingJob)
-
-            if organization_id:
-                try:
-                    _org_filter_uuid = UUID(organization_id)
-                except (ValueError, TypeError):
-                    try:
-                        _org_filter_uuid = UUID(int=int(organization_id))
-                    except (ValueError, TypeError):
-                        raise HTTPException(status_code=400, detail="Invalid organization_id UUID")
-                query = query.where(SchemaMappingJob.organization_id == _org_filter_uuid)
+            _org_filter_uuid = _run_access.company_for(principal, organization_id)
+            mine = _run_access.only_mine(principal)
+            query = select(SchemaMappingJob).where(SchemaMappingJob.organization_id == _org_filter_uuid)
+            count_query = select(func.count()).select_from(SchemaMappingJob).where(
+                SchemaMappingJob.organization_id == _org_filter_uuid)
+            if mine is not None:
+                if not await _run_access.has_starter_column("schema-mapping"):
+                    return {"total_count": 0, "limit": limit, "offset": offset, "sessions": []}
+                query = query.where(_run_access.started_by("schema-mapping", mine))
+                count_query = count_query.where(_run_access.started_by("schema-mapping", mine))
 
             if status:
                 query = query.where(SchemaMappingJob.status == status)
 
-            count_query = select(func.count()).select_from(SchemaMappingJob)
-            if organization_id:
-                count_query = count_query.where(SchemaMappingJob.organization_id == _org_filter_uuid)
             if status:
                 count_query = count_query.where(SchemaMappingJob.status == status)
 
@@ -8917,6 +8943,7 @@ def create_app() -> FastAPI:
         organization_id: str = None,
         created_by: str = "system",
         schema_mapping_id: str = None,
+        principal: "Principal" = Depends(_run_access.starter_of),
         session: AsyncSession = Depends(get_db_session),
     ) -> dict:
         """
@@ -8936,32 +8963,22 @@ def create_app() -> FastAPI:
         Poll `GET /api/fiix-ingestion/{ingestion_id}` for progress.
         Credentials are read from FIIX_* environment variables.
         """
-        from .models.migration import FiixIngestionJob, SchemaMappingJob
+        from .models.migration import FiixIngestionJob
         from .worker import run_fiix_data_ingestion
 
-        # Resolve organization_id — prefer explicit param, fall back to schema mapping job
-        org_uuid: UUID | None = None
-        if organization_id:
-            try:
-                org_uuid = UUID(organization_id)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid organization_id UUID")
-
-        if org_uuid is None and schema_mapping_id:
-            try:
-                sm_result = await session.execute(
-                    select(SchemaMappingJob).where(SchemaMappingJob.id == UUID(schema_mapping_id))
-                )
-                sm_job = sm_result.scalar_one_or_none()
-                if sm_job and sm_job.organization_id:
-                    org_uuid = sm_job.organization_id
-            except Exception:
-                pass
-
-        # Final fallback — nil UUID (job still runs, org tracking is best-effort)
-        if org_uuid is None:
-            org_uuid = UUID("00000000-0000-0000-0000-000000000000")
+        # The company is the caller's -- or, for a superadmin who names none, the company of the
+        # schema mapping it writes through. It used to be whatever the request said, then that
+        # mapping's company, then the nil UUID. And the mapping must be one this caller may act
+        # on: naming another company's would pour Fiix data through that company's schema.
+        sm_org = None
+        if schema_mapping_id:
+            sm_org = await _run_access.require_run(principal, "schema-mapping", schema_mapping_id)
+        org_uuid = _run_access.company_for(
+            principal, organization_id or (str(sm_org) if sm_org and principal.is_superadmin else None))
+        if sm_org is not None and str(sm_org) != str(org_uuid):
+            raise HTTPException(status_code=400, detail="That schema mapping belongs to another company.")
         organization_id = str(org_uuid)
+        created_by = principal.email or str(principal.user_id)
 
         ingestion_id = uuid4()
 
@@ -8974,6 +8991,7 @@ def create_app() -> FastAPI:
         )
         session.add(job)
         await session.commit()
+        await _run_access.record_starter(session, "fiix-ingestion", ingestion_id, principal)
 
         # Enqueue ARQ background task
         try:
@@ -9067,24 +9085,25 @@ def create_app() -> FastAPI:
         summary="List recent Fiix ingestion jobs",
     )
     async def list_fiix_ingestion_jobs(
-        organization_id: str,
+        organization_id: Optional[str] = None,
         limit: int = Query(20, ge=1, le=100),
         session: AsyncSession = Depends(get_db_session),
+        principal: "Principal" = Depends(_run_access.principal_of),
     ) -> dict:
-        """Return the most recent Fiix ingestion jobs for an organization."""
+        """The most recent Fiix ingestion jobs: the caller's company's, or the ones they started.
+        The company used to come from the query string unchecked."""
         from .models.migration import FiixIngestionJob
         from sqlalchemy import desc
 
-        try:
-            org_uuid = UUID(organization_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid organization_id UUID")
-
+        org_uuid = _run_access.company_for(principal, organization_id)
+        mine = _run_access.only_mine(principal)
+        query = select(FiixIngestionJob).where(FiixIngestionJob.organization_id == org_uuid)
+        if mine is not None:
+            if not await _run_access.has_starter_column("fiix-ingestion"):
+                return {"jobs": [], "total": 0}
+            query = query.where(_run_access.started_by("fiix-ingestion", mine))
         result = await session.execute(
-            select(FiixIngestionJob)
-            .where(FiixIngestionJob.organization_id == org_uuid)
-            .order_by(desc(FiixIngestionJob.created_at))
-            .limit(limit)
+            query.order_by(desc(FiixIngestionJob.created_at)).limit(limit)
         )
         jobs = result.scalars().all()
 

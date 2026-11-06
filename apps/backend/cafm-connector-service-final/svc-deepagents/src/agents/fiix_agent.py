@@ -31,6 +31,7 @@ from langchain_core.tools import tool
 
 
 from ..config import settings
+from ..http_client import caller_headers
 
 from .meta_tools import get_session_context
 
@@ -377,7 +378,7 @@ async def test_fiix_connection() -> dict:
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
 
         ) as client:
 
@@ -435,7 +436,7 @@ async def fetch_fiix_schema() -> dict:
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT_SCHEMA, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_SCHEMA, follow_redirects=True
 
         ) as client:
 
@@ -583,7 +584,7 @@ async def start_fiix_schema_mapping(
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT_SCHEMA, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_SCHEMA, follow_redirects=True
 
         ) as client:
 
@@ -663,7 +664,7 @@ async def get_schema_mapping_status(schema_mapping_id: str) -> dict:
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
 
         ) as client:
 
@@ -735,7 +736,7 @@ async def start_fiix_ingestion(
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
 
         ) as client:
 
@@ -779,7 +780,7 @@ async def get_fiix_ingestion_status(ingestion_id: str) -> dict:
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
 
         ) as client:
 
@@ -813,7 +814,7 @@ async def list_fiix_ingestion_jobs(
 
         async with httpx.AsyncClient(
 
-            base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
 
         ) as client:
 

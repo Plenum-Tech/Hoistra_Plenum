@@ -16,6 +16,7 @@ import structlog
 from langchain_core.tools import tool
 
 from ..config import settings
+from ..http_client import caller_headers
 from .meta_tools import get_session_context
 
 log = structlog.get_logger(__name__)
@@ -184,7 +185,7 @@ async def continue_schema_mapping_gate(
     if st in ("ingest", "running", "processing", "pending", "advancing") and progress < 5.0:
         try:
             async with httpx.AsyncClient(
-                base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+                base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
             ) as client:
                 kick_resp = await client.post(f"/api/schema-mapping/{sm_id}/kick")
                 if kick_resp.status_code < 400:
@@ -201,7 +202,7 @@ async def continue_schema_mapping_gate(
     if st == "step_paused":
         try:
             async with httpx.AsyncClient(
-                base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+                base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
             ) as client:
                 resp = await client.post(f"/api/schema-mapping/{sm_id}/advance", json={})
                 resp.raise_for_status()
@@ -284,7 +285,7 @@ async def continue_schema_mapping_gate(
 
     try:
         async with httpx.AsyncClient(
-            base_url=_BASE, timeout=_TIMEOUT, follow_redirects=True
+            base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT, follow_redirects=True
         ) as client:
             resp = await client.post(
                 f"/api/schema-mapping/{sm_id}{path}",

@@ -21,6 +21,7 @@ from .session_workspace import (
     set_ingestion_mode_structured,
 )
 from ..config import settings
+from ..http_client import caller_headers
 from ..http_client import request as _request
 from .doc_rag_agent import (
     get_document_metadata,
@@ -594,6 +595,7 @@ async def start_schema_mapping_from_file(
     try:
         async with httpx.AsyncClient(
             base_url=settings.migration_base_url,
+            headers=caller_headers(),
             timeout=1800.0,
             follow_redirects=True,
         ) as client:

@@ -48,6 +48,21 @@ PATCHES: list[tuple[str, str]] = [
         "output_structure_md_url",
         "ALTER TABLE plenum_cafm.migration_jobs ADD COLUMN IF NOT EXISTS output_structure_md_url TEXT",
     ),
+    # Who started a run. Without it, "a user sees the runs they started" cannot be enforced, and
+    # the run list is either the whole company's or nobody's (6 Nov 2026). Nullable: runs from
+    # before this have no starter, and only an admin sees those -- see services/run_access.py.
+    (
+        "migration_jobs.started_by_user_id",
+        "ALTER TABLE plenum_cafm.migration_jobs ADD COLUMN IF NOT EXISTS started_by_user_id UUID",
+    ),
+    (
+        "schema_mapping_jobs.started_by_user_id",
+        "ALTER TABLE plenum_cafm.schema_mapping_jobs ADD COLUMN IF NOT EXISTS started_by_user_id UUID",
+    ),
+    (
+        "fiix_ingestion_jobs.started_by_user_id",
+        "ALTER TABLE plenum_cafm.fiix_ingestion_jobs ADD COLUMN IF NOT EXISTS started_by_user_id UUID",
+    ),
 ]
 
 

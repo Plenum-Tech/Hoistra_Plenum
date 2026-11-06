@@ -27,6 +27,13 @@
 -- Where there is more than one company nothing happens: which company an unplaced row
 -- belongs to is then a question about the data, and a wrong guess hands one tenant's
 -- readings to another.
+--
+-- Runs on every start, as it always has, so a NULL written since the last start is still
+-- filled; the migration ledger never skips it (the line below). It takes no lock that blocks
+-- a reader or a writer -- row-level UPDATEs only, and on a platform with more than one
+-- company it returns before touching anything.
+--
+-- ledger: every-start
 
 DO $$
 DECLARE

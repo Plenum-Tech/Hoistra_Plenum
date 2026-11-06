@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -74,7 +75,10 @@ async def init_db() -> None:
         if swept:
             log.warning("db.invalid_indexes_dropped", indexes=swept,
                         note="left unfinished by an earlier concurrent build; rebuilding")
-        retry = await apply_sql_migrations()
+        # An index swept away has to be rebuilt by the file that declares it, and the ledger
+        # cannot say which file that is -- so a start that swept one runs everything, the way
+        # every start did before the ledger.
+        retry = await apply_sql_migrations(use_ledger=not swept)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # Retried until nothing more succeeds, not just once. Filename order does not express
@@ -341,21 +345,37 @@ async def _drop_invalid_indexes() -> list[str]:
 
 async def apply_sql_migrations(
     only: list[Path] | None = None,
+    use_ledger: bool = True,
 ) -> dict[Path, str]:
     """Apply the idempotent *.sql migrations in filename order.
 
     Returns {file: last error} for every file that had at least one statement fail, so the
     caller can retry them once the ORM tables exist — and, when they still fail, say why
     rather than just which. ``only`` restricts the run to a previous pass's failures.
+
+    A file the ledger records as applied with its current statements is skipped outright: no
+    statement runs, so no lock is taken. ``use_ledger=False`` (or MIGRATIONS_LEDGER=0) runs
+    every file regardless, which is how every start behaved before 6 Nov 2026.
     """
     if not _MIGRATIONS_DIR.exists():
         log.warning("db.migration.dir_missing", path=str(_MIGRATIONS_DIR))
         return []
     files = list(only) if only is not None else sorted(_MIGRATIONS_DIR.glob("*.sql"))
     total = 0
+    skipped = 0
     failed: dict[Path, str] = {}
+    ledger = await _ledger_read() if use_ledger and settings.migrations_ledger else None
     for mig in files:
-        statements = _split_sql(mig.read_text(encoding="utf-8"))
+        source = mig.read_text(encoding="utf-8")
+        statements = _split_sql(source)
+        checksum = _statements_checksum(statements)
+        every_start = bool(_EVERY_START.search(source))
+        if ledger is not None and not every_start and ledger.get(mig.name) == checksum:
+            # Applied before, with exactly these statements: running them again changes
+            # nothing and takes the locks anyway.
+            skipped += 1
+            continue
+        file_failed = False
         for stmt in statements:
             # Each statement in its OWN transaction: one bad statement (e.g. a
             # PL/pgSQL dollar-quoted block that _split_sql can't split cleanly) must
@@ -376,15 +396,192 @@ async def apply_sql_migrations(
                 # retries. What must not be tolerated is a failure that survives the
                 # retries — that is handled in init_db.
                 failed[mig] = str(exc)[:300]
+                file_failed = True
                 log.warning(
                     "db.migration.stmt_skipped",
                     file=mig.name,
                     error=str(exc)[:300],
                 )
         log.info("db.migration.file_applied", file=mig.name, statements=len(statements))
+        # 'applied' only when EVERY statement succeeded. A file that failed part-way is recorded
+        # as failed with its error, and -- not being applied -- runs again on the next start,
+        # exactly as before the ledger.
+        if ledger is not None:
+            await _ledger_record(mig.name, checksum, len(statements),
+                                 error=failed[mig] if file_failed else None)
     log.info("db.migration.applied", statements=total, files=len(files),
-             files_with_failures=len(failed))
+             files_with_failures=len(failed), skipped_by_ledger=skipped,
+             ledger="off" if ledger is None else "on")
     return failed
+
+
+#: A file that must run on every start says so on a line of its own. Only for files whose result
+#: depends on what is in the database rather than on their own text -- udr_scoped_views.sql builds a
+#: view per table from information_schema, so a table added since the last start needs it to run.
+#: Such a file must then be cheap and lock-free when there is nothing to do; the ledger cannot
+#: make it so.
+_EVERY_START = re.compile(r"^--\s*ledger:\s*every-start\s*$", re.IGNORECASE | re.MULTILINE)
+
+#: One row per migration file: what its last attempt did. `status` is 'applied' only when every
+#: statement succeeded; 'failed' keeps the error, so whether a file is stuck -- and why -- can be
+#: read live (GET /api/superadmin/migrations) instead of from a log that scrolled away.
+_LEDGER_DDL = """
+CREATE TABLE IF NOT EXISTS plenum_cafm.ops_schema_migrations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename        TEXT NOT NULL UNIQUE,
+    checksum        TEXT NOT NULL,
+    statements      INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'applied' CHECK (status IN ('applied', 'failed')),
+    last_error      TEXT,
+    applied_at      TIMESTAMPTZ,
+    last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    applied_by      TEXT
+)
+"""
+
+
+def _statements_checksum(statements: list[str]) -> str:
+    """What the file would EXECUTE, not how it is written.
+
+    Hashed after the splitter has dropped full-line comments and with whitespace collapsed, so
+    a comment or a re-indent does not count as a change -- otherwise every edit to the prose
+    these files carry would re-run them, locks and all. A changed statement does count.
+    """
+    h = hashlib.sha256()
+    for stmt in statements:
+        h.update(" ".join(stmt.split()).encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+async def _ledger_read() -> dict[str, str] | None:
+    """{filename: checksum} for every file applied before, or None to run everything.
+
+    Why it exists (6 Nov 2026): every start re-ran all fifty files, and measured against a copy
+    of hoistra_test's own schema that was 305 table locks -- 215 of them exclusive locks on the
+    plenum_scoped views every scoped read goes through -- on a database that needed none of
+    them. A reader holding any of those tables queued the start behind it, and a waiting
+    exclusive lock queues every new reader behind IT. Three times that took the identity service
+    down for a quarter of an hour (17 Sep, 6 Oct, 6 Nov), each time with someone else's long
+    query holding plenum_cafm.users.
+
+    Any failure here -- no permission to create the table, a database that refuses it -- falls
+    back to running every file, which is what the service did before. The ledger is an
+    optimisation of a run that is already idempotent; it is never a reason not to start.
+    """
+    from sqlalchemy import text as _text
+    try:
+        await _run_ddl_statement(_LEDGER_DDL)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(_text(
+                "SELECT filename, checksum FROM plenum_cafm.ops_schema_migrations"
+                " WHERE status = 'applied'"))).all()
+        return {r[0]: r[1] for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("db.migration.ledger_unavailable", error=str(exc)[:200],
+                    note="running every migration file, as before the ledger")
+        return None
+
+
+async def _ledger_record(filename: str, checksum: str, statements: int,
+                         error: str | None = None) -> None:
+    """Record a file's last attempt. A failure keeps the previous applied_at: 'it last worked
+    at X, and has failed since' is more useful than losing when it last worked."""
+    from sqlalchemy import text as _text
+    ok = error is None
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(_text(
+                "INSERT INTO plenum_cafm.ops_schema_migrations "
+                "  (filename, checksum, statements, status, last_error, applied_at, applied_by) "
+                "VALUES (:f, :c, :n, :s, :e, CASE WHEN :ok THEN now() END, "
+                "        current_setting('application_name', true)) "
+                "ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum, "
+                "  statements = EXCLUDED.statements, status = EXCLUDED.status, "
+                "  last_error = EXCLUDED.last_error, last_attempt_at = now(), "
+                "  applied_at = COALESCE(EXCLUDED.applied_at, plenum_cafm.ops_schema_migrations.applied_at), "
+                "  applied_by = EXCLUDED.applied_by"),
+                {"f": filename, "c": checksum, "n": statements,
+                 "s": "applied" if ok else "failed", "e": None if ok else error[:1000], "ok": ok})
+    except Exception as exc:  # noqa: BLE001 - an unrecorded file just runs again next start
+        log.warning("db.migration.ledger_record_failed", file=filename, error=str(exc)[:200])
+
+
+async def migration_status() -> dict:
+    """Every migration file in this build, and where this database stands with it.
+
+        applied      ran in full, with the statements the file has now; skipped on start
+        changed      ran in full once, but its statements have changed since; runs next start
+        failed       the last attempt failed; last_error says why; runs again next start
+        pending      never recorded on this database; runs next start
+        every-start  declared to run on every start (see _EVERY_START)
+        removed      recorded in the ledger, no longer in this build
+
+    Read-only: one SELECT on the ledger and the files on disk. The HTTP route over this answers
+    only once the service is up; during a start, the ledger table itself shows progress, each
+    file's row being written as that file finishes.
+    """
+    from sqlalchemy import text as _text
+    rows: dict[str, dict] = {}
+    ledger_error = None
+    try:
+        async with engine.connect() as conn:
+            exists = (await conn.execute(_text(
+                "SELECT to_regclass('plenum_cafm.ops_schema_migrations')"))).scalar()
+            if exists:
+                result = await conn.execute(_text(
+                    "SELECT filename, checksum, statements, status, last_error, applied_at,"
+                    "       last_attempt_at, applied_by"
+                    "  FROM plenum_cafm.ops_schema_migrations"))
+                rows = {r["filename"]: dict(r) for r in result.mappings()}
+    except Exception as exc:  # noqa: BLE001
+        ledger_error = str(exc)[:200]
+
+    files = sorted(_MIGRATIONS_DIR.glob("*.sql")) if _MIGRATIONS_DIR.exists() else []
+    out = []
+    for f in files:
+        source = f.read_text(encoding="utf-8")
+        statements = _split_sql(source)
+        checksum = _statements_checksum(statements)
+        row = rows.pop(f.name, None)
+        if _EVERY_START.search(source):
+            state = "every-start"
+        elif row is None:
+            state = "pending"
+        elif row["status"] == "failed":
+            state = "failed"
+        elif row["checksum"] != checksum:
+            state = "changed"
+        else:
+            state = "applied"
+        out.append({
+            "file": f.name, "status": state, "statements": len(statements),
+            "last_error": row["last_error"] if row else None,
+            "applied_at": row["applied_at"].isoformat() if row and row["applied_at"] else None,
+            "last_attempt_at": (row["last_attempt_at"].isoformat()
+                                if row and row["last_attempt_at"] else None),
+            "applied_by": row["applied_by"] if row else None,
+        })
+    for name, row in sorted(rows.items()):
+        out.append({"file": name, "status": "removed", "statements": row["statements"],
+                    "last_error": row["last_error"],
+                    "applied_at": row["applied_at"].isoformat() if row["applied_at"] else None,
+                    "last_attempt_at": (row["last_attempt_at"].isoformat()
+                                        if row["last_attempt_at"] else None),
+                    "applied_by": row["applied_by"]})
+    counts: dict[str, int] = {}
+    for item in out:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return {
+        "ledger": "off" if not settings.migrations_ledger else "on",
+        "ledger_error": ledger_error,
+        "counts": counts,
+        # What the NEXT start will run: everything not applied. Zero here means a restart
+        # takes no migration locks at all, apart from the every-start files' own reads.
+        "will_run_next_start": [i["file"] for i in out
+                                if i["status"] in ("pending", "changed", "failed", "every-start")],
+        "files": out,
+    }
 
 
 async def apply_sql_seed(name: str) -> int:

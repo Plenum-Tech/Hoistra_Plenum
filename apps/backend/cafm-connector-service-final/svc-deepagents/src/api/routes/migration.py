@@ -16,8 +16,10 @@ Typical REST flow:
   GET  /api/migration                          → list all runs
 """
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from ...services.principal import current_principal
 
 from ...agents.migration_agent import (
     start_migration,
@@ -32,7 +34,12 @@ from ...agents.migration_agent import (
 )
 
 log = structlog.get_logger(__name__)
-router = APIRouter(prefix="/api/migration", tags=["Migration"])
+# A signed-in caller on every route. These answered anyone until 6 Nov 2026, and /start reads a
+# server-side file_path -- with the schema-mapper's source route open, that was every secret in
+# the image (/app/.env) for the asking. The caller's token also travels on to the schema-mapper
+# (http_client.caller_headers), which now decides what each person may see and do.
+router = APIRouter(prefix="/api/migration", tags=["Migration"],
+                   dependencies=[Depends(current_principal)])
 
 
 def _raise_if_error(result: dict) -> dict:

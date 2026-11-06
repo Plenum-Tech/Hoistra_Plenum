@@ -177,6 +177,14 @@ class Settings(BaseSettings):
             "MIGRATIONS_ALLOWED_TO_FAIL", "migrations_allowed_to_fail"),
     )
 
+    #: Skip a migration file the ledger says was applied with these exact statements. Off runs
+    #: every file on every start, which is what happened before 6 Nov 2026 -- and why a start
+    #: took 305 table locks on a database that needed none of them. See db._ledger_read.
+    migrations_ledger: bool = Field(
+        True,
+        validation_alias=AliasChoices("MIGRATIONS_LEDGER", "migrations_ledger"),
+    )
+
     public_base_url: str = Field(
         "http://localhost:8009",
         validation_alias=AliasChoices("PUBLIC_BASE_URL", "public_base_url"),

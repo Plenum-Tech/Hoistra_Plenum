@@ -75,7 +75,17 @@ BEGIN
     -- already has a default; handing it gen_random_uuid() is a type error, and on a
     -- runner that reports failures loudly that stops the service rather than being
     -- shrugged off.
-    IF plenum_cafm._auth_users_key_type() = 'uuid' THEN
+    --
+    -- And only where the default is not ALREADY gen_random_uuid(). Setting it again changes
+    -- nothing and takes an exclusive lock on users to do it; this exact block, re-run on every
+    -- start, is the ALTER caught waiting on 17 Sep 2026 with twenty token checks queued behind
+    -- it, and again on 6 Nov. The lock timeout added after the first only made it give up
+    -- sooner. Asking the catalogue costs no lock on users.
+    IF plenum_cafm._auth_users_key_type() = 'uuid'
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'plenum_cafm' AND table_name = 'users'
+                          AND column_name = 'id'
+                          AND column_default = 'gen_random_uuid()') THEN
         ALTER TABLE plenum_cafm.users ALTER COLUMN id SET DEFAULT gen_random_uuid();
     END IF;
 END

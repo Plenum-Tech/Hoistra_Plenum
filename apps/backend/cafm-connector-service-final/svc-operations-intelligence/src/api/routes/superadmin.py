@@ -5,6 +5,7 @@
     GET  /api/superadmin/companies/{id}                  one company's usage card
     POST /api/superadmin/companies/{id}/invite-admin     send the administrator invitation
     GET  /api/superadmin/credits                         credit consumption across companies
+    GET  /api/superadmin/migrations                      every migration file and its status here
     GET  /api/superadmin/platform-cost?month=            per company: model $ (chat, migration), credits, margin
     GET  /api/superadmin/platform-cost/{id}?month=       one company split by query type, agent, model, tool, day, run
 
@@ -244,6 +245,22 @@ async def credits(
                            "credits_this_month": r["credits_this_month"]} for r in rows],
             "billing_note": ("Usage-led: platform activity, API requests and credits, with no "
                              "seat limit. More users simply consume more.")}
+
+
+@router.get("/migrations")
+async def migrations(
+    _: token_engine.Principal = Depends(require_superadmin),
+):
+    """Every migration file in this build and where this database stands with it: applied,
+    changed, failed (with the error), pending, every-start. `will_run_next_start` is what a
+    restart would execute -- empty means a restart takes no migration locks. Read-only.
+    Superadmin: the schema is the platform's, not any one company's.
+
+    This answers once the service is up. While a start is still migrating, or when a start has
+    refused to serve, read plenum_cafm.ops_schema_migrations directly: each file's row is
+    written as that file finishes, so last_attempt_at shows the run's progress live."""
+    from ...db import migration_status
+    return {"ok": True, **await migration_status()}
 
 
 @router.get("/platform-cost")

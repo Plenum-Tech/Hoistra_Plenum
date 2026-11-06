@@ -41,6 +41,20 @@
 -- schema change is the intended way to refresh, since this generates from information_schema
 -- rather than from a hardcoded list.
 --
+-- So this file runs on EVERY start; the migration ledger never skips it (the line below). That
+-- makes it this file's own job to be cheap when nothing has changed — and until 6 Nov 2026 it
+-- was not: it replaced all ~215 views on every start, each under an exclusive lock, and these
+-- views are what every scoped agent read goes through. A reader on any one of them queued the
+-- start, and the waiting lock queued every later reader behind it.
+--
+-- Now a view is left alone when it is already current: its comment carries a fingerprint of the
+-- body it was built from, and its columns match its table's. Both are catalogue reads, which
+-- take no lock on the view. A new table, a table whose columns changed, or a change to how the
+-- body is written (every fingerprint changes) is rebuilt as before. The fingerprint is stamped
+-- only after a build succeeds, so a failed rebuild is never mistaken for a current view.
+--
+-- ledger: every-start
+--
 -- NOTE ON ENFORCEMENT. This restricts what the scoped views return. It does not revoke the
 -- application role's access to plenum_cafm itself, because every other service writes there
 -- with the same credentials. svc-udr rewrites qualified plenum_cafm references to plenum_scoped
@@ -56,6 +70,9 @@ DECLARE
     has_bld     boolean;
     conds       text[];
     body        text;
+    fp          text;
+    vid         oid;
+    tid         oid;
 BEGIN
     FOR r IN
         SELECT table_name
@@ -99,9 +116,27 @@ BEGIN
                  || ' OR (' || array_to_string(conds, ' AND ') || ')';
         END IF;
 
+        -- Already current: built from this exact body, with its table's columns as they are
+        -- now. to_regclass, obj_description and pg_attribute are catalogue reads and take no
+        -- lock on the view, so a current view costs nothing and blocks nobody.
+        fp  := 'udr_scoped ' || md5(body);
+        vid := to_regclass('plenum_scoped.' || quote_ident(r.table_name));
+        tid := to_regclass('plenum_cafm.' || quote_ident(r.table_name));
+        IF vid IS NOT NULL
+           AND obj_description(vid, 'pg_class') = fp
+           AND (SELECT string_agg(attname || ':' || atttypid, ',' ORDER BY attnum)
+                  FROM pg_attribute WHERE attrelid = vid AND attnum > 0 AND NOT attisdropped)
+             = (SELECT string_agg(attname || ':' || atttypid, ',' ORDER BY attnum)
+                  FROM pg_attribute WHERE attrelid = tid AND attnum > 0 AND NOT attisdropped)
+        THEN
+            CONTINUE;
+        END IF;
+
         BEGIN
             EXECUTE 'CREATE OR REPLACE VIEW plenum_scoped.' || quote_ident(r.table_name)
                  || ' AS ' || body;
+            EXECUTE 'COMMENT ON VIEW plenum_scoped.' || quote_ident(r.table_name)
+                 || ' IS ' || quote_literal(fp);
         EXCEPTION WHEN OTHERS THEN
             -- One unviewable table must not stop the other 223. CREATE OR REPLACE VIEW cannot
             -- change an existing view's column list, so a table that gained a column since the
@@ -111,6 +146,8 @@ BEGIN
                      || ' CASCADE';
                 EXECUTE 'CREATE VIEW plenum_scoped.' || quote_ident(r.table_name)
                      || ' AS ' || body;
+                EXECUTE 'COMMENT ON VIEW plenum_scoped.' || quote_ident(r.table_name)
+                     || ' IS ' || quote_literal(fp);
             EXCEPTION WHEN OTHERS THEN
                 RAISE WARNING 'plenum_scoped: skipped %: %', r.table_name, SQLERRM;
             END;

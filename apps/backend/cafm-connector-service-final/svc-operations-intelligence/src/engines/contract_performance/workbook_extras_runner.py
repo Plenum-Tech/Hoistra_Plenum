@@ -101,16 +101,41 @@ async def _finish(session: AsyncSession, migration_id: str, st: str, summary: di
     await session.commit()
 
 
-async def _source(migration_id: str) -> bytes | None:
-    import httpx
+async def _source(session: AsyncSession, migration_id: str) -> bytes | None:
+    """The run's uploaded workbook, read from storage directly. None when none was stored.
 
-    url = f"{settings.schema_mapper_base_url.rstrip('/')}/api/migration/{migration_id}/source"
-    async with httpx.AsyncClient(timeout=180) as client:
-        res = await client.get(url)
-    if res.status_code == 404:
+    This used to fetch it over HTTP from the schema-mapper's /source route, with no token --
+    which only worked because that route answered anyone, the internet included (6 Nov 2026).
+    The route now asks who is calling, and a sweep has nobody to be. It needs no route anyway:
+    the route reads migration_jobs.source_blob_url and downloads the blob, and this service
+    shares that table and holds the same storage credentials. A storage failure raises, so the
+    sweep records it and tries again, as a failed fetch did before."""
+    import re as _re
+
+    row = (await session.execute(text(
+        "SELECT source_blob_url FROM plenum_cafm.migration_jobs WHERE id::text = :m"),
+        {"m": str(migration_id)})).first()
+    ref = ((row[0] if row else None) or "").strip()
+    # The sentinels the schema-mapper writes when nothing was persisted.
+    if not ref or ref in ("direct_upload", "direct_upload_multi"):
         return None
-    res.raise_for_status()
-    return res.content
+    conn = (settings.azure_storage_connection_string or "").strip()
+    if not conn:
+        raise RuntimeError("blob storage is not configured, so the workbook cannot be read")
+    # A full https URL (older runs) or a container-relative path (uploads) -- normalised the
+    # way the schema-mapper's own /source route does.
+    m = _re.match(r"^https?://[^/]+/[^/]+/(.+)$", ref)
+    blob_path = m.group(1) if m else ref
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.storage.blob.aio import BlobServiceClient
+
+    async with BlobServiceClient.from_connection_string(conn) as svc:
+        bc = svc.get_blob_client(container=settings.azure_blob_container_name, blob=blob_path)
+        try:
+            stream = await bc.download_blob()
+        except ResourceNotFoundError:
+            return None
+        return await stream.readall()
 
 
 async def process(session: AsyncSession, *, migration_id: str, organization_id: UUID | str | None,
@@ -122,7 +147,7 @@ async def process(session: AsyncSession, *, migration_id: str, organization_id: 
         return {"ok": True, "claimed": False, **(await status(session, migration_id) or {})}
     log.info("workbook_extras_run.start", migration_id=str(migration_id), trigger=trigger)
     try:
-        content = await _source(str(migration_id))
+        content = await _source(session, str(migration_id))
         if content is None:
             res: dict[str, Any] = {"ok": True, "found": False, "reason": "the migration's source file was not stored"}
         else:

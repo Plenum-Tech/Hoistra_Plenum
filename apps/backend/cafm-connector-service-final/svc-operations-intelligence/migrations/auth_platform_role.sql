@@ -52,7 +52,21 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_users_platform_role
 -- role is a job title again, so the closed set must come off it. Left in place it would
 -- reject the next person hired as a 'Quality Inspector' on a database that happens to
 -- have had the constraint applied when the column was empty.
-ALTER TABLE plenum_cafm.users DROP CONSTRAINT IF EXISTS ck_users_role;
+--
+-- Asked of the catalogue first, not left to IF EXISTS: `DROP CONSTRAINT IF EXISTS` takes the
+-- exclusive lock on users BEFORE it discovers there is nothing to drop. With the constraint
+-- long gone, that bare statement queued every start behind any reader of users -- and a
+-- waiting exclusive lock queues every token check behind IT. It took the identity service
+-- down on 6 Nov 2026 for a quarter of an hour, blocked by somebody else's query.
+DO $drop_role_check$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_users_role'
+                  AND conrelid = to_regclass('plenum_cafm.users')) THEN
+        ALTER TABLE plenum_cafm.users DROP CONSTRAINT ck_users_role;
+    END IF;
+END
+$drop_role_check$;
 
 -- And give it room. An earlier version of auth_user_roles.sql declared role VARCHAR(20),
 -- sized for 'superadmin'. Job titles are longer than that: 'Maintenance Supervisor' is 22.

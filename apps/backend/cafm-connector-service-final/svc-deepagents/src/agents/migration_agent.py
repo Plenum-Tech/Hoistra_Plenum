@@ -29,6 +29,7 @@ import structlog
 from langchain_core.tools import tool
 
 from ..config import settings
+from ..http_client import caller_headers
 from .meta_tools import get_session_context
 from .session_workspace import get_migration_id_for_file, register_migration_file
 
@@ -93,15 +94,49 @@ def _err(exc: Exception, op: str) -> dict:
     return {"error": str(exc)[:300]}
 
 
+_NOT_GIVEN = "Only a file uploaded to this conversation can be migrated."
+
+
+def _given_file(file_path: str) -> Path | None:
+    """The file, when it is one this conversation was given; else None.
+
+    start_migration read whatever path it was handed -- `Path(file_path).read_bytes()` -- and
+    uploaded it as a migration, and its route answered anyone. With the source route open as
+    well, `/app/.env` went in and every secret in the image could come back out (found 6 Nov
+    2026; the route existed from 7 Sep). The model can call this tool too, so a document that
+    talks it into a path is the same hole without the route.
+
+    A path counts only inside the chat upload directory or this session's own scratch
+    directory (meta_tools.write_file), after symlinks are resolved. Anything else -- missing
+    or not -- gets the same answer, so the tool says nothing about which files exist."""
+    try:
+        target = Path(file_path).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    roots = [Path(settings.deep_agents_upload_dir)]
+    try:
+        from .meta_tools import _TEMP_DIR, _session_ctx   # here: meta_tools imports this module
+        roots.append(Path(_TEMP_DIR) / _session_ctx.get())
+    except Exception:  # noqa: BLE001 - no session: the upload directory alone
+        pass
+    for root in roots:
+        try:
+            target.relative_to(root.resolve())
+        except (ValueError, OSError):
+            continue
+        return target if target.is_file() else None
+    return None
+
+
 async def _get(path: str) -> dict:
-    async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_SHORT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_SHORT, follow_redirects=True) as client:
         resp = await client.get(path)
         resp.raise_for_status()
         return resp.json()
 
 
 async def _post(path: str, json: dict | None = None) -> dict:
-    async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_SHORT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_SHORT, follow_redirects=True) as client:
         resp = await client.post(path, json=json or {})
         resp.raise_for_status()
         return resp.json()
@@ -137,11 +172,9 @@ async def start_migration(
 
     Returns dict with migration_id (UUID), status, progress_pct, message.
     """
-    path = Path(file_path)
-    if not path.exists():
-        return {"error": f"File not found: {file_path}"}
-    if not path.is_file():
-        return {"error": f"Not a file: {file_path}"}
+    path = _given_file(file_path)
+    if path is None:
+        return {"error": _NOT_GIVEN}
 
     # Read + hash the file up front so dedup is keyed on file CONTENT, not filename: an edited
     # same-named file starts a NEW migration; a renamed identical file reuses the existing one.
@@ -183,7 +216,7 @@ async def start_migration(
     mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
     try:
-        async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_UPLOAD, follow_redirects=True) as client:
+        async with httpx.AsyncClient(base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_UPLOAD, follow_redirects=True) as client:
             resp = await client.post(
                 "/api/migration/start-with-upload",
                 data={"cmms_name": cmms_name, "organization_id": organization_id,
@@ -250,9 +283,9 @@ async def start_migration_multi(
     """
     paths: list[Path] = []
     for fp in file_paths:
-        p = Path(fp)
-        if not p.exists() or not p.is_file():
-            return {"error": f"File not found: {fp}"}
+        p = _given_file(fp)
+        if p is None:
+            return {"error": _NOT_GIVEN}
         paths.append(p)
     if not paths:
         return {"error": "No files provided to start_migration_multi"}
@@ -279,7 +312,7 @@ async def start_migration_multi(
         upload_files.append(("files", (upload_name, data, mime_type)))
 
     try:
-        async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_UPLOAD, follow_redirects=True) as client:
+        async with httpx.AsyncClient(base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_UPLOAD, follow_redirects=True) as client:
             resp = await client.post(
                 "/api/migration/start-with-upload-multi",
                 data={"cmms_name": cmms_name, "organization_id": organization_id,
@@ -791,7 +824,7 @@ async def list_migrations(organization_id: str = "00000000-0000-0000-0000-000000
         organization_id: UUID of the organization (default: test org).
     """
     try:
-        async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_SHORT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(base_url=_BASE, headers=caller_headers(), timeout=_TIMEOUT_SHORT, follow_redirects=True) as client:
             resp = await client.get(
                 "/api/migration",
                 params={"organization_id": organization_id},

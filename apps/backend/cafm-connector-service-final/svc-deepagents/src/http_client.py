@@ -135,6 +135,28 @@ caller_authorization: ContextVar[str | None] = ContextVar("caller_authorization"
 #: engine's HTTP call already passes through, rather than in each tool function individually.
 caller_organization_id: ContextVar[str | None] = ContextVar("caller_organization_id", default=None)
 
+
+def caller_headers() -> dict[str, str]:
+    """What request() adds for the signed-in caller, for a call that cannot go through it -- a
+    multipart upload, a client held open across several calls.
+
+    The migration, Fiix and schema-mapping agents talked to svc-ai-schema-mapper with bare
+    httpx clients and sent no Authorization at all. That only worked because the schema-mapper
+    asked nobody who was calling; it now does (6 Nov 2026), so these calls carry the person they
+    are made for, exactly as request() does.
+
+    For Hoistra's own services ONLY. Never pass this to a client pointed at a third party -- a
+    CMMS, an LLM provider -- which has no business holding the caller's Hoistra token.
+    """
+    out: dict[str, str] = {}
+    auth = caller_authorization.get()
+    if auth:
+        out["Authorization"] = auth
+    acting = caller_organization_id.get()
+    if acting:
+        out["X-Acting-Organization-Id"] = str(acting)
+    return out
+
 #: The services that read `organization_id` as "superadmin: act as this company" and narrow
 #: to it. operations-intelligence does on every register route. work-order-management does
 #: too — every /api/maintenance route declares it "Superadmin only: act as this company" and

@@ -49,9 +49,18 @@ DDL = sp.PATCHES[0][1]
 LOCK = Exception("canceling statement due to lock timeout")
 
 
-def test_both_patches_are_plain_add_column_statements_and_so_pre_checkable():
+def test_every_patch_is_a_plain_add_column_statement_and_so_pre_checkable():
+    """What makes a patch lock-free on a steady database is that information_schema can be asked
+    first, which only works for a plain ADD COLUMN. Patches started out on migration_jobs only;
+    since 6 Nov the started_by_user_id columns are on the other run tables too, named
+    "<table>.<column>"."""
     for name, ddl in sp.PATCHES:
-        assert sp.parse_add_column(ddl) == ("plenum_cafm", "migration_jobs", name)
+        parsed = sp.parse_add_column(ddl)
+        assert parsed is not None, f"{name} is not a plain ADD COLUMN, so it cannot be pre-checked"
+        schema, table, column = parsed
+        assert schema == "plenum_cafm"
+        assert name.split(".")[-1] == column, (name, column)
+        assert "." not in name or name.split(".")[0] == table, (name, table)
 
 
 async def test_an_existing_column_takes_no_lock():

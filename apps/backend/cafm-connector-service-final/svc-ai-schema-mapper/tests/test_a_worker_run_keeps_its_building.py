@@ -38,6 +38,12 @@ from src.graph.nodes import schema_db_writer
 from src.graph.state import MigrationState
 
 ORG = "ad88d1ed-4376-447c-8196-e4e5b81d5af6"
+
+# The start routes ask who is starting the run (services/run_access.py, 6 Nov 2026). Called
+# here as functions, so the caller is passed the way FastAPI's dependency would pass it.
+from uuid import UUID as _UUID, uuid4 as _uuid4  # noqa: E402
+from src.services.principal import Principal  # noqa: E402
+ADMIN = Principal(_uuid4(), "admin@test", _UUID(ORG), "admin", True)
 BUILDING = "5b0c6f0e-1f7e-4b43-9d0b-2a3c6d1e9f10"
 MIGRATION = "971c7322-56cd-46ad-87e8-92b558370344"
 STORED_PATH = f"migrations/{MIGRATION}/source/b101_half_hourly.csv"
@@ -135,6 +141,7 @@ def test_the_single_file_door_hands_the_worker_its_building(monkeypatch):
             organization_id=ORG,
             building_id=BUILDING,
             session=_RequestSession(),
+            principal=ADMIN,
         )
     )
 
@@ -152,6 +159,7 @@ def test_the_multi_file_door_hands_the_worker_its_building(monkeypatch):
             organization_id=ORG,
             building_id=BUILDING,
             session=_RequestSession(),
+            principal=ADMIN,
         )
         # The multi door combines the files and enqueues from a background task.
         assert await migration_runs.await_migration_run(started.migration_id, timeout=60)

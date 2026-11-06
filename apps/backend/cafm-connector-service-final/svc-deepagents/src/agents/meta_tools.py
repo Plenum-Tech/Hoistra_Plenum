@@ -149,6 +149,25 @@ _MEMORY: dict[str, dict[str, str]] = {}  # {session_id: {key: value}}
 
 os.makedirs(_TEMP_DIR, exist_ok=True)
 
+_OUTSIDE_SESSION = "That path is outside this conversation's files. Use a relative path."
+
+
+def _in_session(session: str, path: str) -> str | None:
+    """The real path of `path` inside this session's directory, or None when it would leave it.
+
+    read_file and write_file joined the model's `path` onto the session directory, and
+    os.path.join DISCARDS everything before an absolute path: read_file('/app/.env') read the
+    image's secrets, '../' climbed out, and write_file could overwrite anything the process can
+    (found 6 Nov 2026). Both ends are resolved -- symlinks included -- before comparing."""
+    base = os.path.realpath(os.path.join(_TEMP_DIR, session))
+    full = os.path.realpath(os.path.join(base, path))
+    try:
+        if os.path.commonpath([base, full]) != base:
+            return None
+    except ValueError:            # different drives on Windows
+        return None
+    return full
+
 
 def init_meta_tools(openai_api_key: str, model: str = "gpt-4o-mini") -> None:
     """Initialize the task runner for subagent spawning. Called once from orchestrator.__init__."""
@@ -743,7 +762,9 @@ async def write_file(path: str, content: str) -> str:
         Confirmation with the byte count and path, or an error dict on failure.
     """
     session = _session_ctx.get()
-    full_path = os.path.join(_TEMP_DIR, session, path)
+    full_path = _in_session(session, path)
+    if full_path is None:
+        return json.dumps({"error": _OUTSIDE_SESSION})
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     try:
         with open(full_path, "w", encoding="utf-8") as fh:
@@ -769,7 +790,9 @@ async def read_file(path: str) -> str:
         File contents as a string, or an error dict if the file is not found.
     """
     session = _session_ctx.get()
-    full_path = os.path.join(_TEMP_DIR, session, path)
+    full_path = _in_session(session, path)
+    if full_path is None:
+        return json.dumps({"error": _OUTSIDE_SESSION})
     try:
         with open(full_path, "r", encoding="utf-8") as fh:
             content = fh.read()

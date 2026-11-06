@@ -10,7 +10,7 @@ import {
 
 import { env } from "@/config";
 // Hoistra: CAFM Web's requests go through Hoistra's authenticated client.
-import { apiFetch as hoistraApiFetch } from "../../../api/client.js";
+import { apiFetch as hoistraApiFetch, accessToken, errorMessage } from "../../../api/client.js";
 import { isUuid } from "./lib/coerce";
 import { shouldKeepPollingForFieldMappingGate } from "./pipeline/migration/migration-gate-state";
 import {
@@ -69,6 +69,41 @@ function resolveBase(basePath: string) {
 export function migrationFullExportUrl(migrationId: string, format: "csv" | "json" | "sql"): string {
   return buildAiUrl(`/${encodeURIComponent(migrationId)}/full-export`, { format }, "/api/migration");
 }
+/**
+ * Download a migration's full target tables, as the signed-in person.
+ *
+ * Not a link. The schema-mapper answered anyone until 6 Nov 2026 -- the internet included -- and
+ * now asks who is calling and whether the run is theirs; a link click sends no Authorization
+ * header, so the old `<a href>` would have met a 401. Same shape as api/admin.js's
+ * downloadOrgExport: the token by hand, the failure body read as JSON, the file named by
+ * Content-Disposition.
+ */
+export async function downloadMigrationFullExport(
+  migrationId: string,
+  format: "csv" | "json" | "sql",
+): Promise<void> {
+  const token = accessToken();
+  const res = await fetch(migrationFullExportUrl(migrationId, format), {
+    method: "GET",
+    headers: token ? { Authorization: "Bearer " + token } : {},
+  });
+  if (!res.ok) {
+    let msg = "Download failed (" + res.status + ")";
+    try { const d = await res.json(); msg = errorMessage(d, res) || msg; } catch { /* not json */ }
+    throw new Error(msg);
+  }
+  const named = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+  const name = named ? named[1] : `migration-${migrationId.slice(0, 8)}.${format === "csv" ? "zip" : format}`;
+  const href = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+}
+
 /** Download URL for a migration's ORIGINAL uploaded source file (Excel/CSV/PDF/Word). */
 export function migrationSourceUrl(migrationId: string): string {
   return buildAiUrl(`/${encodeURIComponent(migrationId)}/source`, undefined, "/api/migration");
