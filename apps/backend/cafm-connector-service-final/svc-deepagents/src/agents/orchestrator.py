@@ -34,6 +34,7 @@ import time
 import re
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import date
 from typing import Any
 
 import structlog
@@ -878,6 +879,17 @@ class _LiveDocs:
 
 #: Where the register's column values go in skills/compliance/planner.md.
 COLUMN_VALUES = "{{COLUMN_VALUES}}"
+
+
+def _today() -> date:
+    return date.today()
+
+
+def planner_question(text: str) -> str:
+    """What the compliance planner is asked: today's date, then the question (6 Nov 2026). Without the date it cannot
+    tell which January is next or where next month starts, so "expire in January" matched January of every year."""
+    d = _today()
+    return f"Today is {d.isoformat()} ({d.strftime('%A')}).\n\n{text}"
 
 
 def compliance_planner_prompt(vocab_text: str) -> str:
@@ -3303,11 +3315,11 @@ class DeepAgentOrchestrator:
         activity_log.fire(
             agent="compliance", stage="plan", direction="input", model=_plan_model,
             summary="planner prompt", payload={"system_prompt": system.content,
-                                                 "user_message": text[:1200]},
+                                                 "user_message": planner_question(text[:1200])},
         )
         try:
             resp = await self._llm.ainvoke(
-                [system, HumanMessage(content=text[:1200])]
+                [system, HumanMessage(content=planner_question(text[:1200]))]
             )
             # Every other stage of this pipeline records to the llm_cost ledger; the planner
             # was the one call nobody had wired in, so its own step in the UI panel could

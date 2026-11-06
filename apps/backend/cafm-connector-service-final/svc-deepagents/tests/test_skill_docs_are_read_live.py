@@ -225,14 +225,15 @@ def test_the_compliance_planner_prompt_is_a_document_word_for_word(overlays):
     from src.agents import orchestrator as orch
 
     assert so.known_doc("compliance", "planner")
-    # The sections the correction loop added and a person committed (S-7, S-9 on 5 Nov 2026) follow the moved
+    # The sections the correction loop added and a person committed (S-7, S-9 on 5 Nov 2026; S-10 on 6 Nov) follow the moved
     # prompt; everything before the first of them is the Python string, word for word.
     moved = lambda vocab: orch.compliance_planner_prompt(vocab).split("\n\n## ")[0]
     assert hashlib.sha256(moved("").encode()).hexdigest() == _PLANNER_SHA_EMPTY
     assert hashlib.sha256(moved(_VOCAB).encode()).hexdigest() == _PLANNER_SHA_VOCAB, \
         "the column values go exactly where they went in the Python string"
     sections = orch.compliance_planner_prompt("").split("\n\n## ")[1:]
-    assert [s.split("\n")[0][-5:] for s in sections] == ["(S-7)", "(S-9)"], "the committed corrections, in order"
+    assert [s.split("\n")[0].rsplit(" ", 1)[-1] for s in sections] == ["(S-7)", "(S-9)", "(S-10)"], \
+        "the committed corrections, in order"
 
 
 def test_the_compliance_planner_reads_its_document_live(overlays):

@@ -81,3 +81,33 @@ async def test_planner_degrades_when_the_model_call_itself_raises():
     assert plan["reason"]  # fell back to the default plan
     assert plan["sub_questions"][0]["id"] == "q1"
     assert plan["sub_questions"][0]["query"] == {}  # no filters -> caller reads everything
+
+
+@pytest.mark.asyncio
+async def test_the_planner_is_told_todays_date(monkeypatch):
+    """6 Nov 2026: "Which certificates expire in January?" matched January of every year, and no instruction could fix
+    it - the planner only ever saw its instructions and the question, so it could not tell which January is next. Its
+    question now starts with today's date (the instructions stay as written in skills/compliance/planner.md)."""
+    from datetime import date
+
+    from src.agents import orchestrator as orch_mod
+    from src.agents.orchestrator import DeepAgentOrchestrator
+
+    seen = []
+
+    class _Model:
+        model_name = "test-model"
+
+        async def ainvoke(self, messages):
+            seen.append(messages)
+            raise RuntimeError("stop after the call is seen")
+
+    monkeypatch.setattr(orch_mod, "_today", lambda: date(2026, 11, 6))
+    orch = DeepAgentOrchestrator.__new__(DeepAgentOrchestrator)
+    orch._llm = _Model()
+    DeepAgentOrchestrator._cert_vocab_cache = {}
+    await orch._plan_compliance_query("Which certificates expire in January?")
+    human = seen[0][-1].content
+    assert human.startswith("Today is 2026-11-06 (Friday).")
+    assert human.rstrip().endswith("Which certificates expire in January?")
+    assert "Today is" not in seen[0][0].content, "the instructions themselves are unchanged"

@@ -38,3 +38,7 @@ Rule S-7: When a question asks to list or group results "by X" (e.g. by building
 ## Add single-threshold rule for lapsed/expiring queries (S-9) (S-9)
 
 When a question asks for certificates 'lapsed or expiring within N days', build exactly one filter: days_to_expiry <= N (lapsed certificates naturally have a negative days-to-expiry value, so they are already included). Do not add a separate 'expired' clause, do not OR multiple date conditions together, and do not add a lower bound requiring the certificate to be 'not yet expired'. Per rule S-9, this is a single compound threshold, not a union of overlapping conditions. Before finalizing, confirm the filter is one comparison only, then run it against the full register and report the actual matching count.
+
+## Compute renewal band from dates, not stored status (S-10)
+
+Rule S-10: 'Due for renewal' means days-to-expiry is between 31 and 60 inclusive, computed from the expiry date against the current date. When building a query for 'due for renewal' or similar lifecycle questions, always filter on computed days-to-expiry (gte 31, lte 60). Never filter or join on the stored status field (e.g. a 'Due for Renewal' label) to identify these records, because the background scan that updates status may lag behind the actual dates and miss records that are already in-band. The stored status may be shown for display, but it must never be the filter criterion.
