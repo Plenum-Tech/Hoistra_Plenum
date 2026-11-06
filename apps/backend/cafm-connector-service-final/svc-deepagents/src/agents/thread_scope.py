@@ -61,10 +61,12 @@ def parse_period(text: str, today: date | None = None) -> dict[str, Any] | None:
     t = today or date.today()
     s = (text or "").lower()
     m0 = date(t.year, t.month, 1)
-    if re.search(r"\blast month\b|\bprevious month\b", s):
+    # "this mont" / "last mont" are the month (2 Nov 2026: a typo dropped the period, and the answer
+    # still said "this month").
+    if re.search(r"\blast mon(?:th|t)\b|\bprevious month\b", s):
         start = (m0 - timedelta(days=1)).replace(day=1)
         return {"from": start.isoformat(), "to": m0.isoformat(), "label": start.strftime("%B %Y"), "key": "last_month"}
-    if re.search(r"\bthis month\b|\bcurrent month\b|\bmonth to date\b", s):
+    if re.search(r"\bthis mon(?:th|t)\b|\bcurrent month\b|\bmonth to date\b", s):
         return {"from": m0.isoformat(), "to": (t + timedelta(days=1)).isoformat(), "label": m0.strftime("%B %Y") + " to date", "key": "this_month"}
     if re.search(r"\bthis year\b|\byear to date\b|\bytd\b", s):
         return {"from": date(t.year, 1, 1).isoformat(), "to": (t + timedelta(days=1)).isoformat(), "label": f"{t.year} to date", "key": "this_year"}
@@ -78,6 +80,33 @@ def parse_period(text: str, today: date | None = None) -> dict[str, Any] | None:
         key = "last_month" if start == (m0 - timedelta(days=1)).replace(day=1) else "this_month" if start == m0 else None
         return {"from": start.isoformat(), "to": end.isoformat(), "label": start.strftime("%B %Y"), "key": key}
     return None
+
+
+#: A question that sets one period against another names no single period for its tools.
+_COMPARES_PERIODS = re.compile(
+    r"\b(vs\.?|versus|compared?(?:\s+(?:with|to))?|against|all[\s-]+time|overall|in\s+total|ever)\b", re.I)
+
+
+def question_scope(question: str, today: date | None = None) -> dict[str, Any] | None:
+    """The scope a question names for itself - the one building it names, and its period - for the
+    tools of a question that is not a follow-up (2 Nov 2026). A tool called without a building read
+    the whole portfolio even when the question named one ("Decisions owed 38" under a Bishopsgate
+    answer); the thread's building reached the tools only on a follow-up. A question that names
+    several buildings, or none, sets no building: every one of them stays in scope."""
+    name, bid, _several = _question_buildings(question or "", [])
+    period = parse_period(question or "", today)
+    if period and _COMPARES_PERIODS.search(question or ""):
+        # "this month vs all time": the second read must not inherit the first period
+        # (pre-push review, 3 Nov 2026).
+        period = None
+    out: dict[str, Any] = {}
+    if name:
+        out["building_name"] = name
+        if bid:
+            out["building_id"] = bid
+    if period:
+        out["period"] = period
+    return out or None
 
 
 def _tool_inputs(tools: list | None) -> list[dict[str, Any]]:
@@ -195,6 +224,17 @@ def _is_place(phrase: str) -> bool:
 def _places(question: str) -> list[str]:
     """Phrases after at/in/for/of/on/about that say they are a building ("JASMEET BUILDING") and
     name one beside the kind word - never "the building" alone, never "those"."""
+    return _place_phrases(question, require_kind=True)
+
+
+def place_candidates(question: str) -> list[str]:
+    """Every phrase after at/in/for/of/on/about that could name a place, kind word or not ("at
+    Bishopsgate Tower"). Not a building until the buildings register says so (orchestrator
+    _named_building, 2 Nov 2026)."""
+    return [p for p in _place_phrases(question, require_kind=False) if _core(p)]
+
+
+def _place_phrases(question: str, require_kind: bool) -> list[str]:
     out: list[str] = []
     cur: list[str] = []
     open_ = False
@@ -202,7 +242,7 @@ def _places(question: str) -> list[str]:
         low = tok.lower()
         if not tok[0].isalnum() or low in _PLACE_END or re.fullmatch(r"20\d\d", low):
             phrase = " ".join(cur)
-            if cur and _is_place(phrase):
+            if cur and (_is_place(phrase) or not require_kind):
                 out.append(phrase)
             cur, open_ = [], low in _PLACE_WORDS
             continue

@@ -108,3 +108,69 @@ async def revert(skill: str, doc: str, principal: Principal = Depends(current_pr
         raise HTTPException(status_code=404, detail="Not a tunable document")
     n = await skill_overlays.retire_active(skill, doc, by=principal.email)
     return {"ok": True, "retired": n}
+
+
+# ── the correction loop's instruction changes (Bala, 5 Nov 2026) ─────────────────────────────────
+# Trace Lab's agent proposes a change to an instruction document; a person approves it for testing (only Trace Lab's
+# reruns read it), then makes it live (every agent reads it, no rebuild); the live text reaches the repo only through
+# the export, at commit. Written here, in deepagents' own table, never by Trace Lab directly.
+
+class OverlayIn(BaseModel):
+    skill: str = Field(..., min_length=1, max_length=64)
+    doc: str = Field(..., min_length=1, max_length=82)
+    content: str = Field(..., min_length=1, max_length=200_000)
+    evidence: dict[str, Any] | None = None
+
+
+@router.post("/overlays")
+async def propose_overlay(body: OverlayIn, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    _admin(principal)
+    if not skill_overlays.known_doc(body.skill, body.doc):
+        raise HTTPException(status_code=404, detail="No such instruction document")
+    oid = await skill_overlays.propose(skill=body.skill, doc_name=body.doc, content=body.content,
+                                       evidence=body.evidence, run_id=None, by=principal.email)
+    if not oid:
+        raise HTTPException(status_code=503, detail="The instruction store is not available")
+    return {"ok": True, "id": oid, "status": "proposed"}
+
+
+@router.get("/overlays")
+async def list_overlays(status: str | None = None, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    _admin(principal)
+    if status is not None and status not in skill_overlays.STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown status")
+    return {"ok": True, "overlays": await skill_overlays.list_overlays(status=status, limit=200)}
+
+
+@router.post("/overlays/{overlay_id}/test")
+async def test_overlay(overlay_id: str, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    _admin(principal)
+    out = await skill_overlays.approve_for_testing(overlay_id, by=principal.email)
+    if not out:
+        raise HTTPException(status_code=404, detail="No proposal waiting with that id")
+    return {"ok": True, **out}
+
+
+@router.post("/overlays/{overlay_id}/live")
+async def live_overlay(overlay_id: str, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    _admin(principal)
+    out = await skill_overlays.go_live(overlay_id, by=principal.email)
+    if not out:
+        raise HTTPException(status_code=404, detail="No change under test with that id")
+    return {"ok": True, **out}
+
+
+@router.post("/overlays/{overlay_id}/drop")
+async def drop_overlay(overlay_id: str, principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    _admin(principal)
+    out = await skill_overlays.drop(overlay_id, by=principal.email)
+    if not out:
+        raise HTTPException(status_code=404, detail="No proposal or change under test with that id")
+    return {"ok": True, **out}
+
+
+@router.get("/export")
+async def export_live(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """The live instruction documents with their repo paths: what is committed once testing is complete."""
+    _admin(principal)
+    return {"ok": True, "files": await skill_overlays.export_active()}

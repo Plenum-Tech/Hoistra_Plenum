@@ -65,7 +65,12 @@ def test_the_chat_stream_and_chat_reruns_mark_their_turns():
     src = (Path(__file__).parents[1] / "src" / "agents" / "orchestrator.py").read_text(encoding="utf-8")
     stream = src[src.index("    async def stream("):]
     rerun = src[src.index("    async def rerun_turn("):]
-    assert "openui_view.CHAT_TURN.set(True)" in stream[:6000]
+    # The chat streams _stream_turn with chat=True (its default); REST callers run the same turn with
+    # chat=False (run_question, 2 Nov 2026), so only the chat is taught OpenUI.
+    turn = src[src.index("    async def _stream_turn("):]
+    assert "self._stream_turn(user_message, session_id, extra_context)" in stream[:6000]
+    assert "chat: bool = True," in turn[:400] and "openui_view.CHAT_TURN.set(chat)" in turn[:3000]
+    assert "self._stream_turn(user_message, session_id, extra_context, chat=False)" in src
     assert "openui_view.CHAT_TURN.set(True)" in rerun[:6000]
 
 

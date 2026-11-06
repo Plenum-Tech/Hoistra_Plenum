@@ -17,11 +17,13 @@ an unlinked row, a name that matched two companies). Never write the answer your
 | compliant, current, valid, in date | `status` Current, `days_to_expiry` ≥ 0 | a filter value called "compliant" |
 | non-compliant, lapsed, expired | `status` Lapsed/Expired or `days_to_expiry` < 0 | treat "expiring" as expired |
 | at risk, expiring soon, due | not lapsed and `days_to_expiry` ≤ 90 (Expiring Soon / Due for Renewal / Overdue / Critical) | `status="at_risk"` |
-| blocked vendor | a vendor **risk badge**: `vendor_block_state` Blocked, driven by a lapsed or forged accreditation it holds | `status="Blocked"` (returns 0); use `risk_filter="blocked"` |
+| blocked vendor, not eligible | the vendor's **block flag** (`vendors.block_state` Blocked, as on the Vendors page) - read with `list_blocked_vendors` (SPEC S-5, 4 Nov 2026) | `status="Blocked"` (returns 0); counting a lapsed accreditation without the flag as blocked |
+| at-risk vendor | a lapsed accreditation on a vendor WITHOUT the block flag - `list_blocked_vendors` returns them as `at_risk` | adding them into the blocked count |
 | draft, unconfirmed | `draft=true` metadata flag | `status="draft"` |
 | forged, fake, tampered, edited | `forensics_verdict` fail / `forensics_ccc_verdict` edited (score ≥ 70) | fold suspect rows into forged |
 | suspect, suspicious, needs review | `forensics_verdict` review / suspect (score 30–69) | call it forged |
 | genuine, authentic | `forensics_verdict` pass / genuine (score < 30) | call an unassessed row genuine |
+| failed checks, failed authenticity checks, failed verification | `failed_check` true: `failed_authenticity` (forensics flagged, or a warning with no clean verdict) OR `failed_registration` (register check failed, not on the register, details differ) | answer from forensics verdicts alone |
 | not assessed | both verdict fields empty | count it as genuine or forged |
 | building certificate | `cert_scope` Building — the owner's statutory duty | mix with vendor rows |
 | vendor accreditation | `cert_scope` Vendor — what a contractor must hold to do regulated work | mix with building rows |
@@ -52,7 +54,7 @@ Tool-side status filters are how whole sections vanish.
 | named company | both lists with `vendor_name=<as the user wrote it>` | see §3 name matching |
 | named building | `list_building_certificates(building_name=<as written>)` | never look up a site id first |
 | a trade | `trade_category=<as said>` on the relevant list | "fire safety", "electric", "lifts", "air con" are mapped for you |
-| blocked vendors | `list_vendor_accreditations(risk_filter="blocked")` or the unfiltered list keeping `vendor_block_state` Blocked | the reason is the vendor's own lapsed or forged row; the register stores no reason text |
+| blocked vendors, not eligible | `list_blocked_vendors()` (SPEC S-5, 4 Nov 2026) | two short lists: NOT ELIGIBLE (blocked, with what for) and AT RISK (lapsed, not blocked, with what and since when); never one combined count, never "check the vendor list" |
 | pure count ("how many … where …") | `count_compliance_certificates(...)` once | `count` is the answer; never sum overlapping calls |
 | vendors by number of certificates | `list_vendors_by_certificate_count(min_count, comparison)` | gt / gte / eq |
 | what the law requires, is X building or vendor, frequency, regulation | `list_country_pack(country_code, scope, trade_category)` + `get_pack_facts()` | pack names the types; pack_facts gives the totals (55 / 27 / 28 and per trade) verbatim |

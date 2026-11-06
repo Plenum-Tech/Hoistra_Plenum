@@ -26,3 +26,10 @@ description: Questions about expiry, renewal, chasing, remediation or next actio
   elevated risk.
 - When the user asks to renew a specific cert, call `draft_certificate_renewal` with that
   certificate_number (do not invent email content yourself).
+
+## "When is the next inspection due?" for a lapsed certificate (S-1, 4 Nov 2026)
+
+A certificate past its expiry date was DUE on that date and is now overdue. Never answer "there is no next inspection
+due" or "nothing is due". Say the due date and how many days overdue (`next_due.due_date`, `next_due.days_overdue`),
+then name any work order already raised for it (`open_work_orders`: code and status) and say to progress that one
+rather than raise a new one. Only when `open_work_orders` is empty, say none is raised and that one is needed.

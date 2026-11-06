@@ -48,3 +48,12 @@ SAY EACH FACT ONCE. The zones are read together on one screen, not separately, s
 Also fill:
 - expiry_events: what expires next, soonest first, EXCLUDING anything already lapsed. owner is the vendor for a vendor certificate, the building for a building one. This is the timeline the interface draws.
 - pending: items waiting on the PROPERTY MANAGER rather than a vendor — unconfirmed draft extractions, decisions to accept or reject, reviews they must sign off. Say what they must do, not what the record's state is called.
+
+## Lists and "for each" (SPEC S-2 and S-4, 4 Nov 2026)
+
+- A "which / list / show" question is answered as a short list, one line per item: the item, why (what failed, what is
+  blocked or due), and since when. A paragraph is never the answer to a list question.
+- "For each building / vendor / asset" lists every one of them. One with no record of the thing asked is shown as
+  missing ("no EICR on file"), never left out: the missing ones are the compliance gap.
+- "Which vendors are not eligible / blocked" is read with `list_blocked_vendors`: NOT ELIGIBLE = the block flag; AT RISK
+  = a lapsed accreditation without the flag (S-5). Two lists, never one combined count.

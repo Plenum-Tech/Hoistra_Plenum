@@ -124,7 +124,7 @@ from .udr_hybrid_tools import (
 )
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
 from ..services import chat_memories, chat_threads
-from . import planner, thread_scope, trace
+from . import cert_checks, cert_expiry, planner, spaces, thread_scope, trace
 from .session_workspace import (
     last_working_tool,
     ROUTE_UDR_INGEST,
@@ -228,6 +228,16 @@ from .wo_engine_agent import (
 )
 
 log = structlog.get_logger(__name__)
+
+#: A question that names work orders - "work order(s)", "work-order", PPMs, a WO code. The compliance
+#: shortcut, which answers before any routing, stands down for it (2 Nov 2026: "which work orders
+#: are linked to lapsed certificates" was answered from the certificate register alone).
+_NAMES_WORK_ORDERS = re.compile(r"\bwork[\s_-]?orders?\b|\bppms?\b|\bwo[-_ ]?\d{3,}\b", re.IGNORECASE)
+
+#: How long a compliance answer waits for what its certificates reach (assets, their maintenance and
+#: energy) before it goes on without it. A warm read of 224 certificates took 11 s; a cold one built
+#: the ontology first and took 15 minutes (2 Nov 2026).
+CERTIFICATE_REACH_TIMEOUT_S = 30.0
 
 # Re-export for backward compatibility (tests, workers)
 _SESSION_UDR_STATE = {}  # unused; state in session_workspace
@@ -846,6 +856,38 @@ class _ZoneStreamer:
         return out
 
 
+
+class _LiveDocs:
+    """Instruction documents the orchestrator reads every time it uses them (Bala, 5 Nov 2026).
+
+    These were class attributes built once at import, so an approved change to answering.md reached no compliance
+    answer until a restart. Read through prompt_doc on each access - the approved text in the one place instructions
+    live, else the shipped file - joined as before. Every file is still read once when the class is defined, so a
+    missing contract stops the service at start, as it always did.
+    """
+
+    def __init__(self, *docs: tuple[str, str]) -> None:
+        self.docs = docs
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.__get__(None, owner)
+
+    def __get__(self, obj: Any, owner: type | None = None) -> str:
+        return "\n\n---\n\n".join(prompt_doc(agent, name) for agent, name in self.docs)
+
+
+#: Where the register's column values go in skills/compliance/planner.md.
+COLUMN_VALUES = "{{COLUMN_VALUES}}"
+
+
+def compliance_planner_prompt(vocab_text: str) -> str:
+    """The compliance planner's instructions (skills/compliance/planner.md, read now, Bala 5 Nov 2026), with the
+    values the register's columns actually hold in their place. Until 5 Nov 2026 this was a Python string, so no
+    approved instruction change could reach the planner (a question "... by building" was read as "building
+    certificates only" and dropped seven vendor certificates)."""
+    return prompt_doc("compliance", "planner").replace(COLUMN_VALUES, vocab_text or "")
+
+
 class DeepAgentOrchestrator:
     """
     Main orchestrator for the Plenum CAFM platform.
@@ -945,7 +987,11 @@ class DeepAgentOrchestrator:
         # the model, and set for the tools so one called without a building or period fills them
         # from it instead of reading the whole estate (agents/thread_scope.py).
         ws = await chat_threads.working_set(session_id) if thread_scope.is_followup(user_message) else None
-        thread_scope.active_scope.set(ws or None)
+        # A question that names its own building scopes the tools to it too, so one called without
+        # a building reads that building, not the portfolio (2 Nov 2026). Told to the model only
+        # as the working set of a follow-up, as before.
+        if ws or thread_scope.active_scope.get() is None:
+            thread_scope.active_scope.set(ws or await self._question_scope(user_message))
         scope_text = thread_scope.scope_block(ws) if ws else ""
         # What earlier conversations taught us that bears on this question (services/chat_memories.py).
         memories_text = chat_memories.format_recall(await chat_memories.recall(user_message))
@@ -1694,6 +1740,20 @@ class DeepAgentOrchestrator:
         "company_name": _VENDOR_KIND_WORDS,
     }
     _SPEC_NAME_OPS = frozenset({"eq", "neq", "in", "not_in", "contains"})
+    #: A name field that is also written elsewhere: a building is named on the certificate
+    #: (c.building_name) or only on its site, which is how the register shows it (2 Nov 2026:
+    #: "Bishop Gate Tower", "Bishop's Gate Tower" and "bishopsgate tower." all matched nothing,
+    #: and the answer read the whole register as the building's). The lookup reads both, and a
+    #: name found matches either; excluding a name stays on the certificate's own column.
+    _NAME_FIELD_ALSO: dict[str, str] = {"building_name": "s.site_name"}
+    #: A certificate's building in the buildings register: by id, else by its code within the
+    #: same company. Bishopsgate Tower's 63 certificates carry only building_code B-301 - no
+    #: building_name, no site - so its name is only in plenum_cafm.buildings (checked read-only
+    #: on 2 Nov 2026; no company has two buildings with one code).
+    _BUILDING_OF_CERT = (
+        "(bd.building_id::text = c.building_id::text OR (bd.building_code::text = c.building_code::text "
+        "AND bd.organization_id::text = c.organization_id::text))"
+    )
     #: Distinct stored names one lookup reads; exact and letters-and-digits matches come first.
     _NAME_LOOKUP_LIMIT = 5000
     #: The joins a name field's expression needs - the same joins the register read makes.
@@ -1813,12 +1873,40 @@ class DeepAgentOrchestrator:
                 field in allow
                 or field in self._SPEC_JOIN_FIELDS
                 or field in self._SPEC_META_FIELDS
+                or field in self._SPEC_CHECK_FIELDS
             )
             if not known:
                 rejected.append(f"unknown column: {field}")
                 continue
             accepted.append({"field": field, "op": op, "value": f.get("value")})
         return accepted, rejected
+
+    #: Fields a filter reads as of today rather than as stored (2 Nov 2026): the stored day count
+    #: and status go stale when the lifecycle scan has not run - LOLER-B-301-4471 stored no day
+    #: count and "valid" two weeks after it expired, and "overdue" filters missed it. The day count
+    #: comes from the expiry date; an in-date status past its expiry date reads as Lapsed, as the
+    #: rows themselves are corrected (_status_from_expiry, _IN_DATE_STATUSES).
+    _SPEC_LIVE_FIELDS: dict[str, str] = {
+        "days_to_expiry": (
+            "COALESCE((c.expiry_date::date - current_date), NULLIF(c.days_to_expiry::text, '')::numeric)"
+        ),
+        "status": (
+            "(CASE WHEN c.expiry_date::date < current_date AND lower(c.status::text) IN ("
+            "'valid', 'current', 'active', 'expiring soon', 'due for renewal', 'critical'"
+            ") THEN 'Lapsed' ELSE c.status END)"
+        ),
+    }
+
+    #: Whether a certificate failed a check (agents/cert_checks.py, 3 Nov 2026): true or false, worked out from the
+    #: record with the Compliance page's own rule. A question filters on these rather than on forensics_verdict alone.
+    _SPEC_CHECK_FIELDS: dict[str, str] = dict(cert_checks.SQL)
+
+    @classmethod
+    def _empty_is_the_answer(cls, spec: dict[str, Any] | None) -> bool:
+        """A filter on a failed-check field is worked out from the records themselves: nothing matching means nothing
+        failed. It is the answer, not a reason to read the whole register (3 Nov 2026: that cost 200k tokens)."""
+        return any(isinstance(f, dict) and f.get("field") in cls._SPEC_CHECK_FIELDS
+                   for f in (spec or {}).get("filters") or [])
 
     def _spec_where_clause(
         self, filters: list[dict[str, Any]], logic: str
@@ -1828,7 +1916,16 @@ class DeepAgentOrchestrator:
         params: dict[str, Any] = {}
         for i, f in enumerate(filters):
             field, op = f["field"], f["op"]
-            if field in self._SPEC_JOIN_FIELDS:
+            if field in self._SPEC_CHECK_FIELDS:
+                # A fixed expression from code; the value only chooses it or its negation.
+                truthy = str(f.get("value")).strip().lower() not in ("false", "0", "no", "none", "")
+                want = truthy if op != "neq" else not truthy
+                expr = self._SPEC_CHECK_FIELDS[field]
+                parts.append(expr if want else f"(NOT {expr})")
+                continue
+            if field in self._SPEC_LIVE_FIELDS:
+                col = self._SPEC_LIVE_FIELDS[field]
+            elif field in self._SPEC_JOIN_FIELDS:
                 col = self._SPEC_JOIN_FIELDS[field]
             elif field in self._SPEC_META_FIELDS:
                 # JSONB key read as text; the key itself is bound, not interpolated.
@@ -1849,6 +1946,15 @@ class DeepAgentOrchestrator:
                 params[p] = sorted(
                     {str(n).lower() for n in [*(f.get("names") or []), *(f.get("named") or [])]}
                 )
+                found = " OR ".join(
+                    f"lower({c}::text) = ANY(CAST(:{p} AS text[]))"
+                    for c in [col, *([self._NAME_FIELD_ALSO[field]] if field in self._NAME_FIELD_ALSO else [])]
+                )
+                if field == "building_name":
+                    found += (
+                        f" OR EXISTS (SELECT 1 FROM plenum_cafm.buildings bd WHERE {self._BUILDING_OF_CERT} "
+                        f"AND lower(bd.name::text) = ANY(CAST(:{p} AS text[])))"
+                    )
                 if op in ("neq", "not_in"):
                     parts.append(f"lower({col}::text) <> ALL(CAST(:{p} AS text[]))")
                 elif not f.get("named"):
@@ -1856,12 +1962,15 @@ class DeepAgentOrchestrator:
                     parts.append("FALSE")
                 elif op == "contains":
                     params[p + "l"] = f"%{f.get('value')}%"
-                    parts.append(
-                        f"(lower({col}::text) = ANY(CAST(:{p} AS text[])) "
-                        f"OR {col}::text ILIKE :{p}l)"
-                    )
+                    parts.append(f"({found} OR {col}::text ILIKE :{p}l)")
                 else:
-                    parts.append(f"lower({col}::text) = ANY(CAST(:{p} AS text[]))")
+                    parts.append(f"({found})" if " OR " in found else found)
+                continue
+            if field == "cert_scope" and op == "neq":
+                # A certificate with no scope is not excluded by "not a vendor's" (a NULL would
+                # fail the comparison); see the building scope in _fetch_compliance_table_direct.
+                params[p] = str(f.get("value"))
+                parts.append(f"COALESCE(lower({col}::text), '') <> lower(:{p})")
                 continue
             if op in ("in", "not_in"):
                 vals = f.get("value")
@@ -1932,11 +2041,34 @@ class DeepAgentOrchestrator:
             }
         )
         compact = sorted({name_match.compact(t) for t in exact if name_match.compact(t)})
+        also = self._NAME_FIELD_ALSO.get(field)
+        if also:
+            # Both places the name is written, one name a row each (see _NAME_FIELD_ALSO).
+            if "plenum_cafm.sites" not in joins:
+                joins = (joins + " " + self._NAME_FIELD_JOINS["s"]).strip()
+            inner = (
+                f"SELECT DISTINCT nm.n AS n "
+                f"FROM plenum_cafm.compliance_certificates c {joins} "
+                f"CROSS JOIN LATERAL (VALUES ({col}::text), ({also}::text)) nm(n) "
+                f"WHERE {scope_sql} AND nm.n IS NOT NULL AND btrim(nm.n) <> ''"
+            )
+            if field == "building_name":
+                # and the name the buildings register gives the certificate's building
+                inner += (
+                    f" UNION SELECT DISTINCT bd.name::text AS n "
+                    f"FROM plenum_cafm.compliance_certificates c {joins} "
+                    f"JOIN plenum_cafm.buildings bd ON {self._BUILDING_OF_CERT} "
+                    f"WHERE {scope_sql} AND bd.name IS NOT NULL AND btrim(bd.name) <> ''"
+                )
+        else:
+            inner = (
+                f"SELECT DISTINCT {col}::text AS n "
+                f"FROM plenum_cafm.compliance_certificates c {joins} "
+                f"WHERE {scope_sql} AND {col} IS NOT NULL AND btrim({col}::text) <> ''"
+            )
         sql = (
             f"/* name lookup {field} */ SELECT n FROM ("
-            f"SELECT DISTINCT {col}::text AS n "
-            f"FROM plenum_cafm.compliance_certificates c {joins} "
-            f"WHERE {scope_sql} AND {col} IS NOT NULL AND btrim({col}::text) <> ''"
+            f"{inner}"
             ") x ORDER BY (lower(n) = ANY(CAST(:nm_exact AS text[])) "
             "OR regexp_replace(lower(n), '[^a-z0-9]+', '', 'g') "
             "= ANY(CAST(:nm_compact AS text[]))) DESC, n "
@@ -2114,6 +2246,14 @@ class DeepAgentOrchestrator:
                    v.blocked_accreditation_type,
                    v.status                   AS vendor_status,
                    COALESCE(s.site_name, c.building_name) AS site_name,
+                   -- The building's name from the buildings register, for certificates that
+                   -- carry only its id or code (2 Nov 2026: all of Bishopsgate Tower's).
+                   (SELECT bd.name FROM plenum_cafm.buildings bd
+                     WHERE (bd.building_id::text = c.building_id::text
+                            OR (bd.building_code::text = c.building_code::text
+                                AND bd.organization_id::text = c.organization_id::text))
+                     ORDER BY (bd.building_id::text = c.building_id::text) DESC LIMIT 1)
+                                              AS building_register_name,
                    s.site_code                AS site_code,
                    s.city                     AS site_city,
                    s.country                  AS site_country,
@@ -2157,9 +2297,18 @@ class DeepAgentOrchestrator:
         if spec:
             accepted, rejected = await self._validate_query_spec(spec)
             scope = str(spec.get("scope") or "").strip().lower()
-            if scope in ("vendor", "building"):
+            # A building's certificates are every one that is not a vendor's: its assets' (a
+            # lift's LOLER, a chiller's F-Gas), those with no scope, and the free text some
+            # imports left in the column - as the Compliance page's building vault reads them
+            # (2 Nov 2026: the chat read 8 of Bishopsgate Tower's 10 and missed both lapsed
+            # asset certificates).
+            if scope == "building":
                 accepted = accepted + [
-                    {"field": "cert_scope", "op": "eq", "value": scope}
+                    {"field": "cert_scope", "op": "neq", "value": "vendor"}
+                ]
+            elif scope == "vendor":
+                accepted = accepted + [
+                    {"field": "cert_scope", "op": "eq", "value": "vendor"}
                 ]
             # A building or vendor named in a filter is looked up by name first, within the
             # caller's company and buildings (29 Oct 2026).
@@ -2221,6 +2370,7 @@ class DeepAgentOrchestrator:
                 or row.get("vendor_name")
                 or row.get("company_name")
             )
+            row.update(self._status_from_expiry(row))
             row.update(self._derive_row_flags(row))
             rows.append(row)
 
@@ -2274,6 +2424,19 @@ class DeepAgentOrchestrator:
                 )
         return rows
 
+    #: Stored statuses that say a certificate is in date (agents/cert_expiry.py, one rule for
+    #: the register read and the certificate tools).
+    _IN_DATE_STATUSES = cert_expiry.IN_DATE_STATUSES
+
+    @staticmethod
+    def _status_from_expiry(row: dict[str, Any], today: Any = None) -> dict[str, Any]:
+        """Days to expiry from the expiry date itself, and "Lapsed" for a certificate stored as
+        in date whose date has passed, with the stored status kept as status_recorded. Read-only:
+        the database is not changed, only what the answer is given (2 Nov 2026: LOLER-B-301-4471,
+        expired 2026-10-18, was stored as "valid" and the answer called it current). {} when the
+        row has no readable expiry date: its stored values stand. The rule is cert_expiry's."""
+        return cert_expiry.status_from_expiry(row, today)
+
     @staticmethod
     def _derive_row_flags(row: dict[str, Any]) -> dict[str, Any]:
         """Add unambiguous boolean flags alongside the raw fields.
@@ -2309,6 +2472,8 @@ class DeepAgentOrchestrator:
             "is_suspect_authenticity": is_suspect,
             "is_authentic": verdict == "pass",
             "authenticity_known": bool(verdict),
+            # The one rule for a failed check, the page's (agents/cert_checks.py, 3 Nov 2026).
+            **cert_checks.flags(row),
             "forensics_risk_score_num": score,
             # Two DIFFERENT signals, deliberately not merged. Conflating them made the chat
             # report 3 blocked vendors while the dashboard counted 2.
@@ -2531,6 +2696,11 @@ class DeepAgentOrchestrator:
                 "as suspect-but-unconfirmed and label it as such), or a high "
                 "forensics_risk_score, or an authenticity_warning present.\n"
                 "- Not forged / genuine / authentic = forensics_verdict PASS.\n"
+                "- Failed checks / failed authenticity checks / failed verification = failed_check true on the "
+                "row: authenticity in doubt (failed_authenticity) OR the register check failed "
+                "(failed_registration; registration_finding says how). Answer in two groups - authenticity, "
+                "then register check - with each certificate's number and what failed. A row whose "
+                "failed_check is false did not fail, whatever else it carries.\n"
                 "- Draft / unconfirmed = draft true (or confirmed_by_pm false) — a metadata "
                 "flag, never a lifecycle status.\n"
                 "- Verified = verification_verified true / verification_status verified.\n"
@@ -2942,22 +3112,18 @@ class DeepAgentOrchestrator:
         "additionalProperties": False,
     }
 
-    _ANALYST_PROMPT = prompt_doc("compliance", "answering")
+    _ANALYST_PROMPT = _LiveDocs(("compliance", "answering"))
     #: What the words mean in the data and what the tables measure. These used to reach only
     #: the sub-agent, whose prose is notes; the analyst writes the answer and must read them too.
-    _ANALYST_CONTEXT_DOCS = "\n\n---\n\n".join(
-        [
-            prompt_doc("compliance", "vocabulary"),
-            prompt_doc("compliance", "tables"),
-            prompt_doc("compliance", "domain_compliance_knowledge"),
-        ]
+    _ANALYST_CONTEXT_DOCS = _LiveDocs(
+        ("compliance", "vocabulary"), ("compliance", "tables"), ("compliance", "domain_compliance_knowledge")
     )
     """skills/compliance/answering.md - how an answer is shaped. Prose belongs in a file the people who write compliance policy can read and change, not in a Python string literal."""
 
     # Appended to the analyst prompt when the question asks what is REQUIRED. Without it the
     # analyst does what its main prompt says — reasons about the register rows — and returns a
     # portfolio status report to someone who asked what the law obliges them to hold.
-    _TAXONOMY_DIRECTIVE = prompt_doc("compliance", "taxonomy")
+    _TAXONOMY_DIRECTIVE = _LiveDocs(("compliance", "taxonomy"))
     """skills/compliance/taxonomy.md - appended when the question asks what is REQUIRED."""
 
     # Pseudo-zones used to push non-answer information up the same channel as the zones.
@@ -3126,74 +3292,7 @@ class DeepAgentOrchestrator:
             else ""
         )
         system = SystemMessage(
-            content=(
-                "You plan what a compliance question needs before any data is fetched, you "
-                "SPLIT IT if the user asked more than one thing, and you BUILD THE DATABASE "
-                "QUERY for each part. Reply with JSON only:\n"
-                '{"reason":"<one short sentence on what you will gather and why>",'
-                '"needs":["regulations","coverage","work_orders"],'
-                '"sub_questions":[{"id":"q1","text":"<the single thing being asked>",'
-                '"query":{"scope":"vendor|building|both",'
-                '"filters":[{"field":"<column>","op":"<op>","value":<v>}],'
-                '"logic":"and|or","sort":{"field":"expiry_date","dir":"asc"}}}]}\n'
-                "\nSPLIT ONLY WHERE IT CHANGES THE ANSWER. One question -> exactly one entry "
-                "in sub_questions (this is the normal case). Split when the user genuinely "
-                "asks separate things needing different data, e.g. \"which certificates are "
-                "lapsed, and which vendors are blocked?\" -> q1 lapsed certificates, q2 "
-                "blocked vendors. Do NOT split a single question that merely has two "
-                "conditions (\"forged AND still valid\" is ONE question with two filters).\n"
-                "\nBuild the query from the user's own words — read what they are asking for "
-                "and express it as filters. Do not return an empty filter list just to fetch "
-                "everything, unless the question really is a broad posture question.\n"
-                "Columns you may filter on: status, days_to_expiry, expiry_date, issue_date, "
-                "cert_scope, certificate_type_code, certificate_number, country_code, "
-                "state (the nation/state/emirate within country_code, spelled out in "
-                "full — England, Scotland, Wales, Northern Ireland for the UK), "
-                "region (the city or county below state — London, Norfolk), "
-                "building_name, issuer, inspector_name, result, remedial_status, "
-                "insurance_risk_flag, authenticity_warning, vendor_name, vendor_block_state, "
-                "site_name, asset_name, forensics_verdict, forensics_risk_score, draft, "
-                "confirmed_by_pm.\n"
-                "Operators: eq, neq, in, not_in, lt, lte, gt, gte, contains, is_null, "
-                "not_null.\n"
-                + vocab_text +
-                "Use ONLY values that appear in that list for those columns. If the user's "
-                "word is not one of them, express the question a different way — "
-                "\"compliant\" and \"valid\" are NOT status values, they mean "
-                'days_to_expiry gte 0; "expired" and "lapsed" mean days_to_expiry lt 0.\n'
-                "Examples:\n"
-                "- which vendor certificates are lapsed -> scope vendor, "
-                '[{"field":"status","op":"in","value":["Lapsed","Expired"]}]\n'
-                "- anything expiring in the next month -> "
-                '[{"field":"days_to_expiry","op":"gte","value":0},'
-                '{"field":"days_to_expiry","op":"lte","value":30}]\n'
-                "- expiring within 7 days -> "
-                '[{"field":"days_to_expiry","op":"gte","value":0},'
-                '{"field":"days_to_expiry","op":"lte","value":7}]\n'
-                "ALWAYS pair an expiry window with the lower bound "
-                'days_to_expiry gte 0. days_to_expiry is NEGATIVE for anything already '
-                "lapsed, so an upper bound on its own (lte 7) matches every expired "
-                "certificate in the register as well as the ones about to expire.\n"
-                "- forged certificates that are still valid -> "
-                '[{"field":"forensics_verdict","op":"eq","value":"fail"},'
-                '{"field":"days_to_expiry","op":"gte","value":0}]\n'
-                "- which vendors are blocked -> scope vendor, "
-                '[{"field":"vendor_block_state","op":"eq","value":"Blocked"}]\n'
-                "\nTWO DIFFERENT QUESTIONS. \"What certificates does a UK building/vendor "
-                "have to hold?\" asks what the LAW requires — that is answered from the "
-                "country pack, so include \"regulations\" (and \"coverage\" to show what is "
-                "held against it) and leave filters empty. \"Which of ours are lapsed?\" "
-                "asks about the register. Never answer the first from the register: a type "
-                "with no certificate on file is still required.\n"
-                "Include a source only when the question genuinely needs it:\n"
-                "- regulations: the question is about what is legally required, or the "
-                "answer should cite why something is required per certificate.\n"
-                "- coverage: the question is about gaps, what is missing, or what is not on "
-                "record.\n"
-                "- work_orders: the question touches scheduled work, jobs, or whether a "
-                "vendor problem affects operations.\n"
-                "Use an empty needs list for a plain status/list question."
-            )
+            content=compliance_planner_prompt(vocab_text)
         )
         # Bound before the call: when ainvoke itself raises — a bad model name, a 400, a
         # timeout — the handler below still logs `raw`, and an unbound local would turn a
@@ -3558,6 +3657,99 @@ class DeepAgentOrchestrator:
                     out.extend(offers_for_missing_type(t))
         return out
 
+    async def _set_turn_scope(self, session_id: str, user_message: str, keep: bool = False) -> None:
+        """The building and period this turn's tools default to, set once at the start of the turn
+        so every route reads the same scope (2 Nov 2026): the thread's working set on a follow-up,
+        else what the question names for itself. A tool called without a building used to read the
+        whole portfolio on any route that did not build the stateful input - the phase-2 engines,
+        the planner. `keep` leaves a scope the turn already set (an engine dispatched inside it)."""
+        if keep and thread_scope.active_scope.get() is not None:
+            return
+        try:
+            ws = await chat_threads.working_set(session_id) if thread_scope.is_followup(user_message) else None
+            thread_scope.active_scope.set(ws or await self._question_scope(user_message))
+        except Exception as exc:  # noqa: BLE001 - no scope, as before, rather than no answer
+            log.warning("orchestrator.turn_scope_failed", session_id=session_id, error=str(exc)[:200])
+            thread_scope.active_scope.set(None)
+
+    async def _question_scope(self, question: str) -> dict[str, Any] | None:
+        """The scope a question that is not a follow-up names for itself: its period, and the one
+        building it names - "JASMEET building" by its kind word, "Bishopsgate Tower" once the
+        company's buildings register knows the phrase (2 Nov 2026). Several buildings, or none,
+        set no building."""
+        scope = dict(thread_scope.question_scope(question) or {})
+        if not scope.get("building_name"):
+            found: list[str] = []
+            for phrase in thread_scope.place_candidates(question)[:3]:
+                for name in await self._known_names(
+                        {"filters": [{"field": "building_name", "op": "eq", "value": phrase}]}):
+                    if name not in found:
+                        found.append(name)
+            if len(found) == 1:
+                scope["building_name"] = found[0]
+        return scope or None
+
+    async def _known_names(self, spec: dict[str, Any] | None) -> list[str]:
+        """The buildings or vendors on record for the caller's company that a spec's name
+        filters name, however typed (agents/name_match.py) - [] when they name nothing on
+        record, or the spec names no building or vendor. Buildings come from the buildings
+        register (only those a restricted caller holds), vendors from the vendors table; a name
+        is matched against the company's records, never another company's (2 Nov 2026)."""
+        from sqlalchemy import text as _sql
+
+        from .. import database
+        from ..services.principal import caller_principal
+        from . import name_match
+
+        typed: dict[str, list[str]] = {"building": [], "vendor": []}
+        for f in (spec or {}).get("filters") or []:
+            if not isinstance(f, dict) or f.get("op") not in ("eq", "in", "contains"):
+                continue
+            field = f.get("field")
+            what = ("building" if field in ("building_name", "site_name")
+                    else "vendor" if field in ("vendor_name", "company_name") else "")
+            if not what:
+                continue
+            vals = f.get("value") if isinstance(f.get("value"), list) else [f.get("value")]
+            typed[what] += [str(v).strip() for v in vals if v is not None and str(v).strip()]
+        org = self._caller_company()
+        if not org or not (typed["building"] or typed["vendor"]):
+            return []
+        found: list[str] = []
+        try:
+            if database.AsyncSessionLocal is None:
+                database.init_session_factory()
+            async with database.AsyncSessionLocal() as session:
+                for what, words in typed.items():
+                    if not words:
+                        continue
+                    params: dict[str, Any] = {"org": str(org)}
+                    if what == "building":
+                        sql = ("SELECT DISTINCT name AS n FROM plenum_cafm.buildings "
+                               "WHERE organization_id::text = :org AND name IS NOT NULL AND btrim(name) <> ''")
+                        ids = getattr(caller_principal.get(None), "building_ids", None)
+                        if ids is not None:
+                            sql += " AND building_id::text = ANY(CAST(:ids AS text[]))"
+                            params["ids"] = [str(i) for i in ids]
+                        kind = self._BUILDING_KIND_WORDS
+                    else:
+                        sql = ("SELECT DISTINCT vendor_name AS n FROM plenum_cafm.vendors "
+                               "WHERE organization_id::text = :org AND vendor_name IS NOT NULL "
+                               "AND lower(COALESCE(to_jsonb(vendors)->>'status', '')) <> 'deleted'")
+                        kind = self._VENDOR_KIND_WORDS
+                    result = await session.execute(_sql(sql), params)
+                    rows = [(str(r["n"]), str(r["n"])) for r in result.mappings().all() if r["n"]]
+                    for v in words:
+                        if not name_match.meaningful(v, kind):
+                            continue
+                        for n, _ in name_match.best_matches(v, rows, kind):
+                            if n not in found:
+                                found.append(n)
+        except Exception as exc:  # noqa: BLE001 - unknown, so the read widens as before
+            log.warning("compliance.known_names_failed", error=str(exc)[:200])
+            return []
+        return found
+
     async def _relax_empty_spec(
         self, spec: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -3578,10 +3770,16 @@ class DeepAgentOrchestrator:
             # true empty, and there is nothing to relax anyway.
             return [], {}
 
+        # The building or vendor the question names is never what gets dropped: the rows must
+        # stay about it (2 Nov 2026: a building with nothing matching widened to other buildings).
         variants = [
             (j, {**spec, "filters": filters[:j] + filters[j + 1 :]})
             for j in range(len(filters))
+            if not (filters[j].get("field") in self._SPEC_NAME_FIELDS
+                    and filters[j].get("op") in ("eq", "in", "contains"))
         ]
+        if not variants:
+            return [], {}
         results = await asyncio.gather(
             *(self._fetch_compliance_table_direct(spec=v) for _, v in variants),
             return_exceptions=True,
@@ -3791,6 +3989,22 @@ class DeepAgentOrchestrator:
                     f"{c.get('status')!r} -> {db_status!r}"
                 )
                 c["status"] = db_status
+            # Its scope and owner are the row's too (2 Nov 2026: a building's Fire Risk
+            # Assessment was drawn as "Pennard Fire Services · Fire Risk Assessment"): a
+            # building certificate belongs to its building, a vendor's to the vendor.
+            row_scope = str(row.get("cert_scope") or "").lower()
+            if row_scope == "asset":
+                row_scope = "building"  # an asset's certificate is its building's (the vault's 10)
+            if row_scope in ("building", "vendor"):
+                owner = (row.get("vendor_name") if row_scope == "vendor"
+                         else (row.get("building_name") or row.get("site_name")
+                               or row.get("building_register_name")))
+                if owner and str(c.get("company") or "") != str(owner):
+                    issues.append(
+                        f"owner corrected for {cid[:8]}: {c.get('company')!r} -> {owner!r}"
+                    )
+                    c["company"] = owner
+                c["scope"] = row_scope.title()
             key = (cid, str(c.get("sub_question_id") or ""))
             if key in seen_cert_keys:
                 issues.append(f"dropped duplicate certificate id={cid[:8]}")
@@ -3818,7 +4032,8 @@ class DeepAgentOrchestrator:
         #    through. Each KPI now carries the ids it was derived from, so the number can be
         #    checked against them in both directions.
         total = len(rows)
-        for k in (analysis.get("kpis") or []):
+        unfounded: list[int] = []
+        for kn, k in enumerate(analysis.get("kpis") or []):
             if not isinstance(k, dict):
                 continue
             label = str(k.get("label"))[:40]
@@ -3828,6 +4043,12 @@ class DeepAgentOrchestrator:
                 continue
             ids = [str(i) for i in (k.get("cert_ids") or [])]
             grounded = {i for i in ids if i in valid_ids}
+            if str(k.get("unit") or "certificates").lower() == "certificates" and count > 0 and not grounded:
+                # A count of certificates with none behind it is left out, not shown as 0
+                # (2 Nov 2026: "Building certificates on file 0" over a register of 224).
+                issues.append(f"KPI {label!r} said {count} but cites no fetched certificate — left out")
+                unfounded.append(kn)
+                continue
             if len(grounded) != len(set(ids)):
                 issues.append(
                     f"KPI {label!r}: dropped {len(set(ids)) - len(grounded)} unknown cert id(s)"
@@ -3862,6 +4083,9 @@ class DeepAgentOrchestrator:
                 issues.append(f"KPI {label!r} claims {count} with no certificate to trace it to")
             if not is_magnitude and count > total:
                 issues.append(f"KPI {label!r} claimed {count} of {total} fetched")
+
+        if unfounded:
+            analysis["kpis"] = [k for kn, k in enumerate(analysis.get("kpis") or []) if kn not in unfounded]
 
         # 4. sections[] must line up with the parts the planner actually identified, and
         #    every sub_question_id used elsewhere must name one of them. A drifted id would
@@ -4039,13 +4263,9 @@ class DeepAgentOrchestrator:
         "additionalProperties": False,
     }
 
-    _REVIEWER_PROMPT = "\n\n---\n\n".join(
-        [
-            prompt_doc("compliance", "review"),
-            prompt_doc("compliance", "scope-eval"),
-            prompt_doc("compliance", "vocabulary"),
-            prompt_doc("compliance", "domain_compliance_knowledge"),
-        ]
+    _REVIEWER_PROMPT = _LiveDocs(
+        ("compliance", "review"), ("compliance", "scope-eval"), ("compliance", "vocabulary"),
+        ("compliance", "domain_compliance_knowledge"),
     )
     """skills/compliance/review.md - the reviewer's contract."""
 
@@ -4871,7 +5091,7 @@ class DeepAgentOrchestrator:
 
         def ident(r: dict[str, Any]) -> str:
             typ = r.get("certificate_type_code") or r.get("cert_type") or "certificate"
-            owner = (r.get("vendor_name") if scope(r) == "vendor" else (r.get("building_name") or r.get("site_name"))) or "?"
+            owner = (r.get("vendor_name") if scope(r) == "vendor" else (r.get("building_name") or r.get("site_name") or r.get("building_register_name"))) or "?"
             exp = str(r.get("expiry_date") or "")[:10]
             return f"{r.get('id')} · {typ} · {owner}" + (f" · expiry {exp}" if exp else "")
 
@@ -4928,7 +5148,7 @@ class DeepAgentOrchestrator:
         ]
         if lapsed:
             lines.append("  lapsed by vendor: " + ("; ".join(tally([r for r in lapsed if scope(r) == "vendor"], lambda r: str(r.get("vendor_name") or "?"))) or "none"))
-            lines.append("  lapsed by building: " + ("; ".join(tally([r for r in lapsed if scope(r) == "building"], lambda r: str(r.get("building_name") or r.get("site_name") or "?"))) or "none"))
+            lines.append("  lapsed by building: " + ("; ".join(tally([r for r in lapsed if scope(r) == "building"], lambda r: str(r.get("building_name") or r.get("site_name") or r.get("building_register_name") or "?"))) or "none"))
             lines.append("  lapsed ids (" + str(len(lapsed)) + "):")
             lines.extend("    " + ident(r) for r in lapsed[: cls._FACTS_MAX_IDS])
             if len(lapsed) > cls._FACTS_MAX_IDS:
@@ -4956,7 +5176,7 @@ class DeepAgentOrchestrator:
 
         def name(r: dict[str, Any]) -> str:
             typ = r.get("certificate_type_code") or r.get("cert_type") or "certificate"
-            owner = r.get("vendor_name") if str(r.get("cert_scope") or "").lower() == "vendor" else (r.get("building_name") or r.get("site_name"))
+            owner = r.get("vendor_name") if str(r.get("cert_scope") or "").lower() == "vendor" else (r.get("building_name") or r.get("site_name") or r.get("building_register_name"))
             exp = str(r.get("expiry_date") or "")[:10]
             return f"{typ} — {owner or '?'}" + (f" (expired {exp})" if exp else "")
 
@@ -4972,7 +5192,7 @@ class DeepAgentOrchestrator:
         groups = []
         by_owner: dict[str, list[dict[str, Any]]] = {}
         for r in lapsed:
-            owner = str((r.get("vendor_name") if str(r.get("cert_scope") or "").lower() == "vendor" else (r.get("building_name") or r.get("site_name"))) or "?")
+            owner = str((r.get("vendor_name") if str(r.get("cert_scope") or "").lower() == "vendor" else (r.get("building_name") or r.get("site_name") or r.get("building_register_name"))) or "?")
             by_owner.setdefault(owner, []).append(r)
         for owner, rs in sorted(by_owner.items(), key=lambda kv: -len(kv[1])):
             scope = "Vendor" if str(rs[0].get("cert_scope") or "").lower() == "vendor" else "Building"
@@ -5003,6 +5223,9 @@ class DeepAgentOrchestrator:
         taxonomy: bool = False,
         role: str = "analyst",
         facts: str = "",
+        _attempt: int = 1,
+        _effort: str | None = None,
+        _max_tokens: int | None = None,
     ) -> dict[str, Any] | None:
         """Reasoning pass: returns the typed compliance response object, or None.
 
@@ -5011,6 +5234,10 @@ class DeepAgentOrchestrator:
 
         When `on_zone` is given it is awaited with (key, value) as each top-level zone
         finishes streaming, so the UI can paint the narrative and KPIs first.
+
+        A reply that cannot be read is asked for once more (2 Nov 2026: 6,000 of 6,000 output
+        tokens spent thinking over 152,918 input tokens left no text, and the answer lost its
+        cards). When the reply ran out of room, the second ask thinks less and has twice the room.
         """
         api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
         if not api_key:
@@ -5018,13 +5245,16 @@ class DeepAgentOrchestrator:
         model = (
             getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL
         ).strip()
+        max_tokens = _max_tokens or self._ANALYST_MAX_TOKENS
         try:
             import anthropic
 
             client = anthropic.AsyncAnthropic(api_key=api_key)
             # The blank line belongs to the join, not to either document: taxonomy.md is
             # appended to answering.md only when the question asks what the law requires.
-            effort = (getattr(settings, "compliance_analyst_effort", "") or "medium").strip()
+            effort = _effort or (
+                getattr(settings, "compliance_analyst_effort", "") or "medium"
+            ).strip()
             _t0 = time.perf_counter()
             system_text = "\n\n---\n\n".join(
                 [self._ANALYST_CONTEXT_DOCS, self._ANALYST_PROMPT]
@@ -5044,13 +5274,14 @@ class DeepAgentOrchestrator:
                         "facts": facts,
                         "data_json": data_json,
                     },
-                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": self._ANALYST_MAX_TOKENS,
-                               "thinking": "adaptive", "schema": "compliance_response"},
+                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": max_tokens,
+                               "thinking": "adaptive", "schema": "compliance_response",
+                               "attempt": _attempt},
                 },
             )
             async with client.messages.stream(
                 model=model,
-                max_tokens=self._ANALYST_MAX_TOKENS,
+                max_tokens=max_tokens,
                 thinking={"type": "adaptive"},
                 output_config={
                     "effort": effort,
@@ -5116,13 +5347,23 @@ class DeepAgentOrchestrator:
             if slips:
                 log.info("compliance.analyst.repaired", slips=sorted(set(slips)))
         except Exception as exc:  # noqa: BLE001
-            log.warning("compliance.analyst.unparsable", error=str(exc)[:200])
+            stop = str(getattr(message, "stop_reason", "") or "")
+            log.warning("compliance.analyst.unparsable", error=str(exc)[:200], stop_reason=stop,
+                        raw_chars=len(raw), attempt=_attempt, max_tokens=max_tokens, effort=effort)
             activity_log.fire(
                 agent="compliance", stage=role, direction="error",
                 summary="unparsable analyst response", ok=False, error=str(exc), model=model,
-                payload={"raw": raw},
+                payload={"raw": raw, "stop_reason": stop, "attempt": _attempt},
             )
-            return None
+            if _attempt > 1:
+                return None
+            out_of_room = stop == "max_tokens"
+            return await self._claude_analyse_compliance(
+                user_message, data_json, on_zone=on_zone, sub_questions=sub_questions,
+                query_notes=query_notes, taxonomy=taxonomy, role=role, facts=facts, _attempt=2,
+                _effort="low" if out_of_room else effort,
+                _max_tokens=max_tokens * 2 if out_of_room else max_tokens,
+            )
 
         activity_log.fire(
             agent="compliance", stage=role, direction="output",
@@ -5231,6 +5472,13 @@ class DeepAgentOrchestrator:
         # cost=None — the turn's model calls (routing, any LLM this shortcut itself uses) were
         # never being recorded at all. Guarded exactly like _invoke_phase2_engine's own
         # begin_turn call, so a turn that DID start a ledger upstream keeps its entries.
+        # Not in a space without compliance (2 Nov 2026): in Ops Brain this shortcut, which runs
+        # before routing, answered "which certificates expire next month" from the register; the
+        # router, which applies the space, then never saw it.
+        if not spaces.allows(spaces.current(), "compliance"):
+            log.info("orchestrator.compliance.preflight_stood_down", session_id=session_id,
+                     reason="space", space=spaces.current())
+            return None
         if llm_cost.current() is None:
             llm_cost.begin_turn(session_id)
         if compliance_skill_path_enabled():
@@ -5247,6 +5495,12 @@ class DeepAgentOrchestrator:
             return None
 
         msg = " ".join((user_message or "").strip().lower().split())
+        # A question about work orders belongs to the work-order engine, or to the planner when it
+        # also asks about certificates - not to the certificate register alone.
+        if _NAMES_WORK_ORDERS.search(msg):
+            log.info("orchestrator.compliance.preflight_stood_down", session_id=session_id,
+                     reason="names work orders")
+            return None
         # This shortcut fires on loose patterns ("which vendor …"), which also match
         # contract-performance and energy questions ("which vendor has SLA completion
         # under 25h for P2"). When the PRD intent-keyword table routes the message to
@@ -5434,6 +5688,41 @@ class DeepAgentOrchestrator:
                         for i, note in relaxed.items()
                     ],
                 )
+            # A building or vendor the company has on record, with nothing matching, is an
+            # answer - none on file - and not a filter to throw away (2 Nov 2026: such a
+            # question read the company's whole register and was answered from other
+            # buildings). Only a name that names nothing on record still widens.
+            widen: list[int] = []
+            for i in retries:
+                if self._empty_is_the_answer(unique[i][1]):
+                    results[i] = []
+                    relaxed[i] = {
+                        "none_for": ["failed checks"],
+                        "dropped": "nothing",
+                        "kept": [
+                            f"{f.get('field')} {f.get('op')} {f.get('value')}"
+                            for f in (unique[i][1].get("filters") or [])
+                            if isinstance(f, dict)
+                        ],
+                        "reason": "worked out from every certificate on record: none matches",
+                    }
+                    continue
+                known = await self._known_names(unique[i][1])
+                if not known:
+                    widen.append(i)
+                    continue
+                results[i] = []
+                relaxed[i] = {
+                    "none_for": known,
+                    "dropped": "nothing",
+                    "kept": [
+                        f"{f.get('field')} {f.get('op')} {f.get('value')}"
+                        for f in (unique[i][1].get("filters") or [])
+                        if isinstance(f, dict)
+                    ] or ["the question's filters"],
+                    "reason": "on record, with nothing matching",
+                }
+            retries = widen
             if retries:
                 # Nothing narrower survived, so the filter itself is suspect — read the whole
                 # register for that part and let the analyst do the filtering, as before.
@@ -5600,6 +5889,14 @@ class DeepAgentOrchestrator:
         # "none — and here is why".
         query_notes = ""
         for n in relaxed_notes:
+            if n.get("none_for"):
+                query_notes += (
+                    "NOTHING ON FILE: " + ", ".join(n["none_for"]) + " is on record for this "
+                    "company, but no certificate matches this question for it ("
+                    + ", ".join(n["kept"]) + "). The answer is that none is on file. Say so "
+                    "plainly; do not answer from any other building's or vendor's certificates.\n"
+                )
+                continue
             query_notes += (
                 "IMPORTANT — THE ROWS ARE WIDER THAN THE QUESTION: no row satisfied every "
                 f"condition, so {n['dropped']} was dropped and only "
@@ -6654,10 +6951,18 @@ class DeepAgentOrchestrator:
             out += "CONTEXT: " + str(extra_context)[:(4600 if step["kind"] == "followup" else 600)] + "\n"
         return out
 
+    @staticmethod
+    def _space_engine_tools() -> list[tuple[str, list]]:
+        """The engines' tool lists this space may use (agents/spaces.py). A tool two engines share
+        stays while either engine is in the space (3 Nov 2026: the planner offered compliance's
+        certificate tools in the Assets Operating System)."""
+        here = spaces.current()
+        return [(engine, tools) for engine, tools in PHASE2_ENGINE_TOOLS.items() if spaces.allows(here, engine)]
+
     def _planner_tools(self) -> dict[str, str]:
-        """The tools a plan step may name: every engine's read tools, one line each."""
+        """The tools a plan step may name: every engine's read tools in this space, one line each."""
         out: dict[str, str] = {}
-        for tools in PHASE2_ENGINE_TOOLS.values():
+        for _engine, tools in self._space_engine_tools():
             for t in tools:
                 if t.name not in out:
                     line = planner.catalogue_line(t.name, t.description, getattr(t, "args", None))
@@ -6717,19 +7022,72 @@ class DeepAgentOrchestrator:
             except Exception as exc:  # noqa: BLE001
                 log.warning("planner.rewrite_failed", error=str(exc)[:200])
         check = planner.verify(answer, results)
+        if not check["ok"]:
+            # One rewrite told which figures did not trace (3 Nov 2026). Until then the check was
+            # appended to the answer as "_Check before quoting: 3951.2, 4317.6, 282.4 could not be
+            # traced to the step results." - our check, in our words, in front of the person.
+            # The rewrite carries the claim corrections too, and is kept only when it brings back no
+            # contradiction the first draft did not have (pre-push review, 3 Nov 2026).
+            try:
+                ask = question + planner.UNTRACED_NOTE + ", ".join(check["unmatched"][:8])
+                if claims:
+                    ask += planner.REWRITE_NOTE + "\n".join("- " + c for c in claims)
+                second = await planner.synthesise(ask, plan, results, self._planner_llm)
+                second_check = planner.verify(second, results)
+                worse = len(planner.verify_claims(second, question, results)) > len(planner.verify_claims(answer, question, results))
+                if not worse and len(second_check["unmatched"]) <= len(check["unmatched"]):
+                    answer, check = second, second_check
+            except Exception as exc:  # noqa: BLE001 - the first draft stands
+                log.warning("planner.figure_rewrite_failed", error=str(exc)[:200])
         rid = trace.on_step_open("verify", "verify figures", {"figures_checked": check["figures_checked"]})
         trace.on_step_close(rid, check, ok=check["ok"], error=None if check["ok"] else "figures not traceable: " + ", ".join(check["unmatched"][:8]))
         if not check["ok"]:
-            answer += ("\n\n_Check before quoting: " + ", ".join(check["unmatched"][:8])
-                       + (" could not be traced to a step result." if len(check["unmatched"]) == 1 else " could not be traced to the step results."))
+            # Kept for the trace and the log, never written into the answer.
+            log.warning("planner.figures_not_traced", unmatched=check["unmatched"][:8])
         return answer, check
 
+    @staticmethod
+    def _planned_args(tool: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """A plan step's arguments as the tool takes them (3 Nov 2026). The planner writes `args`
+        freehand: `work_orders: "WO-1"` for a list, or an argument the tool does not have. The
+        tool's schema refused the wrong type before its body ran - an exception with no log - and
+        the step came back "failed". An argument the tool does not take is dropped, a single value
+        for a list becomes a one-item list."""
+        schema = getattr(tool, "args", None) or {}
+        if not schema:
+            return dict(args or {})
+
+        def is_array(spec: Any) -> bool:
+            if not isinstance(spec, dict):
+                return False
+            if spec.get("type") == "array":
+                return True
+            return any(is_array(s) for s in (spec.get("anyOf") or []))
+
+        out: dict[str, Any] = {}
+        for k, v in (args or {}).items():
+            if k not in schema:
+                continue
+            if isinstance(v, (str, int, float)) and not isinstance(v, bool) and is_array(schema[k]):
+                v = [v]
+            out[k] = v
+        return out
+
     async def _run_planned_tool(self, name: str, args: dict[str, Any]) -> Any:
-        for tools in PHASE2_ENGINE_TOOLS.values():
+        from pydantic import ValidationError
+
+        for _engine, tools in self._space_engine_tools():
             for t in tools:
                 if t.name == name:
-                    return await t.ainvoke(args)
-        raise ValueError(f"unknown tool {name}")
+                    clean = self._planned_args(t, args)
+                    try:
+                        return await t.ainvoke(clean)
+                    except ValidationError as exc:
+                        # A value of the wrong shape: run without it rather than lose the step.
+                        bad = {str(e.get("loc", [""])[0]) for e in exc.errors()}
+                        log.warning("planner.tool_args_dropped", tool=name, dropped=sorted(bad))
+                        return await t.ainvoke({k: v for k, v in clean.items() if k not in bad})
+        raise ValueError(f"unknown tool {name} (or not part of this space)")
 
     async def _run_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], *,
                                 previous: str | None = None, on_event: Any = None) -> dict[str, Any]:
@@ -7004,7 +7362,18 @@ class DeepAgentOrchestrator:
         try:
             from .ontology_qa import linked_for_certificates
 
-            reach = await linked_for_certificates(ids, budget=25000)
+            # Bounded (2 Nov 2026): the first question after a restart waited 15 minutes here while
+            # the ontology was built. The read is shielded, so it carries on and the ontology it
+            # builds is there for the next question; this answer goes on without what it adds.
+            read = asyncio.ensure_future(linked_for_certificates(ids, budget=25000))
+            read.add_done_callback(lambda t: t.cancelled() or t.exception())
+            reach = await asyncio.wait_for(
+                asyncio.shield(read), timeout=CERTIFICATE_REACH_TIMEOUT_S
+            )
+        except TimeoutError:
+            log.warning("compliance.certificate_reach_timeout", session_id=session_id,
+                        certificates=len(ids), seconds=CERTIFICATE_REACH_TIMEOUT_S)
+            return None
         except Exception as rexc:  # noqa: BLE001
             log.warning("compliance.certificate_reach_failed", session_id=session_id, error=str(rexc)[:300])
             return None
@@ -7293,6 +7662,8 @@ class DeepAgentOrchestrator:
         Used when single-door extraction or intent keywords identify A/B/C.
         """
         set_session_context(session_id)
+        # The tools' building and period: the turn's, or set here for an engine called on its own.
+        await self._set_turn_scope(session_id, user_message, keep=True)
         if llm_cost.current() is None:
             llm_cost.begin_turn(session_id)
         engine_tools = PHASE2_ENGINE_TOOLS.get(engine) or []
@@ -7808,15 +8179,52 @@ class DeepAgentOrchestrator:
             session_id, answer, tool_calls, success, error,
             interrupted, interrupt_payload
         """
+        # The chat's own turn (2 Nov 2026): /run was a bare agent loop - no compliance shortcut,
+        # router, planner or space gate - so the same question answered differently here.
         sid = session_id or str(uuid.uuid4())
-        thread_id = str(uuid.uuid4())   # fresh thread — stateless
-        system_prompt = build_system_prompt(extra_context)
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_message),
-        ]
         log.info("orchestrator.run.start", session_id=sid, message_len=len(user_message))
-        return await self._invoke({"messages": messages}, thread_id, sid)
+        activity_log.set_current_session(sid, sid)
+        activity_log.ensure_turn()
+        return await self.run_question(user_message, sid, extra_context)
+
+    async def run_question(
+        self,
+        user_message: str,
+        session_id: str,
+        extra_context: str | None = None,
+    ) -> dict[str, Any]:
+        """A question answered by the chat's own turn (_stream_turn), returned as a REST result.
+
+        Every entry point - the chat, /run, /run-stateful (report cards, Hoist Crons, API callers),
+        Trace Lab - goes through the one turn, so the same question in the same company and space
+        takes the same route, tools and planner, and carries the thread's building into a
+        follow-up the same way (2 Nov 2026). The only difference is the caller's: the answer comes
+        back as text, not OpenUI (chat=False). The result is the turn's completed event, a gate it
+        stopped at, or the error it ended with, in the shape _invoke always returned."""
+        result: dict[str, Any] = {
+            "session_id": session_id, "answer": "", "tool_calls": [], "success": False,
+            "error": "The question ended with no answer.", "interrupted": False, "interrupt_payload": None,
+        }
+        turn = self._stream_turn(user_message, session_id, extra_context, chat=False)
+        try:
+            async for event in turn:
+                if not isinstance(event, dict):
+                    continue
+                kind = event.get("type")
+                if kind == "workflow_completed":
+                    result.update({k: v for k, v in event.items() if k != "type"})
+                    result.update(success=True, error=None, interrupted=False, interrupt_payload=None)
+                    result["answer"] = str(event.get("answer") or "")
+                    result["tool_calls"] = list(event.get("tool_calls") or [])
+                elif kind == "gate_interrupt":
+                    result.update(success=True, error=None, interrupted=True,
+                                  interrupt_payload=event.get("payload"))
+                elif kind == "error":
+                    result.update(success=False, error=str(event.get("error") or "error"), answer="")
+        finally:
+            await turn.aclose()
+        result["session_id"] = result.get("session_id") or session_id
+        return result
 
     async def run_stateful(
         self,
@@ -7843,10 +8251,17 @@ class DeepAgentOrchestrator:
         activity_log.fire(agent="orchestrator", stage="turn", direction="input", summary=(user_message or "")[:300],
                           payload={"message": user_message, "mode": "rest", "context": (extra_context or "")[:300] or None})
         try:
-            result = await self._run_stateful_inner(
-                user_message=user_message, session_id=session_id, extra_context=extra_context,
-                preferred_engine=preferred_engine, detected_engines=detected_engines,
-                pipeline_tool_calls=pipeline_tool_calls, filenames=filenames)
+            if (preferred_engine is None and detected_engines is None and pipeline_tool_calls is None
+                    and filenames is None):
+                # A question: the chat's own turn, so it is routed, planned and scoped the same
+                # way wherever it is asked (run_question, 2 Nov 2026).
+                result = await self.run_question(user_message, session_id, extra_context)
+            else:
+                # Files or an ingestion's pipeline: their own path, as before.
+                result = await self._run_stateful_inner(
+                    user_message=user_message, session_id=session_id, extra_context=extra_context,
+                    preferred_engine=preferred_engine, detected_engines=detected_engines,
+                    pipeline_tool_calls=pipeline_tool_calls, filenames=filenames)
         except Exception as exc:
             activity_log.fire(agent="orchestrator", stage="turn", direction="error", summary=str(exc)[:300], ok=False,
                               error=str(exc)[:300], latency_ms=(time.perf_counter() - t0) * 1000)
@@ -7884,6 +8299,7 @@ class DeepAgentOrchestrator:
         Call resume() with the same session_id to continue.
         """
         set_session_context(session_id)
+        await self._set_turn_scope(session_id, user_message)
         record_conversation_turn(session_id, "user", user_message)
         await chat_threads.record_question(session_id, user_message)
         session_state = get_session_state(session_id)
@@ -8299,6 +8715,7 @@ class DeepAgentOrchestrator:
         user_message: str,
         session_id: str | None = None,
         extra_context: str | None = None,
+        chat: bool = True,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream workflow events as typed dicts for WebSocket delivery.
@@ -8315,9 +8732,11 @@ class DeepAgentOrchestrator:
         history accumulates. Session conversation_turns backstop when HITL is off.
         """
         # The chat's turn: its answer is written in OpenUI (agents/openui_view.py). REST callers
-        # (report cards, /run, the Skill lab) read `answer` as text and are not taught the format.
-        openui_view.CHAT_TURN.set(True)
+        # (report cards, /run, the Skill lab) read `answer` as text and are not taught the format;
+        # they run this same turn with chat=False (run_question, 2 Nov 2026).
+        openui_view.CHAT_TURN.set(chat)
         sid = session_id or str(uuid.uuid4())
+        await self._set_turn_scope(sid, user_message)
         thread_id = sid
         config = self._config(thread_id)
         activity_log.set_current_session(sid, thread_id)

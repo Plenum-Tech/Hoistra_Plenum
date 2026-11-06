@@ -1243,11 +1243,151 @@ async def propose_asset_criticality_from_udr(
         return _err(exc, "propose_asset_criticality_from_udr")
 
 
+@tool
+async def list_blocked_vendors(building_name: str | None = None) -> dict:
+    """Which vendors are blocked - barred from new work - read from the vendor record: each blocked
+    vendor's name and, where recorded, the accreditation its block is for.
+
+    USE THIS for "which vendors are blocked", "is <vendor> blocked", "list the blocked contractors",
+    "how many blocked vendors does <building> have". With `building_name`, only the blocked vendors
+    that have work orders at that building, with their open and total work orders there, and the
+    company-wide count alongside.
+    It is the vendor record only, the same the Vendors page counts: never a certificate, an expiry
+    date or a document - those are the compliance module's, and a space without it does not show
+    them (2 Nov 2026). Only the asking company's vendors; a retired vendor is not blocked.
+    """
+    from sqlalchemy import text as _sql
+
+    from .. import database
+    from ..http_client import caller_organization_id
+    from ..services.principal import caller_principal
+    from . import wo_sla
+
+    p = caller_principal.get(None)
+    org = caller_organization_id.get() or (str(p.organization_id) if p and getattr(p, "organization_id", None) else None)
+    try:
+        org = str(_uuid.UUID(str(org))) if org else None
+    except ValueError:
+        org = None
+    if not org:
+        return {"ok": False, "error": "No company to read vendors for."}
+    if building_name and building_name.strip():
+        return await _blocked_vendors_at_building(org, building_name.strip())
+    risk = None
+    try:
+        if database.AsyncSessionLocal is None:
+            database.init_session_factory()
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(_sql("SET TRANSACTION READ ONLY"))
+            # A user restricted to some buildings reads the vendors on those (pre-push review).
+            vclause, vextra = wo_sla.vendor_clause("v")
+            result = await session.execute(_sql(
+                "SELECT v.vendor_name, v.blocked_accreditation_type FROM plenum_cafm.vendors v "
+                "WHERE v.organization_id::text = :org AND lower(COALESCE(v.block_state, '')) = 'blocked' "
+                "AND lower(COALESCE(to_jsonb(v)->>'status', '')) <> 'deleted'" + vclause
+                + " ORDER BY v.vendor_name"), {"org": org, **vextra})
+            rows = result.mappings().all()
+            # At risk, not blocked (S-5, 4 Nov 2026): a vendor whose accreditation has passed its expiry date but who
+            # carries no block flag. R33-12 counted these 4 with the 5 blocked as "nine blocked". Certificate detail,
+            # so only in a space that has compliance (module separation, 2 Nov 2026).
+            from . import spaces as _spaces
+
+            at_risk: list[dict[str, Any]] = []
+            if not _spaces.allows(_spaces.current(), "compliance"):
+                risk = None
+            else:
+                risk = await session.execute(_sql(
+                "SELECT v.vendor_name, string_agg(DISTINCT c.certificate_type_code, ', ') AS lapsed, "
+                "max(c.expiry_date)::date::text AS since FROM plenum_cafm.compliance_certificates c "
+                "JOIN plenum_cafm.vendors v ON v.id::text = c.vendor_id::text "
+                "WHERE c.organization_id::text = :org AND v.organization_id::text = :org "
+                "AND lower(coalesce(c.cert_scope, '')) = 'vendor' AND c.expiry_date::date < current_date "
+                "AND lower(coalesce(c.status, '')) NOT IN ('superseded', 'renewed') "
+                "AND coalesce(c.raw_metadata->>'archived', '') <> 'true' "
+                "AND lower(coalesce(v.block_state, '')) <> 'blocked' "
+                "AND lower(coalesce(to_jsonb(v)->>'status', '')) <> 'deleted'" + vclause
+                + " GROUP BY v.vendor_name ORDER BY v.vendor_name"), {"org": org, **vextra})
+            if risk is not None:
+                at_risk = [{"vendor": r.get("vendor_name"), "lapsed": r.get("lapsed"), "since": r.get("since")}
+                           for r in risk.mappings().all()]
+    except Exception as exc:  # noqa: BLE001 - a tool answers, it does not raise into the loop
+        log.warning("contract_performance.blocked_vendors_failed", error=str(exc)[:200])
+        return {"ok": False, "error": "The vendor records could not be read."}
+    blocked = [{"vendor": r["vendor_name"], "blocked_for": r["blocked_accreditation_type"]} for r in rows]
+    return {
+        "ok": True, "count": len(blocked), "blocked": blocked, "at_risk": at_risk, "source": "vendor records",
+        "answer_rules": (("Answer in two lists (SPEC S-5): NOT ELIGIBLE = the blocked vendors (the block flag, as on "
+                          "the Vendors page), each with what its block is for; AT RISK = vendors with a lapsed "
+                          "accreditation who are not blocked, each with what lapsed and since when. Never add the two "
+                          "into one blocked count and never send the reader to check a list themselves. Each list is "
+                          "a short list, one line per vendor (S-4), not a paragraph.") if risk is not None else
+                         ("Name each blocked vendor and, where given, what its block is for, as a short list, one "
+                          "line per vendor. Do not add certificate, expiry or document detail: this read has none.")),
+    }
+
+
+async def _blocked_vendors_at_building(org: str, building: str) -> dict:
+    """The blocked vendors with work orders at one building (3 Nov 2026: "how many open work orders
+    and blocked vendors does Bishopsgate Tower have?" had no read for the second half). Read-only,
+    the caller's company, and a restricted caller's buildings (services/principal.building_clause)."""
+    from ..services.principal import building_clause
+    from . import wo_sla
+
+    try:
+        from .energy_intelligence_agent import BUILDING_KIND_WORDS
+
+        bname, bfound = await wo_sla._one_name("buildings", "name", building, org, BUILDING_KIND_WORDS)
+        if not bname:
+            return {"ok": False, "found": False,
+                    "error": f"building {building!r}: " + (f"several match ({', '.join(bfound[:5])})" if bfound else "no match"),
+                    "answer_hint": "Say the building did not match, or ask which one was meant."}
+        done = "', '".join(wo_sla._OPEN_DONE)
+        # One row per vendor name, each work order counted once (count DISTINCT, the building an
+        # EXISTS): two vendor rows or two buildings sharing a name doubled every order. Ids compared
+        # as text - vendors.id is varchar on production, uuid on the test database (3 Nov 2026).
+        sql = ("SELECT v.vendor_name, string_agg(DISTINCT v.blocked_accreditation_type, '; ') AS blocked_for, "
+               "count(DISTINCT w.id) AS work_orders, "
+               f"count(DISTINCT w.id) FILTER (WHERE lower(COALESCE(w.status, '')) NOT IN ('{done}')) AS open_work_orders "
+               "FROM plenum_cafm.vendors v, plenum_cafm.work_orders w "
+               "WHERE v.organization_id::text = :org AND w.organization_id::text = :org "
+               "AND (w.vendor_id::text = v.id::text OR w.assigned_vendor::text = v.id::text "
+               "OR lower(COALESCE(w.vendor_name, w.vendor, '')) = lower(v.vendor_name)) "
+               f"AND {wo_sla.AT_BUILDING} "
+               "AND lower(COALESCE(v.block_state, '')) = 'blocked' "
+               "AND lower(COALESCE(to_jsonb(v)->>'status', '')) <> 'deleted'")
+        params: dict[str, Any] = {"org": org, "bname": bname}
+        clause, extra = building_clause("w.building_id")
+        sql += clause + " GROUP BY v.vendor_name ORDER BY v.vendor_name"
+        params.update(extra)
+        rows = await wo_sla._rows(sql, params)
+        vclause, vextra = wo_sla.vendor_clause("v")
+        everywhere = await wo_sla._rows(
+            "SELECT DISTINCT v.vendor_name FROM plenum_cafm.vendors v WHERE v.organization_id::text = :org "
+            "AND lower(COALESCE(v.block_state, '')) = 'blocked' "
+            "AND lower(COALESCE(to_jsonb(v)->>'status', '')) <> 'deleted'" + vclause, {"org": org, **vextra})
+    except Exception as exc:  # noqa: BLE001 - a tool answers, it does not raise into the loop
+        log.warning("contract_performance.blocked_vendors_at_building_failed", error=str(exc)[:200])
+        return {"ok": False, "error": "The vendor records could not be read."}
+    blocked = [{"vendor": r["vendor_name"], "blocked_for": r.get("blocked_for"),
+                "work_orders": int(r.get("work_orders") or 0), "open_work_orders": int(r.get("open_work_orders") or 0)}
+               for r in rows]
+    return {
+        "ok": True, "building": bname, "count": len(blocked), "blocked": blocked,
+        "blocked_company_wide": len(everywhere), "source": "vendor records and work orders",
+        "answer_rules": ("Blocked vendors AT this building are those with work orders here; say so, and give "
+                         "blocked_company_wide when it differs. Name each with what its block is for where "
+                         "given. No certificate, expiry or document detail: this read has none."),
+    }
+
+
 from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
 from .thread_scope import work_order_blockers  # noqa: E402 - blocked by the vendor, one read
+from .wo_engine_agent import vendor_work_orders_at_building  # noqa: E402 - a vendor at one building
 
 CONTRACT_PERFORMANCE_TOOLS = [
     search_documents,
+    list_blocked_vendors,
+    vendor_work_orders_at_building,
     work_order_blockers,
     list_invoices,
     extract_contract_from_document,

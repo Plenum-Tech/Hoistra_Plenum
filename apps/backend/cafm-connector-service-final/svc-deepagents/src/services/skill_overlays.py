@@ -49,7 +49,9 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_skill_overlays_doc ON {TABLE} (skill, doc, status)",
 ]
 
-STATUSES = ("proposed", "active", "rejected", "retired")
+#: 'testing' (5 Nov 2026, Bala): approved by a person, read only inside a Trace Lab rerun (CANDIDATE) while testing
+#: repeats; 'active' is what every agent reads; nothing reaches the repo until it is exported at commit.
+STATUSES = ("proposed", "testing", "active", "rejected", "retired")
 
 #: Text under test in one replay: {(skill, doc): text}. Never set outside the skill lab.
 CANDIDATE: ContextVar[dict[tuple[str, str], str] | None] = ContextVar("cafm_skill_candidate", default=None)
@@ -71,7 +73,14 @@ async def ensure_table() -> bool:
             await s.commit()
         _ready = True
     except Exception as exc:  # noqa: BLE001 - no table means no overlays, never a failed turn
-        log.warning("skill_overlays.ddl_failed", error=str(exc)[:200])
+        # A read-only process (Trace Lab) cannot run the DDL, and need not: the table is there to read.
+        try:
+            async with database.AsyncSessionLocal() as s:
+                _ready = (await s.execute(text(f"SELECT to_regclass('{TABLE}') IS NOT NULL"))).scalar() is True
+        except Exception:  # noqa: BLE001
+            _ready = False
+        if not _ready:
+            log.warning("skill_overlays.ddl_failed", error=str(exc)[:200])
     return _ready
 
 
@@ -105,9 +114,9 @@ def doc(skill: str, name: str) -> str:
     over = text_for(skill, name)
     if over:
         return over
-    from ..agents.skills import prompt_doc
+    from ..agents.skills import _shipped_doc
     try:
-        return prompt_doc(skill, name)
+        return _shipped_doc(skill, name)
     except RuntimeError:
         return ""
 
@@ -181,3 +190,94 @@ async def retire_active(skill: str, doc_name: str, *, by: str | None) -> int:
         await s.commit()
     await refresh(force=True)
     return int(getattr(res, "rowcount", 0) or 0)
+
+
+# ── the correction loop's lifecycle (Bala, 5 Nov 2026) ──────────────────────────────────────────
+# proposed (an agent's suggestion) -> testing (a person approved it; only a Trace Lab rerun reads it) -> active (a person
+# made it live; every agent reads it, no rebuild) -> exported to the repo at commit. Rejected and retired stay as history.
+
+def known_doc(skill: str, doc_name: str) -> bool:
+    """Only an existing instruction document can be changed: a skill's SKILL.md or one of its .md files, or the spec."""
+    import re as _re
+
+    from ..agents.skills import SPEC_DOC, SPEC_SKILL, skills_dir
+
+    if (skill, doc_name) == (SPEC_SKILL, SPEC_DOC):
+        return True
+    if not _re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,60}", skill or "") or not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,80}", doc_name or ""):
+        return False
+    return (skills_dir() / skill / f"{doc_name}.md").is_file()
+
+
+async def _move(overlay_id: str, *, frm: str, to: str, by: str | None) -> dict[str, Any] | None:
+    if not await ensure_table():
+        return None
+    async with database.AsyncSessionLocal() as s:
+        row = (await s.execute(text(
+            f"SELECT skill, doc, status FROM {TABLE} WHERE id = CAST(:id AS uuid)"), {"id": overlay_id})).first()
+        if not row or row[2] != frm:
+            return None
+        if to == "active":
+            await s.execute(text(
+                f"UPDATE {TABLE} SET status = 'retired' WHERE skill = :sk AND doc = :dc AND status = 'active'"),
+                {"sk": row[0], "dc": row[1]})
+        await s.execute(text(
+            f"UPDATE {TABLE} SET status = :st, reviewed_by = :by, reviewed_at = now() WHERE id = CAST(:id AS uuid)"),
+            {"st": to, "by": by, "id": overlay_id})
+        await s.commit()
+    await refresh(force=True)
+    return {"id": overlay_id, "skill": row[0], "doc": row[1], "status": to}
+
+
+async def approve_for_testing(overlay_id: str, *, by: str | None) -> dict[str, Any] | None:
+    """A person approved an agent's change: it is now under test (only a Trace Lab rerun reads it)."""
+    return await _move(overlay_id, frm="proposed", to="testing", by=by)
+
+
+async def go_live(overlay_id: str, *, by: str | None) -> dict[str, Any] | None:
+    """A person confirmed a change that passed its tests: every agent reads it from now on, no rebuild."""
+    return await _move(overlay_id, frm="testing", to="active", by=by)
+
+
+async def drop(overlay_id: str, *, by: str | None) -> dict[str, Any] | None:
+    """A person turned down a proposal or a change under test."""
+    out = await _move(overlay_id, frm="proposed", to="rejected", by=by)
+    return out or await _move(overlay_id, frm="testing", to="rejected", by=by)
+
+
+async def testing_texts() -> dict[tuple[str, str], str]:
+    """{(skill, doc): text} under test - what a Trace Lab rerun sets as CANDIDATE. Newest per document."""
+    if not await ensure_table():
+        return {}
+    async with database.AsyncSessionLocal() as s:
+        rows = (await s.execute(text(
+            f"SELECT DISTINCT ON (skill, doc) skill, doc, content FROM {TABLE} WHERE status = 'testing' "
+            "ORDER BY skill, doc, created_at DESC"))).all()
+    return {(r[0], r[1]): r[2] for r in rows}
+
+
+async def export_active() -> list[dict[str, Any]]:
+    """Every live document with the repo path it is committed to - the only way a change reaches the repo."""
+    if not await ensure_table():
+        return []
+    async with database.AsyncSessionLocal() as s:
+        rows = (await s.execute(text(
+            f"SELECT skill, doc, content FROM {TABLE} WHERE status = 'active' ORDER BY skill, doc"))).all()
+    return [{"skill": r[0], "doc": r[1], "path": f"skills/{r[0]}/{r[1]}.md", "content": _with_front_matter(r[0], r[1], r[2])}
+            for r in rows]
+
+
+def _with_front_matter(skill: str, doc_name: str, content: str) -> str:
+    """The file as it is committed: the shipped file's front matter (a SKILL.md's name, agent and triggers) kept above
+    the changed text, which the agents read without it."""
+    from ..agents.skills import skills_dir
+
+    try:
+        raw = (skills_dir() / skill / f"{doc_name}.md").read_text(encoding="utf-8")
+    except OSError:
+        return content
+    if raw.startswith("---"):
+        end = raw.find("\n---", 3)
+        if end > 0:
+            return raw[: end + 4].rstrip() + "\n\n" + content.strip() + "\n"
+    return content

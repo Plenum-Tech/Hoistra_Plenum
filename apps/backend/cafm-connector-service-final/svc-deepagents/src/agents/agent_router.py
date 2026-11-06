@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 import structlog
@@ -119,6 +120,16 @@ def agent_for_question(question: str, llm_choice: str | None = None) -> str | No
     return llm_choice or sure
 
 
+_BLOCKED = re.compile(r"\bblock(?:ed|s|ing)?\b", re.IGNORECASE)
+_VENDOR_WORD = re.compile(r"\b(?:vendors?|contractors?|suppliers?)\b", re.IGNORECASE)
+_CERT_WORD = re.compile(r"certificat|accredit|insur|lapse|expir|licen|renew", re.IGNORECASE)
+
+
+def _asks_blocked_vendors(question: str) -> bool:
+    """A question about which vendors are blocked, and about nothing compliance alone holds."""
+    return bool(_BLOCKED.search(question) and _VENDOR_WORD.search(question) and not _CERT_WORD.search(question))
+
+
 def _out_of_module(space: str | None, engine: str | None, source: str) -> dict | None:
     """The answer when the question belongs to a module this space does not have.
 
@@ -146,6 +157,22 @@ async def select_agent(question: str, context_note: str | None = None,
         # question about the user's own records. Never one engine, never asked back.
         return {"agent": None, "also": [], "source": "support",
                 "reason": "a support session: answered from the Hoistra guide and the user's records"}
+    # A question that plainly names a module this space does not have is refused here, before
+    # any model reads it (2 Nov 2026): in Ops Brain the model chose the general loop for "Which
+    # certificates expire next month?", the loop read the register through the generic table
+    # tools, and the gate below - applied only to an engine the model names - let it through.
+    _named = certain_engine(question or "")
+    # Which vendors are blocked is on the vendor record, which a space's Vendors module shows (Ops
+    # Brain's page counts them): there it is the vendors engine's, not refused as compliance. A
+    # question that also names certificates, accreditations or insurance stays compliance's.
+    if (_named in (None, "compliance") and not spaces.allows(space, "compliance")
+            and spaces.allows(space, "contract_performance") and _asks_blocked_vendors(question or "")):
+        log.info("agent_router.blocked_vendors_to_vendors_engine", space=space)
+        return {"agent": "contract_performance", "also": [], "source": "keyword",
+                "reason": "which vendors are blocked is on the vendor record, which this space's Vendors module shows"}
+    _outside = _out_of_module(space, _named, "keyword") if _named else None
+    if _outside:
+        return _outside
     if not llm_routing_enabled():
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
         return _out_of_module(space, eng, "disabled") or {

@@ -26,7 +26,7 @@ status contradicts what was asked — that is the worst error you can make here.
 - Lapsed / expired / non-compliant = status Lapsed or Expired, OR days_to_expiry < 0.
 - Current / compliant / valid / in-date = NOT lapsed (days_to_expiry >= 0).
 - At-risk / expiring soon = not lapsed but days_to_expiry <= 90.
-- Blocked vendor = a vendor holding a lapsed or blocked accreditation.
+- Blocked vendor = the vendor's block flag (list_blocked_vendors). A lapsed accreditation without the flag is AT RISK, listed separately (SPEC S-5, 4 Nov 2026).
 - Draft = the draft flag, never a status.
 Worked example — "certificates which are compliant but not lapsed" means include ONLY Current
 rows and exclude EVERY Lapsed/Expired row. A row showing "Status: Lapsed" must NOT appear in
@@ -56,7 +56,7 @@ country_code. If a requested field is null print "not recorded" rather than omit
 3. **Taxonomy** ("is Gas Safe building or vendor?", "which building certificates for Fire?")
    → list_country_pack(scope=…, trade_category=…). Never infer from on-record certificates;
    0 records ≠ "neither".
-4. Never say "no vendors blocked" when summary risk_dashboard.vendors_blocked > 0.
+4. The summary's risk_dashboard.vendors_blocked counts blocked AND at-risk vendors together; never quote it as the blocked count - use list_blocked_vendors (SPEC S-5, 4 Nov 2026).
 5. **Never pass organization_id** — portfolio read tools do not accept it (same as /compliance).
 
 ## Totals and counts of required types

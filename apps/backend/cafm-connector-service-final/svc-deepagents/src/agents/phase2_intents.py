@@ -12,6 +12,8 @@ Intent keyword lists below must stay byte-for-byte aligned with the PRD table.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Literal
 
 Phase2AgentId = Literal["compliance", "contract_performance", "energy_intelligence", "wo_engine"]
@@ -187,7 +189,16 @@ def format_phase2_intent_table() -> str:
 
 
 def _normalize(text: str) -> str:
-    return " ".join((text or "").lower().split())
+    # "work-order" and "work_order" read as "work order" (2 Nov 2026: the feedback's own wording,
+    # "work-order deviations", matched no keyword and was left to the model).
+    return " ".join(re.sub(r"[-_/]+", " ", (text or "").lower()).split())
+
+
+#: A work order named by its code - WO00000359, WO-1184, "wo 1184" - is about that work order. It
+#: weighs as much as two phrases, so "WO00000359 status and SLA" is the work-order engine's though
+#: it also says SLA (2 Nov 2026).
+WO_CODE = re.compile(r"\bwo[-_ ]?\d{3,}\b", re.IGNORECASE)
+WO_CODE_WEIGHT = 2.0
 
 
 #: A deterministic winner this far clear of the runner-up is reading words that are actually
@@ -209,6 +220,8 @@ def phase2_scores(message: str) -> dict:
                 total += 1.0 + 0.25 * max(0, len(needle.split()) - 1)
         if total:
             scores[agent] = total
+    if WO_CODE.search(msg):
+        scores["wo_engine"] = scores.get("wo_engine", 0.0) + WO_CODE_WEIGHT
     return scores
 
 
@@ -255,6 +268,8 @@ def match_phase2_agent(message: str) -> Phase2AgentId | None:
             if needle and needle in msg:
                 # Multi-word / longer phrases weigh more
                 scores[agent] += 1.0 + 0.25 * max(0, len(needle.split()) - 1)
+    if WO_CODE.search(msg):
+        scores["wo_engine"] += WO_CODE_WEIGHT
 
     best_agent: Phase2AgentId | None = None
     best_score = 0.0

@@ -311,7 +311,12 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
     parts: list[str] = []
     shared = shared_skill()
     if shared:
-        parts.append(shared.body)
+        parts.append(skill_body(shared))
+    # The approved answer specification (SPEC.md), read live from the one place every instruction lives
+    # (services/skill_overlays.py; Bala, 5 Nov 2026): the main MD, ahead of each sub-agent's own.
+    spec = spec_text()
+    if spec:
+        parts.append(spec)
     if agent not in NO_LENS_AGENTS:
         lens = fm_lens()
         if lens:
@@ -320,7 +325,7 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
         parts.append(extra.strip())
     own = skill_for_agent(agent)
     if own:
-        parts.append(own.body)
+        parts.append(skill_body(own))
         # Reference documents named in the skill's front matter, in the order given. SKILL.md
         # is the contract — what to do and what never to do — and stays short enough to be
         # read. These carry the detail one kind of question needs: the anomaly rules and what
@@ -349,7 +354,6 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
 NO_LENS_AGENTS = frozenset({"migration"})
 
 
-@lru_cache(maxsize=1)
 def fm_lens() -> str:
     """skills/query-builder/fm-lens.md - how every answer weighs what it found, as the facilities
     manager accountable for the buildings and their budget would: risk to life, then statutory
@@ -370,8 +374,47 @@ def fm_lens() -> str:
         return ""
 
 
-@lru_cache(maxsize=64)
 def prompt_doc(agent: str, name: str) -> str:
+    """One named instruction document as the agents should read it NOW (Bala, 5 Nov 2026): the text approved in
+    the one place instructions live (services/skill_overlays.py - an active change, or, inside one Trace Lab rerun
+    only, the text under test), else the shipped file. Read on every call, so a change needs no rebuild or
+    redeploy; the repo copy is updated only at commit."""
+    from ..services import skill_overlays
+
+    over = skill_overlays.text_for(agent, name)
+    if over and over.strip():
+        return over.strip()
+    return _shipped_doc(agent, name)
+
+
+def skill_body(skill: Skill) -> str:
+    """A skill's own SKILL.md body as the agents should read it now: an approved change first, else the file."""
+    from ..services import skill_overlays
+
+    over = skill_overlays.text_for(skill.slug, "SKILL")
+    return over.strip() if over and over.strip() else skill.body
+
+
+#: Where the approved answer specification is kept in the repo once it is committed (skill "spec", doc "SPEC").
+SPEC_SKILL, SPEC_DOC = "spec", "SPEC"
+
+
+def spec_text() -> str:
+    """The approved answer specification (SPEC.md): the live text first, else the committed file, else nothing.
+    Optional: an agent runs without one."""
+    from ..services import skill_overlays
+
+    over = skill_overlays.text_for(SPEC_SKILL, SPEC_DOC)
+    if over and over.strip():
+        return over.strip()
+    try:
+        return _shipped_doc(SPEC_SKILL, SPEC_DOC)
+    except RuntimeError:
+        return ""
+
+
+@lru_cache(maxsize=64)
+def _shipped_doc(agent: str, name: str) -> str:
     """One named instruction file from an agent's skill directory, front matter stripped.
 
     Behavioural contracts used to live as Python string literals — 19,311 chars of them in
@@ -407,3 +450,8 @@ def skill_index_markdown() -> str:
     for skill in routable_skills():
         rows.append(f"| `{skill.name}` | `{skill.agent}` | {skill.description} |")
     return "\n".join(rows)
+
+
+# Older callers clear the file cache through prompt_doc; the cache now sits on the file reader.
+prompt_doc.cache_clear = _shipped_doc.cache_clear  # type: ignore[attr-defined]
+fm_lens.cache_clear = lambda: None  # type: ignore[attr-defined]

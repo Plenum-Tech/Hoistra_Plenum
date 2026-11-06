@@ -642,10 +642,47 @@ class _Facts(NamedTuple):
     figures: set[str]  # outside its codes and dates: "condition score 2" is not the 2 of 2026-12-02
 
 
+_MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+# A month and year in words, with or without its day: "June 2026", "29 June 2026", "June 29, 2026".
+# Capitalised only, so "may 2026" in a sentence is not read as May.
+_MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|" \
+         r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+_WORDED_DATE = re.compile(
+    rf"(?<![\w])(?:(?P<d1>\d{{1,2}})(?:st|nd|rd|th)?[ \t]+(?P<m1>{_MONTH})\.?|(?P<m2>{_MONTH})\.?"
+    rf"(?:[ \t]+(?P<d2>\d{{1,2}})(?:st|nd|rd|th)?)?),?[ \t]+(?P<y>\d{{4}})(?![\w])")
+_YEAR = re.compile(r"(?:19|20)\d\d")
+
+
+def _worded_dates(text: str) -> set[str]:
+    """Every date written with its month in words, read as dates() reads 2026-06-29 ("2026/6/29"), or
+    as its year and month alone ("2026/6") when it has no day."""
+    out: set[str] = set()
+    for m in _WORDED_DATE.finditer(text or ""):
+        month = _MONTH_NAMES.index((m.group("m1") or m.group("m2"))[:3]) + 1
+        day = m.group("d1") or m.group("d2")
+        out.add(f"{int(m.group('y'))}/{month}" + (f"/{int(day)}" if day else ""))
+    return out
+
+
 def _facts(text: str) -> _Facts:
     codes = {c.upper() for c in _CODE.findall(text or "")}
     rest = _CODE.sub(" ", text or "")
-    return _Facts(_flat(text), codes, dates(rest), figures(_DATE.sub(" ", rest)))
+    return _Facts(_flat(text), codes, dates(rest) | _worded_dates(rest),
+                  figures(_WORDED_DATE.sub(" ", _DATE.sub(" ", rest))))
+
+
+def _date_held(item: str, said: set[str]) -> bool:
+    """A date is said where the same date is, and a month and year ("2026/6") where a date in that
+    month is: "lapsed since June 2026" is what "expired 2026-06-29" says of the same issue."""
+    return item in said or (item.count("/") == 1 and any(d.startswith(item + "/") for d in said))
+
+
+def _figure_held(item: str, place: _Facts) -> bool:
+    """A figure is said where the same figure is; a year on its own also where a date in that year
+    is (2 Nov 2026: "lapsed in 2026" on the card of a certificate the answer says expired 2026-06-29
+    cost the reader the whole layout)."""
+    return item in place.figures or (
+        bool(_YEAR.fullmatch(item)) and any(d.split("/")[0] == item for d in place.dates))
 
 
 def _blocks(answer: str) -> list[list[str]]:
@@ -659,9 +696,15 @@ def _blocks(answer: str) -> list[list[str]]:
 
 def _places(blocks: list[list[str]], names_it: Callable[[str], bool],
             rival: Callable[[str], bool]) -> list[_Facts]:
-    """Where the answer speaks of one issue: a block that names it and no other issue; inside a block
-    that names others too, the run of sentences from one that names only it up to the next that names
-    another; and a clause that names it."""
+    """Where the answer speaks of one issue, as its facts (see _place_texts)."""
+    return [_facts(p) for p in _place_texts(blocks, names_it, rival)]
+
+
+def _place_texts(blocks: list[list[str]], names_it: Callable[[str], bool],
+                 rival: Callable[[str], bool]) -> list[str]:
+    """Where the answer speaks of one issue, in its own words: a block that names it and no other
+    issue; inside a block that names others too, the run of sentences from one that names only it up
+    to the next that names another; and a clause that names it."""
     out: list[str] = []
     for block in blocks:
         flats = [_flat(s) for s in block]
@@ -683,7 +726,7 @@ def _places(blocks: list[list[str]], names_it: Callable[[str], bool],
                 run.append(sentence)
         if run:
             out.append(" ".join(run))
-    return [_facts(p) for p in out]
+    return out
 
 
 def _findings_bound(answer: str, root: Any) -> str | None:
@@ -692,9 +735,20 @@ def _findings_bound(answer: str, root: Any) -> str | None:
     says in the same paragraph (or, where a paragraph speaks of several issues, the same sentences) as
     its title or code (28 Oct 2026: a date or a code moved to another asset's finding would pass the
     set checks, as a figure under another vendor's label once did)."""
+    return _finding_fault(answer, root)[1]
+
+
+# What may come before an issue's lead: a list marker, a heading mark, a quote mark.
+_LEAD_MARKS = re.compile(r"^(?:[ \t>#]|[-*+][ \t]|\d+[.)][ \t])+")
+
+
+def _finding_fault(answer: str, root: Any) -> tuple[openui_view.Node | None, str | None, str]:
+    """(the first Finding the answer does not bind, why, the answer's own words for its issue), or
+    (None, None, "") when every Finding is bound. The words are the prose places that name the issue
+    (no table row), for read() to draw in the card's place; "" when the answer has none."""
     findings = [n for n in _walk(root) if n.type == "Finding"]
     if not findings:
-        return None
+        return None, None, ""
     whole, blocks = _flat(answer), _blocks(answer)
 
     def anchors(node: openui_view.Node) -> list[str]:
@@ -707,38 +761,51 @@ def _findings_bound(answer: str, root: Any) -> str | None:
         raw_code = openui_view.cell_text(node.props.get("code")).strip()
         title = _flat(raw_title).strip(" .,:;—–-")
         code = _flat(raw_code)
-        if not title:
-            return "a finding has no title"
         # The title may leave out the code the answer wrote inside it: "Fire Risk Assessment — Lapsed"
         # for "Fire Risk Assessment (FRA-B-301-2025) — Lapsed", with the code as the finding's code.
         uncoded = re.compile(r"\s*\(\s*" + re.escape(code) + r"\s*\)") if code else None
 
         def titled(flat: str, title: str = title, uncoded: re.Pattern[str] | None = uncoded) -> bool:
             return _mentions(flat, title) or (uncoded is not None and _mentions(uncoded.sub("", flat), title))
-        if not titled(whole):
-            return f"a finding's title is not in the answer: '{raw_title}'"
-        if code and not _mentions(whole, code):
-            return f"a finding's code is not in the answer: {raw_code}"
         mine = anchors(node)
         others = {a for other in findings if other is not node for a in anchors(other)
                   if not any(a in m or m in a for m in mine)}
 
         def rival(flat: str, others: set[str] = others) -> bool:
             return any(_mentions(flat, a) for a in others)
-        if code and not any(_mentions(p.flat, code) for p in _places(blocks, titled, rival)):
-            return f"finding '{raw_title}' has the code {raw_code}, which the answer does not give it"
 
         def named(flat: str, titled: Callable[[str], bool] = titled, code: str = code) -> bool:
             return titled(flat) or bool(code) and _mentions(flat, code)
+
+        def words(named: Callable[[str], bool] = named, rival: Callable[[str], bool] = rival,
+                  lead: str = title or code) -> str:
+            # The places that open with the issue (its bold lead) are where the answer is about it;
+            # a summary paragraph that only mentions it in passing is shown elsewhere already.
+            prose = [t.strip() for t in _place_texts(blocks, named, rival) if " | " not in t and t.strip()]
+            opens = [t for t in prose if lead and _LEAD_MARKS.sub("", _flat(t)).startswith(lead)]
+            return "\n\n".join(dict.fromkeys(opens or prose))
+        if not title:
+            return node, "a finding has no title", words()
+        if not titled(whole):
+            return node, f"a finding's title is not in the answer: '{raw_title}'", words()
+        if code and not _mentions(whole, code):
+            return node, f"a finding's code is not in the answer: {raw_code}", words()
+        if code and not any(_mentions(p.flat, code) for p in _places(blocks, titled, rival)):
+            return node, f"finding '{raw_title}' has the code {raw_code}, which the answer does not give it", words()
         places = _places(blocks, named, rival)
         said = _facts(openui_view.cell_text(node.props.get("text")))
-        for kind, items, held in (("code", said.codes, lambda p: p.codes), ("date", said.dates, lambda p: p.dates),
-                                  ("figure", said.figures, lambda p: p.figures)):
+        checks: tuple[tuple[str, set[str], Callable[[str, _Facts], bool]], ...] = (
+            ("code", said.codes, lambda item, p: item in p.codes),
+            ("date", said.dates, lambda item, p: _date_held(item, p.dates)),
+            ("figure", said.figures, _figure_held),
+        )
+        for kind, items, held in checks:
             for item in sorted(items):
-                if not any(item in held(p) for p in places):
+                if not any(held(item, p) for p in places):
                     what = _say(item) if kind == "figure" else item
-                    return f"finding '{raw_title}' gives the {kind} {what}, which the answer does not say of it"
-    return None
+                    return (node, f"finding '{raw_title}' gives the {kind} {what}, which the answer does not "
+                            "say of it", words())
+    return None, None, ""
 
 
 def _levels_kept(answer: str, root: Any) -> str | None:
@@ -820,31 +887,68 @@ def faithful(answer: str, rendition: str, shown: str | None = None, root: Any = 
 
 # ── the call ──────────────────────────────────────────────────────────────────────────────────
 
+#: How many of a layout's Findings may be drawn in the answer's own words instead of the model's
+#: before the layout is refused whole: one or two slips are the model's, more is a layout that did not
+#: follow the answer (2 Nov 2026).
+MAX_RESTATED = 2
+
+# Hyphens that are hyphens: the answer (Claude) writes B‑301 and 2026‑06‑29 with U+2011, the layout
+# model types B-301; a code or a date must read the same either way. Dashes (– —) are not hyphens.
+_HYPHENS = str.maketrans({"‐": "-", "‑": "-", "‒": "-"})
+
+
+def _plain_hyphens(text: str) -> str:
+    return (text or "").translate(_HYPHENS)
+
+
 def read(output: str, answer: str) -> tuple[dict[str, Any] | None, str]:
     """(the view's payload, or None; why not). The model's output is checked whole: it parses to an
-    Answer, the chat drops none of it, and what the reader sees says what the answer says."""
+    Answer, the chat drops none of it, and what the reader sees says what the answer says.
+
+    A Finding the answer does not bind (a date or a figure it does not say of that issue) is drawn as
+    the answer's own words for that issue - a Text in the card's place - rather than costing the
+    reader the whole layout (2 Nov 2026), up to MAX_RESTATED of them; the result is checked whole
+    again, as any layout is."""
     _lead, program, found = openui_view.split_program(output or "")
     if not found or not program:
         return None, "no program"
     if len(program) > openui_view.MAX_PROGRAM_CHARS:
         return None, "too long"
+    answer = _plain_hyphens(answer)
     # A `+0.45` the model wrote is sent as the text "+0.45": OpenUI would move every cell after it.
-    program = openui_view.quote_signed_numbers(program)
-    try:
-        result = openui_view.parse_full(program)
-        rendition = openui_view.render_markdown(result.root)
-        shown = openui_view.render_markdown(result.root, shown=True)
-    except Exception as exc:  # noqa: BLE001 - a layout must never cost the answer
-        return None, "unreadable: " + str(exc)[:80]
-    if result.root is None or not rendition.strip():
-        return None, "draws nothing"
-    if result.dropped or result.unresolved or result.orphans:
-        lost = result.dropped + [f"unresolved {n}" for n in result.unresolved] + [f"unused {n}" for n in result.orphans]
-        return None, "the chat would drop part of it: " + "; ".join(lost[:4])[:160]
-    why = faithful(answer, rendition, shown, result.root)
-    if why:
-        return None, why
-    return {"v": 1, "lang": program}, ""
+    program = openui_view.quote_signed_numbers(_plain_hyphens(program))
+    first = ""
+
+    def refused(why: str) -> tuple[None, str]:
+        return None, (f"{first} (restated in the answer's words, then: {why})" if first and why != first else why)
+
+    for restated in range(MAX_RESTATED + 1):
+        try:
+            result = openui_view.parse_full(program)
+            rendition = openui_view.render_markdown(result.root)
+            shown = openui_view.render_markdown(result.root, shown=True)
+        except Exception as exc:  # noqa: BLE001 - a layout must never cost the answer
+            return refused("unreadable: " + str(exc)[:80])
+        if result.root is None or not rendition.strip():
+            return refused("draws nothing")
+        if result.dropped or result.unresolved or result.orphans:
+            lost = result.dropped + [f"unresolved {n}" for n in result.unresolved] + [f"unused {n}" for n in result.orphans]
+            return refused("the chat would drop part of it: " + "; ".join(lost[:4])[:160])
+        node, why, words = _finding_fault(answer, result.root)
+        if node is not None and why:
+            first = first or why
+            fixed = (openui_view.restate_as_text(program, node, words)
+                     if words and restated < MAX_RESTATED else None)
+            if fixed is None:
+                return refused(why)
+            log.info("answer_presenter.finding_restated", reason=why)
+            program = fixed
+            continue
+        why = faithful(answer, rendition, shown, result.root)
+        if why:
+            return refused(why)
+        return {"v": 1, "lang": program}, ""
+    return refused(first)
 
 
 async def present(question: str, answer: str, llm: Llm) -> dict[str, Any] | None:

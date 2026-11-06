@@ -37,21 +37,22 @@ def test_run_stateful_opens_and_closes_the_turn_around_any_answer_path(monkeypat
     monkeypatch.setattr(activity_log, "ensure_turn", lambda *a, **k: None)
     o = O.__new__(O)
 
-    async def inner(**kw):
+    async def inner(*a, **kw):
         # a shortcut answer: never reaches _invoke, so nothing else would have closed the turn
         return {"answer": "There are 9 lapsed certificates.", "tool_calls": [{"tool": "count_compliance_certificates"}],
                 "success": True, "route_metadata": {"intent": "compliance"}}
 
-    o._run_stateful_inner = inner
+    # a plain question runs the chat's turn (run_question), a file call _run_stateful_inner: both traced
+    o._run_stateful_inner = o.run_question = inner
     out = asyncio.run(O.run_stateful(o, user_message="which certificates expired?", session_id="report-x"))
     assert out["answer"].startswith("There are 9")
     assert fired[0][:2] == ("turn", "input") and fired[0][3] == "rest" and fired[0][2] == "which certificates expired?"
     assert fired[-1][:2] == ("turn", "output") and fired[-1][2].startswith("There are 9")
 
-    async def boom(**kw):
+    async def boom(*a, **kw):
         raise RuntimeError("engine down")
 
-    o._run_stateful_inner = boom
+    o._run_stateful_inner = o.run_question = boom
     fired.clear()
     try:
         asyncio.run(O.run_stateful(o, user_message="q", session_id="report-y"))

@@ -100,6 +100,19 @@ def sent(layout: str) -> bool:
     return view is not None
 
 
+def restated(layout: str, name: str, gone: str) -> str:
+    """The layout is sent with card `name` drawn as the answer's own words (a Text in its place), and
+    `gone` - what the card got wrong - shown nowhere (2 Nov 2026: such a card used to cost the reader
+    the whole layout)."""
+    assert layout != LAYOUT
+    view, why = ap.read(layout, BISHOPSGATE)
+    assert view is not None, why
+    line = next(x for x in view["lang"].splitlines() if x.startswith(name + " = "))
+    assert line.startswith(name + ' = Text("**'), line
+    assert gone not in view["lang"], gone
+    return view["lang"]
+
+
 def refused(layout: str, *reasons: str) -> str:
     assert layout != LAYOUT
     view, why = ap.read(layout, BISHOPSGATE)
@@ -124,27 +137,35 @@ def test_a_title_may_leave_its_code_to_the_finding():
     assert sent(moved)
 
 
-def test_a_date_moved_to_another_assets_finding_is_not_sent():
+def test_a_date_moved_to_another_assets_finding_is_never_shown():
     # The FRA's and the lift's dates swapped: every date is still shown, so only the binding sees it.
+    # (2 Nov 2026: a card the binding refuses is restated in the answer's own words rather than costing
+    # the whole layout - see test_a_card_the_answer_does_not_bind_is_restated_in_its_words.)
     swapped = LAYOUT.replace("expired 2026-06-29", "expired 2026-10-18").replace(
         "an expiry of 2026-10-18", "an expiry of 2026-06-29")
-    why = refused(swapped, "finding")
-    assert "Fire Risk Assessment" in why and "2026/10/18" in why
+    view, why = ap.read(swapped, BISHOPSGATE)
+    assert view is not None, why
+    assert "expired 2026-10-18" not in view["lang"] and "an expiry of 2026-06-29" not in view["lang"]
+    shown = ov.render_markdown(ov.parse(view["lang"]), shown=True)
+    assert "**Fire Risk Assessment (FRA-B-301-2025) — Lapsed**, expired 2026-06-29" in shown
+    assert "shows an expiry of 2026-10-18, already passed" in shown
 
 
-def test_a_code_moved_to_another_assets_finding_is_not_sent():
+def test_a_code_moved_to_another_assets_finding_is_never_shown():
     # The lift's certificate code given to the generator, and the lift's asset code given to the FRA.
     moved = LAYOUT.replace("certificate on file (LOLER-B-301-4471)", "certificate on file").replace(
         "an unaccredited contractor.", "an unaccredited contractor (LOLER-B-301-4471).")
-    refused(moved, "finding 'Standby generator GEN-1' gives the code LOLER-B-301-4471")
+    restated(moved, "f4", "an unaccredited contractor (LOLER-B-301-4471)")
     wrong = LAYOUT.replace('"risk", "FRA-B-301-2025")', '"risk", "B-301-LIFT-4471")')
-    refused(wrong, "finding 'Fire Risk Assessment' has the code B-301-LIFT-4471")
+    lang = restated(wrong, "f1", 'Finding("Fire Risk Assessment"')
+    # the FRA's own paragraph, not the summary that mentions it in passing
+    assert 'f1 = Text("**Fire Risk Assessment (FRA-B-301-2025) — Lapsed**, expired 2026-06-29' in lang
 
 
-def test_a_code_or_title_not_in_the_answer_is_not_sent():
-    refused(LAYOUT.replace('"FRA-B-301-2025")', '"FRA-B-301-2026")'), "code is not in the answer: FRA-B-301-2026")
-    refused(LAYOUT.replace('Finding("Lift Asset-4471"', 'Finding("Passenger lift 4"'), "title is not in the answer")
-    refused(LAYOUT.replace('Finding("Lift Asset-4471"', 'Finding(""'), "a finding has no title")
+def test_a_code_or_title_not_in_the_answer_is_never_shown():
+    restated(LAYOUT.replace('"FRA-B-301-2025")', '"FRA-B-301-2026")'), "f1", "FRA-B-301-2026")
+    restated(LAYOUT.replace('Finding("Lift Asset-4471"', 'Finding("Passenger lift 4"'), "f2", "Passenger lift 4")
+    restated(LAYOUT.replace('Finding("Lift Asset-4471"', 'Finding(""'), "f2", 'Finding(""')
 
 
 def test_a_dropped_no_in_a_finding_is_not_sent():
@@ -157,8 +178,8 @@ def test_a_flipped_figure_in_a_finding_is_not_sent():
     refused(LAYOUT.replace("(-7 days)", "(+7 days)"), "direction")
     # A figure changed to one the answer gives elsewhere (a 3 is in the date 2026-12-03 of the same
     # paragraph, and in the fire alarm panel's condition score): every figure is still shown somewhere.
-    refused(LAYOUT.replace("a condition score of 2 (poor)", "a condition score of 3 (poor)"),
-            "finding 'Lift Asset-4471' gives the figure 3")
+    restated(LAYOUT.replace("a condition score of 2 (poor)", "a condition score of 3 (poor)"),
+             "f2", "a condition score of 3")
 
 
 def test_a_possessive_name_and_a_caveat_in_a_finding_are_held_like_any_text():
@@ -208,3 +229,60 @@ def test_the_layout_prompt_teaches_finding():
     # of the chart is the repeat.)
     assert "as a Table of only those two columns" in system
     assert "never drop a column because a chart shows it" in system
+
+
+# ── 2 Nov 2026: a live Bishopsgate layout was thrown away whole for one card ──
+# "finding 'Fire Risk Assessment' gives the figure 2026, which the answer does not say of it": the
+# card wrote the year on its own ("June 2026") where the answer gave the date in figures, and the
+# answer (Claude) writes its codes and dates with non-breaking hyphens (B‑301) where the layout model
+# types plain ones. One card cost the reader the whole layout.
+
+def test_a_year_or_a_month_is_the_date_the_answer_gives_that_issue():
+    june = LAYOUT.replace('"Lapsed, expired 2026-06-29 (about', '"Lapsed since June 2026, expired 2026-06-29 (about')
+    view, _why = ap.read(june, BISHOPSGATE)
+    assert "Lapsed since June 2026" in view["lang"]  # the model's card, kept as it wrote it
+    # a year or a month the answer does not give that issue is never shown on its card
+    for bad in ("Lapsed since 2024", "Lapsed since October 2026", "Lapsed since June 2025"):
+        view, _why = ap.read(LAYOUT.replace('"Lapsed, expired 2026-06-29 (about', f'"{bad}, expired 2026-06-29 (about'),
+                             BISHOPSGATE)
+        assert view is None or bad not in view["lang"], bad
+
+
+def test_non_breaking_hyphens_in_the_answer_are_plain_hyphens():
+    nb = BISHOPSGATE.replace("FRA-B-301-2025", "FRA‑B‑301‑2025").replace(
+        "2026-06-29", "2026‑06‑29").replace("B-301-LIFT-4471", "B‑301‑LIFT‑4471")
+    assert nb != BISHOPSGATE
+    view, why = ap.read(LAYOUT, nb)
+    assert view is not None, why
+    # and the other way round: a layout that kept the answer's non-breaking hyphens
+    view, why = ap.read(LAYOUT.replace("FRA-B-301-2025", "FRA‑B‑301‑2025"), BISHOPSGATE)
+    assert view is not None, why
+
+
+def test_a_card_the_answer_does_not_bind_is_restated_in_its_words():
+    # The FRA card given the lift's date: the card is drawn as the answer's own paragraph, not dropped
+    # with the whole layout, and not shown with the wrong date.
+    wrong = LAYOUT.replace("expired 2026-06-29", "expired 2026-10-18")
+    view, why = ap.read(wrong, BISHOPSGATE)
+    assert view is not None, why
+    assert 'f1 = Text("**Fire Risk Assessment (FRA-B-301-2025) — Lapsed**, expired 2026-06-29' in view["lang"]
+    assert "expired 2026-10-18" not in view["lang"]
+    assert view["lang"].count("Finding(") == LAYOUT.count("Finding(") - 1
+    # the rest of the layout is the model's, untouched
+    assert LIFT in view["lang"] and NORTHGATE in view["lang"]
+
+
+def test_a_layout_with_more_than_two_unbound_cards_is_refused():
+    worse = LAYOUT.replace("expired 2026-06-29", "expired 2026-10-18").replace(
+        "an expiry of 2026-10-18", "an expiry of 2026-06-29").replace(
+        "expires 2026-10-29 — tomorrow", "expires 2026-10-27 — tomorrow")
+    view, why = ap.read(worse, BISHOPSGATE)
+    assert view is None and "finding 'Fire Risk Assessment'" in why, why
+
+
+def test_a_card_written_inside_a_list_cannot_be_restated_and_is_refused():
+    inline = LAYOUT.replace('s1 = Section("1. Risk to life — act first", [f1, f2, f3, f4, f5])',
+                            's1 = Section("1. Risk to life — act first", [' + FRA[len("f1 = "):] + ', f2, f3, f4, f5])')
+    inline = inline.replace(FRA + "\n", "")
+    assert sent(inline)
+    refused(inline.replace("expired 2026-06-29", "expired 2026-10-18"), "finding 'Fire Risk Assessment'")

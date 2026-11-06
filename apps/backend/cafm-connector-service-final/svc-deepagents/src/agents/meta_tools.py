@@ -31,14 +31,27 @@ from .skills import (
     prompt_doc,
     route as route_to_skill,
     shared_skill,
+    skill_body,
+    spec_text,
 )
 from . import llm_cost
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from .context_budget import compact_context, make_hook as make_context_hook
 
 log = structlog.get_logger(__name__)
+
+
+def live_prompt(build: Any) -> Any:
+    """A sub-agent's system prompt built on every model call (Bala, 5 Nov 2026): the instruction documents are read
+    from the one place they live (services/skill_overlays.py) each time, so an approved change reaches the agents
+    without a rebuild. With no change approved it is the same text the fixed string carried."""
+    def _prompt(state: Any) -> list:
+        messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", [])
+        system = build() or ""
+        return ([SystemMessage(content=system)] if system else []) + list(messages or [])
+    return _prompt
 
 
 def _trace_callbacks(agent: str) -> dict:
@@ -54,7 +67,13 @@ def _trace_callbacks(agent: str) -> dict:
 # Attached as the system prompt on create_react_agent for agent="compliance".
 # ──────────────────────────────────────────────────────────────────────────────
 
-COMPLIANCE_SUBAGENT_PROMPT = prompt_doc("compliance", "tool-routing")
+def compliance_subagent_prompt() -> str:
+    """skills/compliance/tool-routing.md as it reads now (an approved change, else the file)."""
+    return prompt_doc("compliance", "tool-routing")
+
+
+#: A startup snapshot, kept for readers that want the text; the agents read compliance_subagent_prompt() live.
+COMPLIANCE_SUBAGENT_PROMPT = compliance_subagent_prompt()
 """skills/compliance/tool-routing.md - which tool answers which question, and what a
 status word means. Loaded between the shared query-builder discipline and the compliance
 skill, where it keeps precedence on tool choice while the skill supplies the data layer."""
@@ -90,9 +109,13 @@ CONTRACT_SUBAGENT_DOCS = (
     "never",
 )
 
-CONTRACT_SUBAGENT_PROMPT = "\n\n---\n\n".join(
-    prompt_doc("contract-performance", _name) for _name in CONTRACT_SUBAGENT_DOCS
-)
+def contract_subagent_prompt() -> str:
+    """The contract-performance documents as they read now (approved changes, else the files)."""
+    return "\n\n---\n\n".join(prompt_doc("contract-performance", _name) for _name in CONTRACT_SUBAGENT_DOCS)
+
+
+#: A startup snapshot, kept for readers that want the text; the agents read contract_subagent_prompt() live.
+CONTRACT_SUBAGENT_PROMPT = contract_subagent_prompt()
 """The vendor agent's discipline: vocabulary, the data layer and what it cannot read, tool
 choice and the name-to-id problem, how a score is built, how to rank, how to write the answer,
 how to check it, and the hard prohibitions. Loaded between the shared query-builder discipline
@@ -385,7 +408,7 @@ class _TaskRunner:
                 test_fiix_connection, fetch_fiix_schema, start_fiix_schema_mapping,
                 get_schema_mapping_status, continue_schema_mapping_gate,
                 start_fiix_ingestion, get_fiix_ingestion_status, list_fiix_ingestion_jobs,
-            ], prompt=agent_system_prompt("migration")),
+            ], prompt=live_prompt(lambda: agent_system_prompt("migration"))),
             "doc_rag": _sub("doc_rag", tools=[
                 index_document, query_docs, semantic_search,
                 extract_text, get_document_metadata, delete_document,
@@ -396,35 +419,35 @@ class _TaskRunner:
                 # session". Whether the question got a real answer then depended on the main
                 # agent happening to call the tool itself, which it did about half the time.
                 list_building_documents,
-            ], prompt=agent_system_prompt("doc_rag")),
+            ], prompt=live_prompt(lambda: agent_system_prompt("doc_rag"))),
             # One list, owned by wo_engine_agent, so a tool added there reaches this sub-agent.
             # The four Maintenance-page tools sat in ALL_TOOLS for a week and not here, and
             # every question the router sent to wo_engine landed on an agent without them.
             "wo_engine": _sub(
-                "wo_engine", tools=list(WO_ENGINE_SUBAGENT_TOOLS), prompt=agent_system_prompt("wo_engine")
+                "wo_engine", tools=list(WO_ENGINE_SUBAGENT_TOOLS), prompt=live_prompt(lambda: agent_system_prompt("wo_engine"))
             ),
             # The same agent with its write tools removed: what run_phase2_engine_verbose runs
             # when the router hands a Maintenance-page QUESTION straight to the engine.
             "maintenance": _sub(
-                "maintenance", tools=list(MAINTENANCE_READ_TOOLS), prompt=agent_system_prompt("wo_engine")
+                "maintenance", tools=list(MAINTENANCE_READ_TOOLS), prompt=live_prompt(lambda: agent_system_prompt("wo_engine"))
             ),
             # Legacy heuristics + Phase 2 Compliance Engine (A1–A5); the main orchestrator's
             # ALL_TOOLS omits the legacy tools to stay under OpenAI's 128-tool limit.
             "compliance": _sub(
                 "compliance", tools=self._compliance_tools,
-                prompt=agent_system_prompt("compliance", extra=COMPLIANCE_SUBAGENT_PROMPT),
+                prompt=live_prompt(lambda: agent_system_prompt("compliance", extra=compliance_subagent_prompt())),
             ),
             "contract_performance": _sub(
                 "contract_performance",
                 tools=[*CONTRACT_PERFORMANCE_TOOLS],
-                prompt=agent_system_prompt(
-                    "contract_performance", extra=CONTRACT_SUBAGENT_PROMPT
-                ),
+                prompt=live_prompt(lambda: agent_system_prompt(
+                    "contract_performance", extra=contract_subagent_prompt()
+                )),
             ),
             "energy_intelligence": _sub(
                 "energy_intelligence",
                 tools=[*ENERGY_INTELLIGENCE_TOOLS],
-                prompt=agent_system_prompt("energy_intelligence"),
+                prompt=live_prompt(lambda: agent_system_prompt("energy_intelligence")),
             ),
             # Read-only by design: a question is answered with reads. udr_create_record /
             # udr_update_record / udr_delete_record stay on the orchestrator, where a write
@@ -441,7 +464,7 @@ class _TaskRunner:
                     answer_with_graph_context, retrieve_vector_evidence,
                     lookup_user,
                 ],
-                prompt=agent_system_prompt("udr"),
+                prompt=live_prompt(lambda: agent_system_prompt("udr")),
             ),
         }
 
@@ -484,8 +507,9 @@ class _TaskRunner:
             selection["chars"] = len(contract)
             if contract:
                 shared = shared_skill()
+                # The shared contract and the spec as they read now (Bala, 5 Nov 2026), not the startup copy.
                 system = "\n\n---\n\n".join(
-                    [p for p in ((shared.body if shared else ""), contract) if p]
+                    [p for p in ((skill_body(shared) if shared else ""), spec_text(), contract) if p]
                 )
                 runner = self._sub("compliance", tools=self._compliance_tools, prompt=system)
             log.info(

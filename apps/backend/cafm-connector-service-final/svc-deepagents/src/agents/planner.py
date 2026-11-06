@@ -41,6 +41,18 @@ ENGINES: dict[str, str] = {
     "wo_engine": "work orders and maintenance: counts by status, overdue, blocked, decisions owed, cost saving, blockers by vendor",
 }
 MAX_STEPS = 6
+
+
+def planning_engines() -> dict[str, str]:
+    """The engines a plan may use in the space this question is asked in (agents/spaces.py).
+
+    Until 3 Nov 2026 the planner offered every engine whatever the space: the router refused a
+    compliance question in the Assets Operating System, but a multi-part question went to the
+    planner, which could plan a compliance step there. No space, or the full platform, is all."""
+    from . import spaces
+
+    here = spaces.current()
+    return {k: v for k, v in ENGINES.items() if spaces.allows(here, k)}
 #: Characters of an earlier step's output handed to a dependent step.
 CONTEXT_CHARS = 3500
 
@@ -86,6 +98,11 @@ Rules:
   counts, lists or details of records -> answer_from_records {{"question": "..."}};
   cost saving / where money goes -> get_cost_savings {{"building_name": "...", "period": "last_month|this_month|this_year|last_90_days"}};
   work orders blocked by a vendor's compliance or contract -> work_order_blockers {{"building_name": "...", "period": "..."}};
+  which / how many VENDORS are blocked (barred from new work), company-wide or at one building ->
+  list_blocked_vendors {{"building_name": "..."}} (leave building_name out for the whole company) - not work_order_blockers,
+  which is about work orders;
+  lapsed / expired certificates: write the step in the person's words ("lapsed certificates") - lapsed is read from
+  the status AND the expiry date, so never write it as a stored value ("status is exactly 'Lapsed'");
   repurchase / reorder / restock / replace / end of life / write off -> replacement_candidates {{"building_name": "...", "period": "..."}};
   decisions a manager owes / what needs my decision / which are statutory -> list_maintenance_decisions {{"building_id": "..."}}
   (statutory = source Compliance or a certificate trigger; get_maintenance_overview for the counts); what delaying a
@@ -142,7 +159,8 @@ TOOL_NOTES: dict[str, str] = {
     "get_asset_condition_rules": "any asset data; the two banding thresholds only.",
     "answer_from_records": "what a document says (search_documents); energy waste in pounds (get_cost_savings); which vendor blocks a job (work_order_blockers); decisions a manager owes (list_maintenance_decisions - ApprovalItem rows are not decisions).",
     "get_cost_savings": "a plain count or list of work orders (answer_from_records); certificates; the condition grade.",
-    "work_order_blockers": "why a job is late for any reason but its vendor; closed work orders; parts.",
+    "work_order_blockers": "why a job is late for any reason but its vendor; closed work orders; parts; which or how many vendors are blocked (list_blocked_vendors).",
+    "list_blocked_vendors": "certificates, expiry dates or documents; why a work order is held (work_order_blockers).",
     "replacement_candidates": "a single asset's history (answer_from_records); energy waste; which work orders are open.",
     "search_documents": "counts, dates, statuses or amounts held in records (answer_from_records); the whole corpus - always name the vendor, asset or building.",
     "consumption_by_asset": "condition grade, work orders or cost saving; kWh ranking only.",
@@ -186,7 +204,7 @@ def catalogue_line(name: str, description: str | None, params: Any = None) -> st
 
 
 def _catalogue_text(tools: dict[str, str]) -> tuple[str, str]:
-    eng = "\n".join(f"- {k}: {v}" for k, v in ENGINES.items())
+    eng = "\n".join(f"- {k}: {v}" for k, v in planning_engines().items())
     tl = "\n".join(f"- {k}: {v}" for k, v in sorted(tools.items()))
     return eng, tl
 
@@ -209,6 +227,8 @@ def validate(plan: Any, tools: dict[str, str]) -> tuple[dict[str, Any] | None, s
         kind, target = str(s.get("kind") or "").strip(), str(s.get("target") or "").strip()
         if kind == "engine" and target not in ENGINES:
             return None, f"step {sid}: unknown engine {target!r}"
+        if kind == "engine" and target not in planning_engines():
+            return None, f"step {sid}: engine {target!r} is not part of this space"
         if kind == "tool" and target not in tools:
             return None, f"step {sid}: unknown tool {target!r}"
         if kind not in ("engine", "tool"):
@@ -513,7 +533,20 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
         try:
             if step["kind"] == "engine":
                 answer, tool_calls = await run_engine(step["target"], ask, on_event)
-                results[step["id"]] = {"output": answer, "tool_calls": tool_calls, "ok": True, "error": None}
+                read_alone = not step["depends_on"] and not given
+                if not tool_calls and read_alone:
+                    # An engine step with nothing given to it answers from records or not at all.
+                    # 3 Nov 2026: the contract_performance step wrote "Plan: identify the live
+                    # work-order fields..." and stopped without a tool call; that plan was taken
+                    # as its answer. Asked once more; still nothing read is a failed step.
+                    answer, tool_calls = await run_engine(step["target"], f"{ask}\n\n{READ_THE_RECORDS}", on_event)
+                if not tool_calls and read_alone:
+                    log.warning("planner.step_read_nothing", step=step["id"], target=step["target"],
+                                answer=str(answer or "")[:300])
+                    results[step["id"]] = {"output": None, "tool_calls": [], "ok": False,
+                                           "error": f"{step['target']} read no records for this step"}
+                else:
+                    results[step["id"]] = {"output": answer, "tool_calls": tool_calls, "ok": True, "error": None}
             else:
                 args = dict(step.get("args") or {}) or {"question": ask}
                 # Earlier steps' results and the hard filter travel in the question when the tool takes one.
@@ -527,8 +560,17 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
                 results[step["id"]] = {"output": out, "tool_calls": [{"tool": step["target"], "input": args, "output": out}],
                                        "ok": True, "error": None}
         except Exception as exc:  # noqa: BLE001 - one failed step is a fact for the synthesis, not the end of the turn
-            err = str(exc).splitlines()[0][:300]
+            err = (str(exc).splitlines() or [type(exc).__name__])[0][:300]
             results[step["id"]] = {"output": None, "tool_calls": [], "ok": False, "error": err}
+            # Logged (3 Nov 2026): a step that raised used to reach the writer as "FAILED: ..." and
+            # nowhere else, so "the vendor-blocker check failed" had no cause anyone could read.
+            log.warning("planner.step_failed", step=step["id"], kind=step["kind"], target=step["target"],
+                        error=f"{type(exc).__name__}: {err}")
+        out_now = results[step["id"]].get("output")
+        if isinstance(out_now, dict) and out_now.get("ok") is False:
+            # A tool that answers with an error does not raise; say so where it can be found.
+            log.warning("planner.step_answered_error", step=step["id"], target=step["target"],
+                        error=str(out_now.get("error") or "")[:300])
         results[step["id"]]["ms"] = int((time.perf_counter() - t0) * 1000)
         r = results[step["id"]]
         trace.on_step_close(run_id, {"output": r["output"], "tool_calls": len(r["tool_calls"]), "ms": r["ms"]}, ok=r["ok"], error=r["error"])
@@ -669,6 +711,16 @@ def verify_claims(answer: str, question: str, results: dict[str, dict[str, Any]]
                                f"({o['count']} of {o['total']}): its filter did nothing.")
     return list(dict.fromkeys(out))
 
+
+#: Said to an engine step that answered without reading a single record (3 Nov 2026).
+READ_THE_RECORDS = ("Read the records now with your tools and answer from what they return. Do not describe "
+                    "a plan or the fields you would check - call the tool.")
+
+UNTRACED_NOTE = """
+
+FIGURES IN A FIRST DRAFT THAT NO STEP RESULT HOLDS (state each figure exactly as a result gives it; do
+not add up, average or derive a figure the results do not show; leave a figure out rather than invent
+it): """
 
 REWRITE_NOTE = """
 

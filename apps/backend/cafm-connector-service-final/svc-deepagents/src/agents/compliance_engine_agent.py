@@ -361,6 +361,128 @@ def _apply_tolerant_filters(data: dict[str, Any], **queries: str | None) -> dict
     return data
 
 
+def _read_by_date(data: Any, status: str | None, limit: int) -> Any:
+    """The certificates with each status read from its expiry date (agents/cert_expiry.py), then
+    the status asked for kept and the limit applied - in that order, because the service filters
+    on the STORED status and a certificate stored "valid" whose date has passed is lapsed
+    (3 Nov 2026: LOLER-B-301-4471 and FGAS-B-301-CH101 were missing from "lapsed certificates")."""
+    from . import cert_expiry
+
+    if not isinstance(data, dict) or not isinstance(data.get("certificates"), list):
+        return data
+    rows = cert_expiry.read_rows(data["certificates"])
+    if status:
+        rows = cert_expiry.keep_status(rows, status)
+    out = dict(data)
+    out["certificates"] = rows[:limit] if limit and limit > 0 else rows
+    out["count"] = len(out["certificates"])
+    if status:
+        out["status"] = status
+        if len(rows) > len(out["certificates"]):
+            out["more_not_shown"] = len(rows) - len(out["certificates"])
+    out["status_rule"] = cert_expiry.STATUS_RULE
+    return out
+
+
+async def _building_and_asset_certificates(params: dict[str, Any]) -> dict[str, Any]:
+    """The service's Building-scope and Asset-scope certificates in one list: asked for once per
+    scope (the service filters cert_scope on equality), a row returned under both kept once, and
+    the merge ordered by expiry date as the service orders each scope."""
+    resps = await asyncio.gather(*(
+        _request("GET", _base(), "/api/compliance/certificates", service=_SERVICE, timeout=_TIMEOUT,
+                 params={**params, "cert_scope": scope})
+        for scope in ("Building", "Asset")))
+    first = resps[0].json()
+    if not isinstance(first, dict):
+        return first
+    rows, seen = [], set()
+    for resp in resps:
+        data = resp.json()
+        for r in (data.get("certificates") if isinstance(data, dict) else None) or []:
+            key = (r.get("id") or r.get("certificate_number") or repr(sorted(r.items()))) if isinstance(r, dict) else repr(r)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(r)
+    rows.sort(key=lambda r: (not (isinstance(r, dict) and r.get("expiry_date")),
+                             str(r.get("expiry_date") or "") if isinstance(r, dict) else ""))
+    return {**first, "count": len(rows), "certificates": rows}
+
+
+#: A certificate this close to its expiry date, or past it, says when it falls due and what is raised for it.
+DUE_SOON_DAYS = 60
+OVERDUE_RULE = ("A certificate past its expiry date was DUE on that date and is overdue: say the due date and how many "
+                "days overdue (next_due), never that nothing is due. Only a work order with covers_inspection true is "
+                "the inspection already raised: name it and say to progress it rather than raise a new one. A work "
+                "order with covers_inspection false (a repair on the same asset) never counts as the inspection "
+                "(SPEC S-3); if none covers it, say no inspection work order is raised.")
+
+#: The words that make a work order the inspection a certificate needs (S-3), by certificate type.
+_INSPECTION_WORDS = {"loler": ("loler", "thorough examination"), "eicr": ("eicr", "periodic inspection", "electrical installation"),
+                     "gas": ("gas safety", "gas safe", "cp12"), "fra": ("fire risk assessment", "fra"),
+                     "pat": ("pat test", "portable appliance"), "legionella": ("legionella",),
+                     "fgas": ("f-gas", "fgas", "leak check"), "asbestos": ("asbestos",), "epc": ("epc", "energy performance")}
+
+
+def _inspection_words(cert: dict[str, Any]) -> tuple[str, ...]:
+    hay = " ".join(str(cert.get(k) or "") for k in ("certificate_type_code", "certificate_number", "certificate_type",
+                                                    "name")).lower().replace("_", " ")
+    for key, words in _INSPECTION_WORDS.items():
+        if key in hay.replace("-", "").replace(" ", "") or any(w in hay for w in words):
+            return words + ("inspection", "examination", "certificate renewal", "certification")
+    return ("inspection", "examination", "certificate renewal", "certification")
+
+
+async def _with_due_and_work_orders(data: Any) -> Any:
+    """Each overdue or soon-due certificate with its due date (next_due) and the open work orders raised on its asset,
+    read-only within the caller's company and buildings (4 Nov 2026: R34-1 "when is the next LOLER inspection due?"
+    was answered "there is no next LOLER inspection due" for LOLER-B-301-4471, due 18 Oct 2026, and missed
+    WO-B-301-4533, the examination already raised on the same lift)."""
+    from . import wo_sla
+    from ..services.principal import building_clause
+
+    if not isinstance(data, dict) or not isinstance(data.get("certificates"), list):
+        return data
+    rows = [dict(r) if isinstance(r, dict) else r for r in data["certificates"]]
+    due = [r for r in rows if isinstance(r, dict) and isinstance(r.get("days_to_expiry"), int)
+           and r["days_to_expiry"] <= DUE_SOON_DAYS]
+    for r in due:
+        d = r["days_to_expiry"]
+        r["next_due"] = {"due_date": str(r.get("expiry_date") or "")[:10], "days_overdue": -d if d < 0 else 0,
+                         "days_left": d if d >= 0 else 0}
+    assets = sorted({str(r["asset_id"]) for r in due if r.get("asset_id")})
+    org = wo_sla._scope()
+    if assets and org:
+        done = "', '".join(wo_sla._OPEN_DONE)
+        sql = ("SELECT w.asset_id::text AS asset_id, w.wo_code, w.status, left(coalesce(w.title, ''), 160) AS title "
+               "FROM plenum_cafm.work_orders w WHERE w.organization_id::text = :org "
+               "AND w.asset_id::text = ANY(:assets) "
+               f"AND lower(coalesce(w.status, '')) NOT IN ('{done}')")
+        params: dict[str, Any] = {"org": org, "assets": assets}
+        clause, extra = building_clause("w.building_id")
+        params.update(extra)
+        try:
+            found = await wo_sla._rows(sql + clause + " ORDER BY w.wo_code LIMIT 200", params)
+        except Exception as exc:  # noqa: BLE001 - the certificates still answer without it
+            log.warning("compliance.certificate_work_orders_failed", error=str(exc)[:200])
+            found = []
+        by: dict[str, list[dict[str, Any]]] = {}
+        for w in found:
+            by.setdefault(str(w["asset_id"]), []).append(
+                {"wo_code": w["wo_code"], "status": w["status"], "title": w["title"]})
+        for r in due:
+            if r.get("asset_id") and str(r["asset_id"]) in by:
+                words = _inspection_words(r)
+                r["open_work_orders"] = [
+                    {**w, "covers_inspection": any(x in str(w["title"]).lower() for x in words)}
+                    for w in by[str(r["asset_id"])][:5]]
+    out = dict(data)
+    out["certificates"] = rows
+    if due:
+        out["status_rule"] = (str(out.get("status_rule") or "") + " " + OVERDUE_RULE).strip()
+    return out
+
+
 def _email_drafts_for_chat(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Flatten Approvals items into chat-ready email draft cards."""
     out: list[dict[str, Any]] = []
@@ -475,7 +597,8 @@ async def list_building_certificates(
     building_name: str | None = None,
     limit: int = 100,
 ) -> dict:
-    """List building-scope compliance certificates (portfolio — same as /compliance).
+    """List building compliance certificates, including those on a building's assets (a lift's LOLER,
+    a chiller's F-gas record) - portfolio, same as /compliance.
 
     status: Lapsed / expired / Current / Expiring Soon / Due for Renewal / Overdue / Critical.
     "expired" == "lapsed". Do NOT pass status='compliant', 'at_risk', 'Blocked', or 'draft'.
@@ -509,9 +632,10 @@ async def list_building_certificates(
         # Names are matched here, tolerantly, not by the service's exact-substring filter —
         # so fetch the whole scope when any name is given.
         named = bool(vendor_name or building_name or trade_category)
-        params: dict[str, Any] = {"cert_scope": "Building", "limit": max(limit, 500) if named else limit}
-        if status:
-            params["status"] = status
+        # A status is read from the expiry date here (_read_by_date), not filtered by the service
+        # on the stored column - so fetch the whole scope when a status is asked for.
+        fetch = 1000 if status else (max(limit, 500) if named else limit)
+        params: dict[str, Any] = {"limit": fetch}
         if draft is not None:
             params["draft"] = str(draft).lower()
         if site_id:
@@ -522,17 +646,13 @@ async def list_building_certificates(
             params["expiring_within_days"] = expiring_within_days
         if expiry_month:
             params["expiry_month"] = expiry_month
-        resp = await _request(
-            "GET",
-            _base(),
-            "/api/compliance/certificates",
-            service=_SERVICE,
-            timeout=_TIMEOUT,
-            params=params,
-        )
-        return _apply_tolerant_filters(
-            resp.json(), vendor_name=vendor_name, building_name=building_name, trade_category=trade_category
-        )
+        # A certificate on one of a building's assets (a lift's LOLER, a chiller's F-gas record) is
+        # stored as cert_scope "Asset", and the service filters the scope on equality: asking for
+        # "Building" alone left FGAS-B-301-CH101 and LOLER-B-301-4471 out of every answer (3 Nov 2026).
+        data = await _building_and_asset_certificates(params)
+        return await _with_due_and_work_orders(_read_by_date(_apply_tolerant_filters(
+            data, vendor_name=vendor_name, building_name=building_name, trade_category=trade_category
+        ), status, limit))
     except Exception as exc:
         return _err(exc, "list_building_certificates")
 
@@ -575,9 +695,9 @@ async def list_vendor_accreditations(
     """
     try:
         named = bool(vendor_name or trade_category)
-        params: dict[str, Any] = {"cert_scope": "Vendor", "limit": max(limit, 500) if named else limit}
-        if status:
-            params["status"] = status
+        # The status is read from the expiry date after the fetch (_read_by_date).
+        fetch = 1000 if status else (max(limit, 500) if named else limit)
+        params: dict[str, Any] = {"cert_scope": "Vendor", "limit": fetch}
         if draft is not None:
             params["draft"] = str(draft).lower()
         if vendor_id:
@@ -597,7 +717,8 @@ async def list_vendor_accreditations(
             timeout=_TIMEOUT,
             params=params,
         )
-        return _apply_tolerant_filters(resp.json(), vendor_name=vendor_name, trade_category=trade_category)
+        return _read_by_date(_apply_tolerant_filters(resp.json(), vendor_name=vendor_name, trade_category=trade_category),
+                             status, limit)
     except Exception as exc:
         return _err(exc, "list_vendor_accreditations")
 
@@ -1631,3 +1752,9 @@ COMPLIANCE_ENGINE_TOOLS = [
     get_vendor_passport,
     share_vendor_passport,
 ]
+# The vendor block flag (SPEC S-5, 4 Nov 2026): "which vendors are not eligible" is answered from the block flag and the
+# at-risk list, not pieced together from accreditations and the dashboard count. Imported late: the module imports
+# this one.
+from .contract_performance_agent import list_blocked_vendors as _list_blocked_vendors  # noqa: E402
+
+COMPLIANCE_ENGINE_TOOLS.append(_list_blocked_vendors)

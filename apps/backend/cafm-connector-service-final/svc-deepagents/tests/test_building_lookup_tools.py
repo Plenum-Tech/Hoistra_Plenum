@@ -253,7 +253,7 @@ def test_the_doc_rag_subagent_can_read_the_building_linkage():
     source = Path(meta_tools.__file__).read_text(encoding="utf-8")
     # Every sub-agent is built through _sub (agents/context_budget.py, 6 Oct 2026).
     block = source[source.index('"doc_rag": _sub('):]
-    block = block[: block.index("prompt=agent_system_prompt")]
+    block = block[: block.index("prompt=live_prompt(")]  # prompts are read live (5 Nov 2026)
     assert "list_building_documents" in block, (
         "the doc_rag sub-agent cannot see the building linkage, so a question routed to it "
         "can only be answered by semantic search over document text"

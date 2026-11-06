@@ -68,6 +68,9 @@ def _holds(cert, sql, params):
     would (a NULL compared with anything is not true)."""
     if re.search(r"\bFALSE\b", sql):
         return False
+    # The status a filter reads as of today (O._SPEC_LIVE_FIELDS, 2 Nov 2026) is the stored one for
+    # these certificates, which carry no expiry date.
+    sql = sql.replace(O._SPEC_LIVE_FIELDS["status"], "c.status")
     shapes = [
         (r"lower\(([\w.]+)::text\) = ANY\(CAST\(:(\w+) AS text\[\]\)\)", lambda v, p: v in p),
         (r"lower\(([\w.]+)::text\) IN \(SELECT lower\(x\) FROM unnest\(CAST\(:(\w+) AS text\[\]\)\) x\)",

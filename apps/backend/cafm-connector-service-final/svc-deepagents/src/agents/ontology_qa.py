@@ -55,7 +55,7 @@ import structlog
 from langchain_core.tools import tool
 from sqlalchemy import text
 
-from . import name_match
+from . import cert_expiry, name_match
 
 log = structlog.get_logger(__name__)
 
@@ -120,7 +120,9 @@ SYNONYMS = {
     "inspections": ["inspection", "load test", "condition check", "condition grade", "service report"],
 }
 BLOCKED_VALUES_RE = r"block|suspend|on[\s_-]?hold|\bhold\b|\bheld\b|fail|non[\s_-]?compl|reject|revok|invalid|withdrawn|quarantin"
-BUILDER_VERSION = "7-svc1"          # bump when build logic changes -> cached ontology is rebuilt
+BUILDER_VERSION = "9-svc1"          # bump when build logic changes -> cached ontology is rebuilt
+#: 8 (3 Nov 2026): "lapsed" / "expired" on a certificate table read the expiry date too.
+#: 9 (3 Nov 2026): 8 dropped the "overdue" state from work orders; an ontology cached by 8 is rebuilt.
 ORG_COLUMN_RE = re.compile(r"^(organization|organisation|org|tenant|company|account|workspace)_id$", re.I)
 STATE_COL_RE = re.compile(r"(status|stage)$|_state$", re.I)
 STATE_LIKE_COL_RE = re.compile(r"(status|stage|result|outcome)$|_state$", re.I)
@@ -134,6 +136,8 @@ LAPSED_VALUES_RE = r"laps|expired|overdue|out[\s_-]?of[\s_-]?date"
 BLOCKED_VALUES_RE_EXTRA = r"unsatisf|not[\s_-]?compliant|condemn|immediately[\s_-]?dangerous|at[\s_-]?risk"
 CANONICAL_CLOSED = ["Closed", "Completed", "Complete", "Cancelled", "Canceled", "Resolved", "Done"]
 CERT_TABLE, WORK_ORDER_TABLE = "compliance_certificates", "work_orders"
+#: Tables whose rows are certificates, accreditations or licences: lapsed by status or by date.
+CERT_LIKE_TABLE_RE = re.compile(r"certif|accredit|licen[cs]", re.I)
 
 STATEMENT_TIMEOUT_MS = 15_000
 MAX_FOCUS_RECORDS = 200
@@ -581,6 +585,24 @@ async def build_ontology(session, schema=BASE_SCHEMA):
                 if done:
                     states["overdue"] = {"description": c + " passed and " + done + " empty",
                                          "all": [{"attribute": c, "lt": "today"}, {"attribute": done, "is_null": True}]}
+        # A certificate is lapsed when its status says so, or when it is stored as in date and its
+        # expiry date has passed - the lifecycle scan that moves a status on may not have run
+        # (3 Nov 2026: LOLER-B-301-4471, expired 18 Oct, stored "valid", was left out of "lapsed
+        # certificates"). One rule with agents/cert_expiry.py. A superseded certificate whose
+        # date has passed is history, not lapsed. The in-date statuses are the shared list, not
+        # the sample: the ontology is cached on the schema, not the values.
+        status_col = next((c for c in pi["categorical"] if STATE_COL_RE.search(c)), None)
+        if expiry and status_col and CERT_LIKE_TABLE_RE.search(t):
+            stored = [x for x in lapsed_leaves if x["attribute"] == status_col]
+            lapsed_values = sorted(set((stored[0]["in"] if stored else []) + ["Lapsed", "Expired"]))
+            rule = {"any": [{"attribute": status_col, "in": lapsed_values},
+                            {"all": [{"attribute": expiry, "lt": "today"},
+                                     {"attribute": status_col, "in": sorted(cert_expiry.IN_DATE_STATUSES)}]}]}
+            desc = ("lapsed / expired - " + status_col + " in " + ", ".join(lapsed_values) + ", or stored as in "
+                    "date with " + expiry + " passed (the expiry date decides). USE THIS for lapsed, expired "
+                    "or out-of-date certificates, never a filter on " + status_col)
+            states["lapsed"] = {"description": desc, **rule}
+            states["expired"] = {"description": desc, **rule}
 
         def state_leaves(cond):
             if "attribute" in cond:
@@ -1105,7 +1127,24 @@ _BUILD_LOCK = asyncio.Lock()
 
 
 def _cache_path(fp: str) -> str:
-    return os.path.join(tempfile.gettempdir(), "cafm_ontology_" + fp + ".json")
+    """Where the built ontology for this schema fingerprint is kept. ONTOLOGY_CACHE_DIR names a
+    directory that outlives the container (a Docker volume locally): the build is one value-profile
+    query per column, ~15 minutes against the Azure database, and /tmp lost it on every rebuild
+    (2 Nov 2026). The fingerprint is the schema's, so a changed schema still builds afresh."""
+    folder = os.environ.get("ONTOLOGY_CACHE_DIR") or tempfile.gettempdir()
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError:
+        folder = tempfile.gettempdir()
+    return os.path.join(folder, "cafm_ontology_" + fp + ".json")
+
+
+#: How long a record question waits for an ontology that is still being built before it says so.
+#: The build carries on (it is shielded), so the next question finds it ready (2 Nov 2026).
+ONTOLOGY_WAIT_S = float(os.environ.get("ONTOLOGY_WAIT_S", "25"))
+#: The longest one build may take before it is abandoned (its connection with it) and the next
+#: question starts afresh. A healthy build against the Azure database is ~15 minutes.
+ONTOLOGY_BUILD_TIMEOUT_S = float(os.environ.get("ONTOLOGY_BUILD_TIMEOUT_S", "1800"))
 
 
 def _session_factory():
@@ -1137,7 +1176,11 @@ async def get_ontology() -> Ontology:
                 async with s.begin():
                     await s.execute(text("SET TRANSACTION READ ONLY"))
                     await s.execute(text("SET LOCAL statement_timeout = 60000"))
-                    data, lines = await build_ontology(s, BASE_SCHEMA)
+                    # Bounded (2 Nov 2026): a build whose connection the server dropped mid-way
+                    # waited on it for ever, holding the lock every record question queues on.
+                    log.info("ontology.build_started", fingerprint=fp, limit_s=ONTOLOGY_BUILD_TIMEOUT_S)
+                    data, lines = await asyncio.wait_for(
+                        build_ontology(s, BASE_SCHEMA), timeout=ONTOLOGY_BUILD_TIMEOUT_S)
             log.info("ontology.built", fingerprint=fp, report=lines)
             try:
                 with open(_cache_path(fp), "w", encoding="utf-8") as f:
@@ -1406,6 +1449,7 @@ PLAN_GUIDE = """How to plan:
 - For the STATUS of one named asset, also include its latest inspection (sort by date, limit 1) and its open
   work orders, when those concepts exist.
 - Prefer STATES (blocked, open, overdue, expired ...) over filters whenever a state expresses the condition.
+  Lapsed or expired certificates are the state "lapsed" (it reads the expiry date too), never a filter on status.
   Several states on one node mean ANY of them. For "blocked certificates that affect work" use the state whose
   description says to use it (e.g. blocking) and the rule BLOCKS.
 - Codes such as PT-B-301-A-BOILER-01 or WO-123 go in "match" of the concept that owns them. A name such as
@@ -3408,6 +3452,23 @@ async def answer_from_records(question: str) -> dict:
             earlier = hint.strip().strip("()")
             question = (question.rstrip(" ?.") + " (earlier in this conversation: " + earlier
                         + "; apply it only if this question names no building or place of its own)")
+        # Bounded (2 Nov 2026): a question after a restart waited for the whole ontology build.
+        # The build is shielded, so it goes on for the next question.
+        build = asyncio.ensure_future(get_ontology())
+        build.add_done_callback(lambda t: t.cancelled() or t.exception())
+        try:
+            await asyncio.wait_for(asyncio.shield(build), timeout=ONTOLOGY_WAIT_S)
+        except TimeoutError:
+            log.warning("ontology.still_building", waited_s=ONTOLOGY_WAIT_S)
+            return {
+                "ok": False, "found": False, "still_loading": True,
+                "answer_hint": (
+                    "The records are still loading after an update; it takes a few minutes. Answer "
+                    "from your other tools if they cover the question, and otherwise tell the person "
+                    "the records will be readable again in a few minutes - in those words, without "
+                    "naming any internal component. Do not guess a record."
+                ),
+            }
         return await answer_question(question)
     except OntologyError as e:
         return {"ok": False, "error": "Could not plan this question against the ontology: " + str(e)[:800]}

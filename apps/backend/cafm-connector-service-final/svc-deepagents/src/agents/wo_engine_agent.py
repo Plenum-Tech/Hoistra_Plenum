@@ -24,6 +24,7 @@ Two categories of tools:
 import json
 import re
 import uuid as _uuid
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -785,6 +786,13 @@ async def get_work_order_status_track(work_order_id: str) -> dict:
             track = await _track(key)
         if isinstance(track, dict) and track.get("found"):
             track["formatted_summary"] = format_work_order_status_track(track)
+            # Response and completion judged on their own from the record (agents/wo_sla.py,
+            # 2 Nov 2026): sla_due_at is the completion due time, not the response target.
+            from . import wo_sla
+
+            check = await wo_sla.sla_check(work_order_id)
+            if check:
+                track["sla_check"] = check
         return track
     except Exception as exc:
         return _err(exc, "get_work_order_status_track")
@@ -1481,6 +1489,40 @@ async def _maintenance_building(building_id, *, use_thread: bool = False) -> tup
     return None, None
 
 
+def _today() -> date:
+    return date.today()
+
+
+def _decision_dates_note(decisions: list[dict[str, Any]]) -> str:
+    """When the listed decisions fall due against the current month. The list is what is open now,
+    never filtered by date, so a question that names a period is answered from these counts: "none
+    falls due this month; six were due in September and October" - not "six this month"."""
+    today = _today()
+    month = today.strftime("%B %Y")
+    first = today.replace(day=1)
+    nxt = (first + timedelta(days=32)).replace(day=1)
+    within = before = later = undated = 0
+    for d in decisions:
+        raw = str((d or {}).get("due") or "")[:10]
+        try:
+            due = date.fromisoformat(raw)
+        except ValueError:
+            undated += 1
+            continue
+        if due < first:
+            before += 1
+        elif due < nxt:
+            within += 1
+        else:
+            later += 1
+    parts = [f"{within} due in {month}", f"{before} due before {month} (overdue)", f"{later} due later"]
+    if undated:
+        parts.append(f"{undated} with no due date")
+    return ("These are the decisions open now; the list is not filtered by date. Of the "
+            f"{len(decisions)} listed: " + ", ".join(parts) + ". If the question names a period, say "
+            "how many fall in it from these counts; never call the whole list that period's.")
+
+
 @tool
 async def list_maintenance_decisions(
     building_id: str | None = None,
@@ -1526,7 +1568,13 @@ async def list_maintenance_decisions(
                 params[k] = v
         resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/decisions",
                               service=_SERVICE, timeout=_TIMEOUT, params=params)
-        return resp.json()
+        out = resp.json()
+        if isinstance(out, dict):
+            # What the list covers, said in the result (2 Nov 2026): it was read for the whole
+            # portfolio under a one-building answer, and its open items called "this month's".
+            out["scope"] = "one building" if building_id else "every building in the company"
+            out["dates_note"] = _decision_dates_note(out.get("decisions") or [])
+        return out
     except Exception as exc:
         return _err(exc, "list_maintenance_decisions")
 
@@ -1623,8 +1671,24 @@ from .cost_savings_agent import get_cost_savings  # noqa: E402 - the cost-saving
 from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
 from .thread_scope import replacement_candidates, work_order_blockers  # noqa: E402 - two joined reads
 
+@tool
+async def vendor_work_orders_at_building(vendor: str, building: str) -> dict:
+    """A vendor's record at ONE building: its work orders there, by status, how many met and breached
+    the response SLA (scored per order against its contract terms or the platform default), the
+    completion SLA, any open order past its due time, first-fix and recalls.
+
+    USE THIS for "how has <vendor> been performing at <building>", "<vendor>'s SLA at <building>".
+    The vendor scorecard is company-wide; this is the building's own evidence. Names are matched
+    however typed, within the asking company.
+    """
+    from . import wo_sla
+
+    return await wo_sla.vendor_at_building(vendor, building)
+
+
 MAINTENANCE_READ_TOOLS = [
     search_documents,
+    vendor_work_orders_at_building,
     answer_from_records,
     get_cost_savings,
     work_order_blockers,

@@ -36,6 +36,13 @@ Every certificate row carries the result of the document forensics run on its PD
 
 `forensics_risk_score` is 0–100, higher = riskier; `authenticity_warning` holds the reasons in plain words (incremental PDF edits, SAMPLE/DRAFT wording, encrypted file, missing dates, vendor not found on-platform). When you name a forged or suspect document, quote its score and the first reason — that is what makes the claim checkable.
 
+**Failed checks (3 Nov 2026).** "Which certificates failed authenticity checks / failed checks / failed verification?"
+asks for `failed_check` true - the Compliance page's own rule: `failed_authenticity` (forensics flagged the document, or
+an authenticity warning stands with no clean verdict) OR `failed_registration` (the register check failed: not on the
+register, details differ, or the platform's lookup failed; `registration_finding` says which). Answer in two groups,
+authenticity then register check, each certificate with its number and what failed. "None" is right only when no row
+has `failed_check` true - never from forensics verdicts alone.
+
 A row with no verdict has not been assessed. It is not genuine and it is not forged; say "not yet assessed" and count it separately. "Forged" means `fail`/`edited`; do not fold `review`/`suspect` rows into the forged list unless the question asks for suspicious documents as well — list them under their own heading instead.
 
 Building-level vs vendor-level is `cert_scope` — Building rows are the premises' certificates, Vendor rows are contractor accreditations. "Separately" means two lists, one per scope, each grouped by owner.

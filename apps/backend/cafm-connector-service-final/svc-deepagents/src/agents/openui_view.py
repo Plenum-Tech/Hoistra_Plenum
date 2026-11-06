@@ -990,6 +990,59 @@ def quote_signed_numbers(program: str) -> str:
     return "".join(out)
 
 
+_STATEMENT_START = re.compile(r"[ \t]*([A-Za-z_$][\w$]*)[ \t]*=(?!=)")
+
+
+def _named_statements(program: str) -> list[tuple[str, int, int]]:
+    """(name, start, end) of each `name = expression` statement: start and end bound the expression.
+    A statement runs to the first newline outside brackets and strings, as _statements reads it."""
+    out: list[tuple[str, int, int]] = []
+    i, n = 0, len(program)
+    while i < n:
+        m = _STATEMENT_START.match(program, i)
+        if not m:
+            j = program.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        j, depth = m.end(), 0
+        while j < n:
+            c = program[j]
+            if c in "\"'":
+                k = j + 1
+                while k < n and program[k] != c:
+                    k += 2 if program[k] == "\\" else 1
+                j = k + 1
+                continue
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth = max(0, depth - 1)
+            elif c == "\n" and depth == 0:
+                break
+            j += 1
+        out.append((m.group(1), m.end(), min(j, n)))
+        i = j + 1
+    return out
+
+
+def restate_as_text(program: str, node: Node, markdown: str) -> str | None:
+    """The program with the statement that draws `node` drawing `markdown` as a Text instead, or None
+    when no statement of its own draws it (a component written inside a list is left to its caller).
+    The presenter uses it to put the answer's own words in place of a card it cannot bind (2 Nov 2026)."""
+    for _name, start, end in _named_statements(program):
+        expression = program[start:end].strip()
+        if not expression.startswith(node.type + "("):
+            continue
+        try:
+            probe = parse_full("x = " + expression + "\nroot = " + ROOT + "([x])").root
+        except Exception:  # noqa: BLE001 - not the statement we are looking for
+            continue
+        kids = probe.props.get("children") if probe is not None else None
+        if isinstance(kids, list) and len(kids) == 1 and kids[0] == node:
+            return program[:start] + " Text(" + json.dumps(markdown, ensure_ascii=False) + ")" + program[end:]
+    return None
+
+
 def plain_text(program: str) -> str:
     """The words of a program without its code: its string literals in order, as paragraphs."""
     out = []
