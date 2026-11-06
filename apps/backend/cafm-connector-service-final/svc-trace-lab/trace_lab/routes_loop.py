@@ -8,6 +8,7 @@
     GET    /lab/spec.md                       the approved SPEC.md
     GET    /lab/corrections                   the prompt, skill or code changes made for modes and rules
     POST   /lab/corrections                   record one                                    (platform team, consultant)
+    POST   /lab/modes/{lineage_id}/rule       add a confirmed failure mode's rule to SPEC.md in one click (platform team)
     POST   /lab/modes/{lineage_id}/regression a regression run of a confirmed failure mode                (curators)
     POST   /lab/runs/{code}/rerun             ask a regression run's questions again, a few per request    (curators)
     GET    /lab/runs/{code}/compare           the answers before and after, checked against the expected values
@@ -82,18 +83,23 @@ async def lab_proposals(m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
 async def lab_decide(kind: str, subject_id: str, body: DecisionIn, request: Request,
                      m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
     out = await _call(loop.decide(m, kind, subject_id, decision=body.decision, note=body.note))
-    if kind == "spec_version" and body.decision == "approved":
-        # After a person approves a SPEC.md version the agent writes it where every agent reads it - under test
-        # until a person makes it live (Bala, 5 Nov 2026). A failure here leaves the approval standing.
-        try:
-            state = await loop.spec_state(m)
-            if state.get("approved"):
-                await _call(agent.publish_spec(state["approved"], authorization=request.headers.get("authorization")))
-                out["published"] = "testing"
-        except Exception as exc:  # noqa: BLE001
-            out["published"] = False
-            out["publish_error"] = getattr(exc, "detail", None) or str(exc)[:300]
+    if (kind == "spec_version" and body.decision == "approved") or out.get("spec"):
+        # After a person approves a SPEC.md version - or approves a failure mode, which adds its rule as a new approved
+        # version (6 Nov 2026) - the agent writes it where every agent reads it, under test until a person makes it
+        # live (Bala, 5 Nov 2026). A failure here leaves the approval standing.
+        out.update(await _publish(m, request))
     return {"ok": True, **out}
+
+
+async def _publish(m: labelling.Member, request: Request) -> dict[str, Any]:
+    try:
+        state = await loop.spec_state(m)
+        if state.get("approved"):
+            await _call(agent.publish_spec(state["approved"], authorization=request.headers.get("authorization")))
+            return {"published": "testing"}
+        return {}
+    except Exception as exc:  # noqa: BLE001
+        return {"published": False, "publish_error": getattr(exc, "detail", None) or str(exc)[:300]}
 
 
 @router.get("/lab/spec")
@@ -183,6 +189,13 @@ async def lab_agent_propose(run: str | None = Query(None, max_length=12),
                             m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
     """?run=R40: only the notes of the run the person has open."""
     return {"ok": True, **await _call(agent.propose_from_notes(m, run=run))}
+
+
+@router.post("/lab/modes/{lineage_id}/rule")
+async def lab_add_rule(lineage_id: str, request: Request, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """One click: a confirmed failure mode gets its rule in SPEC.md (a new approved version), put under test."""
+    out = await _call(loop.add_rule(m, lineage_id))
+    return {"ok": True, **out, **(await _publish(m, request))}
 
 
 @router.post("/lab/modes/{lineage_id}/draft-fix")

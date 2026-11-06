@@ -53,6 +53,8 @@ INTRO_MAX = 20000
 NOTE_MAX = 2000
 REGRESSION_MAX = 50
 RERUN_MAX = 5
+#: The questions a failure mode lists on the Loop page (newest first), where their expected answers are added.
+QUESTIONS_SHOWN = 20
 #: How alike an expected answer may be to an answer recorded for its question before it is refused as a copy.
 COPY_RATIO = 0.85
 #: Browser events one person may send in a minute; more are dropped, never an error.
@@ -413,17 +415,36 @@ async def proposals(m: labelling.Member) -> dict[str, Any]:
                AND NOT EXISTS (SELECT 1 FROM tracelab.lab_expected_answers n WHERE n.question_id = e.question_id
                                 AND n.created_at > e.created_at AND n.source <> 'coding_agent')
              ORDER BY e.created_at DESC LIMIT 200"""), p)).mappings().all()
+        live_names = {md["lineage_id"]: md["name"] for md in _live}
+        suggested = (await conn.execute(text(f"""
+            SELECT DISTINCT ON (c.question_id, c.mode_lineage_id) c.id::text AS id, c.mode_lineage_id::text AS lineage,
+                   c.created_at, r.run_no, q.seq_no, q.question
+              FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q ON q.id = c.question_id
+              JOIN tracelab.lab_runs r ON r.id = q.run_id
+             WHERE c.source = 'coding_agent' AND c.value = 'positive' AND {where}
+               AND NOT EXISTS (SELECT 1 FROM tracelab.lab_label_cells x WHERE x.question_id = c.question_id
+                                AND x.mode_lineage_id = c.mode_lineage_id AND x.source = 'manual')
+             ORDER BY c.question_id, c.mode_lineage_id, c.created_at DESC"""), p)).mappings().all()
+    labels = sorted(({"id": r["id"], "question": runs.question_code(r["run_no"], r["seq_no"]), "question_text": r["question"],
+                      "mode": r["lineage"], "mode_name": live_names[r["lineage"]], "at": _iso(r["created_at"])}
+                     for r in suggested if r["lineage"] in live_names), key=lambda x: x["at"] or "", reverse=True)
     codes = rule_codes(spec)
     expected = [{"id": r["id"], "question": runs.question_code(r["run_no"], r["seq_no"]), "question_text": r["question"],
                  "expected": r["expected"], "expected_id": r.get("expected_id"), "evidence": _json(r.get("evidence")),
                  "by": r.get("author_email"), "at": _iso(r["created_at"]),
                  "derivation": derivation(r.get("evidence"), codes)} for r in rows]
-    return {"modes": modes, "spec": versions, "expected": expected,
+    return {"modes": modes, "spec": versions, "expected": expected, "labels": labels,
             "can_decide_modes": m.active and m.all_companies, "can_decide_expected": runs.can_curate(m)}
 
 
 async def decide(m: labelling.Member, kind: str, subject_id: str, *, decision: str, note: str | None = None) -> dict[str, Any]:
-    """A person approves or rejects one proposal. Final: a second decision is refused."""
+    """A person approves or rejects one proposal. Final: a second decision is refused.
+
+    Approving a proposed failure mode also accepts the labels the agent suggested for it (as the approver's own) and adds
+    its rule to SPEC.md as a new version approved by the same person (Bala, 6 Nov 2026: one click where there were four).
+    A suggested label ("label") on a confirmed mode is accepted or rejected here too."""
+    if kind == "label":
+        return await decide_label(m, subject_id, decision=decision)
     if kind not in KINDS:
         raise NotFound("proposal_not_found", "That proposal is not in Trace Lab.")
     if decision not in DECISIONS:
@@ -440,9 +461,11 @@ async def decide(m: labelling.Member, kind: str, subject_id: str, *, decision: s
         await _limits(conn)
         if (await _decisions(conn, kind, [sid])).get(sid):
             raise Invalid("already_decided", "Someone has already decided this proposal.")
+        proposal = None
         if kind == "failure_mode":
             _live, pending = await resolve_modes(conn)
-            if not any(x["id"] == sid for x in pending):
+            proposal = next((x for x in pending if x["id"] == sid), None)
+            if proposal is None:
                 raise NotFound("proposal_not_found", "That failure mode is not waiting for a decision.")
         elif kind == "spec_version":
             versions = await _versions(conn)
@@ -472,7 +495,103 @@ async def decide(m: labelling.Member, kind: str, subject_id: str, *, decision: s
                                                  "from: it " + "; ".join(d["problems"]) + ".")
                 await refuse_copy(conn, row["question_id"], row["expected"])
         await _insert_decision(conn, m, kind, sid, decision, note)
-    return {"kind": kind, "id": sid, "decision": decision}
+        extra: dict[str, Any] = {}
+        if proposal is not None and decision == "approved" and proposal["kind"] in ("new", "change"):
+            lin = proposal["lineage_id"]
+            extra["labels_accepted"] = await _accept_suggestions(conn, m, lin)
+            extra["spec"] = await _add_rule(conn, m, lin, note=f"Added with failure mode {proposal.get('name') or ''}".strip())
+            extra["mode"] = lin
+    return {"kind": kind, "id": sid, "decision": decision, **extra}
+
+
+async def _accept_suggestions(conn: Any, m: labelling.Member, lineage: str) -> int:
+    """The agent's suggested positives for a mode become the approver's own labels: the approver has just read the note
+    and agreed with the mode it came from. A question the approver has already labelled for this mode keeps that label."""
+    rows = (await conn.execute(text("""
+        SELECT DISTINCT c.question_id::text AS question_id FROM tracelab.lab_label_cells c
+         WHERE c.mode_lineage_id = CAST(:lin AS uuid) AND c.source = 'coding_agent' AND c.value = 'positive'
+           AND NOT EXISTS (SELECT 1 FROM tracelab.lab_label_cells x WHERE x.question_id = c.question_id
+                            AND x.mode_lineage_id = c.mode_lineage_id AND x.source = 'manual'
+                            AND coalesce(x.author_id::text, x.author_email) = coalesce(:uid, :email))"""),
+        {"lin": lineage, "uid": m.user_id, "email": m.email})).mappings().all()
+    for r in rows:
+        await conn.execute(text(
+            "INSERT INTO tracelab.lab_label_cells (question_id, mode_lineage_id, value, author_id, author_email, author_role) "
+            "VALUES (CAST(:q AS uuid), CAST(:lin AS uuid), 'positive', CAST(:by AS uuid), :email, :role)"),
+            {"q": r["question_id"], "lin": lineage, "by": m.user_id, "email": m.email, "role": m.role})
+    return len(rows)
+
+
+async def _add_rule(conn: Any, m: labelling.Member, lineage: str, *, note: str | None = None) -> dict[str, Any] | None:
+    """A new specification version: the rules in force plus a rule for this confirmed mode, worded from its definition
+    (as the draft words it), approved by the person who confirmed the mode. None when a rule already covers the mode.
+    The rule can be reworded later with Draft next version."""
+    spec = await approved_spec(conn)
+    rules = [dict(r) for r in (spec or {}).get("rules") or []]
+    if any(r.get("mode_lineage_id") == lineage for r in rules):
+        return None
+    modes = await live_modes(conn)
+    names = {md["lineage_id"]: md["name"] for md in modes}
+    md = next((x for x in modes if x["lineage_id"] == lineage), None)
+    if md is None:
+        raise NotFound("mode_not_found", "That failure mode is not confirmed in Trace Lab.")
+    for r in rules:
+        if r.get("mode_lineage_id") and r["mode_lineage_id"] not in names:
+            r["mode_retired"] = True
+    top = max([int(RULE_CODE.match(str(r.get("code"))).group(1)) for r in rules
+               if RULE_CODE.match(str(r.get("code") or ""))] or [0])
+    code = f"S-{top + 1}"
+    rules.append({"code": code, "mode_lineage_id": lineage, "title": md["name"],
+                  "text": ("An answer must not show this failure: "
+                           + (md.get("definition") or md["name"]).strip().rstrip(".") + ".")})
+    clean = _clean_rules(rules, set(names))
+    intro = (spec or {}).get("intro")
+    row = (await conn.execute(text(
+        "INSERT INTO tracelab.lab_spec_versions (intro, rules, body, based_on, source, created_by, created_by_email) "
+        "VALUES (:intro, CAST(:rules AS jsonb), :body, CAST(:based AS uuid), 'manual', CAST(:by AS uuid), :email) "
+        "RETURNING id::text AS id, version_no"),
+        {"intro": intro, "rules": json.dumps(clean), "body": render(None, intro, clean, names),
+         "based": (spec or {}).get("id"), "by": m.user_id, "email": m.email})).mappings().one()
+    await _insert_decision(conn, m, "spec_version", row["id"], "approved", runs._opt(note, NOTE_MAX, "note"))
+    return {"id": row["id"], "version": row["version_no"], "code": code}
+
+
+async def add_rule(m: labelling.Member, lineage_id: str) -> dict[str, Any]:
+    """One click: a confirmed failure mode a person added by hand gets its rule in SPEC.md (a new approved version)."""
+    runs.require_taxonomist(m)
+    lin = _uuid(lineage_id)
+    async with db.lab_engine().begin() as conn:
+        await _limits(conn)
+        out = await _add_rule(conn, m, lin or "", note="Added from the Loop page")
+    if out is None:
+        raise Invalid("already_in_spec", "This failure mode already has its rule in SPEC.md.")
+    return out
+
+
+async def decide_label(m: labelling.Member, cell_id: str, *, decision: str) -> dict[str, Any]:
+    """A person accepts (positive) or rejects (negative) one label the agent suggested on a confirmed failure mode; the
+    value is the person's own, exactly as if they had set it in Labels."""
+    if decision not in DECISIONS:
+        raise Invalid("bad_decision", "Choose approve or reject.")
+    cid = _uuid(cell_id)
+    if cid is None:
+        raise NotFound("proposal_not_found", "That suggestion is not in Trace Lab.")
+    labelling.require_active(m)
+    where, p = runs._scope(m, "r")
+    async with db.lab_engine().connect() as conn:
+        row = (await conn.execute(text(
+            "SELECT c.mode_lineage_id::text AS lineage, r.run_no, q.seq_no, c.source, EXISTS (SELECT 1 FROM "
+            "tracelab.lab_label_cells x WHERE x.question_id = c.question_id AND x.mode_lineage_id = c.mode_lineage_id "
+            "AND x.source = 'manual') AS decided FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q "
+            f"ON q.id = c.question_id JOIN tracelab.lab_runs r ON r.id = q.run_id WHERE c.id = CAST(:cid AS uuid) AND {where}"),
+            {**p, "cid": cid})).mappings().first()
+    if row is None or row["source"] != "coding_agent":
+        raise NotFound("proposal_not_found", "That suggestion is not waiting for a decision.")
+    if row["decided"]:
+        raise Invalid("already_decided", "Someone has already labelled this question for this failure mode.")
+    out = await runs.set_cell(m, runs.question_code(row["run_no"], row["seq_no"]), mode=row["lineage"],
+                              value="positive" if decision == "approved" else "negative")
+    return {"kind": "label", "id": cid, "decision": decision, "question": out["question"], "mode": row["lineage"]}
 
 
 # ── corrections ─────────────────────────────────────────────────────────────────────────────────
@@ -522,10 +641,27 @@ async def add_correction(m: labelling.Member, *, kind: str, reference: str, mode
 
 async def _current_expected(conn: Any, question_id: str) -> dict[str, Any] | None:
     r = (await conn.execute(text(
-        "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence FROM tracelab.lab_expected_answers e "
+        "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence, e.created_at FROM tracelab.lab_expected_answers e "
         f"WHERE e.question_id = CAST(:q AS uuid) AND {CURRENT_EXPECTED_WHERE} ORDER BY e.created_at DESC, e.id DESC LIMIT 1"),
         {"q": question_id})).mappings().first()
     return dict(r) if r else None
+
+
+async def _newest_expected(conn: Any, q: dict[str, Any]) -> dict[str, Any] | None:
+    """A regression question's expected answer: its own, or its source question's when that one is newer (6 Nov 2026).
+    The copy is taken when the run is made, so an expected answer written or corrected on the source afterwards would
+    otherwise never reach Compare, and the order a person did the steps in would decide the verdict."""
+    own = await _current_expected(conn, q["id"])
+    ref = str(q.get("scenario_ref") or "")
+    if not runs.QUESTION_CODE.match(ref):
+        return own
+    src_id = (await conn.execute(text(
+        "SELECT q.id::text FROM tracelab.lab_questions q JOIN tracelab.lab_runs r ON r.id = q.run_id "
+        "WHERE 'R' || r.run_no || '-' || q.seq_no = :c"), {"c": ref.upper()})).scalar()
+    src = await _current_expected(conn, src_id) if src_id else None
+    if src and (own is None or src["created_at"] > own["created_at"]):
+        return src
+    return own
 
 
 async def make_regression(m: labelling.Member, lineage_id: str, *, company: str | None = None,
@@ -736,7 +872,7 @@ async def compare(m: labelling.Member, code: str) -> dict[str, Any]:
             "WHERE run_id = CAST(:r AS uuid) ORDER BY seq_no"), {"r": run["id"]})).mappings().all()]
         spec = await approved_spec(conn)
         codes = rule_codes(spec)
-        expected = {q["id"]: await _current_expected(conn, q["id"]) for q in qs}
+        expected = {q["id"]: await _newest_expected(conn, q) for q in qs}
         links = {q["id"]: await question_turns(conn, q["id"]) for q in qs}
         cells = (await conn.execute(text("""
             SELECT DISTINCT ON (c.question_id, coalesce(c.author_id::text, c.author_email))
@@ -789,6 +925,13 @@ async def overview(m: labelling.Member) -> dict[str, Any]:
         live, proposed = await resolve_modes(conn)
         spec = await approved_spec(conn)
         pos = await _positives(conn)
+        all_ids = sorted({qid for ids in pos.values() for qid in ids})
+        qrows = {r["id"]: dict(r) for r in (await conn.execute(text(
+            f"SELECT q.id::text AS id, r.run_no, q.seq_no, q.question, "
+            f"coalesce(q.organization_id, r.organization_id)::text AS company, "
+            f"EXISTS (SELECT 1 FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id AND {CURRENT_EXPECTED_WHERE}) "
+            f"AS has_expected FROM tracelab.lab_questions q JOIN tracelab.lab_runs r ON r.id = q.run_id "
+            f"WHERE q.id = ANY(CAST(:ids AS uuid[])) AND {where}"), {**p, "ids": all_ids})).mappings().all()}
         corr = (await conn.execute(text(
             "SELECT mode_lineage_id::text AS mode, spec_rule, count(*) AS n, max(created_at) AS last "
             "FROM tracelab.lab_corrections GROUP BY 1, 2"))).mappings().all()
@@ -810,8 +953,13 @@ async def overview(m: labelling.Member) -> dict[str, Any]:
         steps = {"annotated": bool(pos.get(lin)), "taxonomy": True, "spec": rule is not None,
                  "correction": n_corr > 0, "regression": bool(mine), "rerun": any(g["rerun"] for g in mine)}
         nxt = next((k for k in ("annotated", "spec", "correction", "regression", "rerun") if not steps[k]), None)
+        mine_q = sorted((qrows[qid] for qid in pos.get(lin, []) if qid in qrows),
+                        key=lambda r: (-r["run_no"], -r["seq_no"]))[:QUESTIONS_SHOWN]
+        questions = [{"code": runs.question_code(r["run_no"], r["seq_no"]), "text": r["question"],
+                      "has_expected": bool(r["has_expected"]), "company": r["company"]} for r in mine_q]
         out.append({**md, "positives": len(pos.get(lin, [])), "rule": rule, "corrections": n_corr,
-                    "regression_runs": mine, "steps": steps, "next": nxt})
+                    "regression_runs": mine, "steps": steps, "next": nxt, "questions": questions,
+                    "companies": sorted({q["company"] for q in questions if q["company"]})})
     return {"spec": {"version": spec["version"], "at": spec["at"]} if spec else None, "modes": out,
             "waiting": {"modes": len(proposed)}}
 

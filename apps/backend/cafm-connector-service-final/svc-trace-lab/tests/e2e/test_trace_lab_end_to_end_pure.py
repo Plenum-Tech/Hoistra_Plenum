@@ -218,7 +218,8 @@ NOT_DRIVEN = {
     "/lab/runs/{code}/rerun": "same", "/lab/runs/{code}/compare": "same", "/lab/loop": "same",
     "/lab/sync-status": "test_trace_lab_correction_loop_routes", "/lab/frontend-events": "same",
     "/lab/agent/propose-from-notes": "the agent in the container (5 Nov): covered by test_trace_lab_agent_in_container_sql",
-    "/lab/modes/{lineage_id}/draft-fix": "same", "/lab/changes": "same", "/lab/changes/{overlay_id}/approve": "same",
+    "/lab/modes/{lineage_id}/draft-fix": "same",
+    "/lab/modes/{lineage_id}/rule": "the shorter loop (6 Nov): covered by test_trace_lab_shorter_loop_sql", "/lab/changes": "same", "/lab/changes/{overlay_id}/approve": "same",
     "/lab/changes/{overlay_id}/reject": "same", "/lab/changes/{overlay_id}/live": "same",
     "/lab/changes/export.zip": "same",
 }
