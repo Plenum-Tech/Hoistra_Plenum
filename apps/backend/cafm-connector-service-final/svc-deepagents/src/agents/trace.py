@@ -732,6 +732,15 @@ def _flush(t: Turn, *, answer: str, tool_calls: list) -> None:
         asyncio.get_running_loop().create_task(_write(t, answer, tool_calls, summary))
     except RuntimeError:
         pass
+    # The same turn to the self-hosted Langfuse, when one is configured (9 Nov 2026). Only turns
+    # this store keeps: a Trace Lab rerun runs without the trace tables and is not sent.
+    if _ready:
+        try:
+            from . import langfuse_export
+
+            langfuse_export.export_turn(t, answer, summary)
+        except Exception as exc:  # noqa: BLE001 - never the turn's problem
+            log.warning("trace.langfuse_failed", error=str(exc)[:200])
 
 
 async def _write(t: Turn, answer: str, tool_calls: list, ledger_summary: dict[str, Any] | None) -> None:
