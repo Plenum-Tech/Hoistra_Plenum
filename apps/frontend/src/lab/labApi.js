@@ -60,6 +60,8 @@ export const labApi = {
   runLabels: (code) => call('GET', '/lab/runs/' + enc(code) + '/labels'),
   progress: (run) => call('GET', '/lab/progress', { query: run ? { run } : {} }),
   q: (code, turn) => call('GET', '/lab/q/' + enc(code), { query: turn ? { turn } : {} }),
+  // The Trace tab (9 Nov 2026): the question's answer as Langfuse's tree of steps, read only when the tab opens.
+  qTree: (code, turn) => call('GET', '/lab/q/' + enc(code) + '/tree', { query: turn ? { turn } : {} }),
   setExpected: (code, body) => call('PUT', '/lab/q/' + enc(code) + '/expected', { body }),
   linkTrace: (code, turnId) => call('POST', '/lab/q/' + enc(code) + '/traces', { body: { turn_id: turnId } }),
   answerCandidates: (code, q) => call('GET', '/lab/q/' + enc(code) + '/candidates', { query: q ? { q } : {} }),

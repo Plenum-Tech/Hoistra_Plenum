@@ -3,32 +3,29 @@
 // it, the answer in view, the asker's role, the models and tools that answer used, when); the question with its
 // follow-ups; the expected answer (the newest version, its evidence and earlier versions, editable by anyone in the lab);
 // the answers that support the question (curators can link another by its turn id); a comment box for the question as a
-// whole; then how the answer in view was made, in two columns: on the left the question, then each step's input as one
-// block and its output as the next block, then the final answer; on the right, beside each block, everyone's notes on it.
-// Click a block to select it; double-click it, press "Add note" or select text in it to write a note there (free text, no
-// Right / Wrong). Each note says who wrote it, their Trace Lab role and when; a person's own notes can be edited or deleted.
-// Notes are step_labels rows read with the question (one request), saved and removed through labApi with the question's
-// company. Parts and long text start folded so a long answer stays a short page; each step's header row stays in view.
+// whole; then the answer in view as its trace (9 Nov 2026: the Langfuse-style tree, timeline and graph of TraceTab.jsx,
+// which replaced the old block view). Notes are written on the trace: pick a step, then press "Add note" under its input
+// or output, select text in it to quote it, or double-click it (free text, no Right / Wrong). Each note says who wrote it,
+// their Trace Lab role and when; a person's own notes can be edited or deleted. Notes keep Trace Lab's step keys
+// (logic/traceNotes.js), so the Labels, Notes, Learning and Loop pages read them as before. Notes are step_labels rows read
+// with the question, saved and removed through labApi with the question's company; the trace is read for the answer in view.
 import React from 'react';
 import { NextStep, nextStepFor } from './NextStep.jsx';
 import { labApi } from './labApi.js';
 import { Clamp } from './AllLabels.jsx';
 import { NOTE_MAX, ROLE_TEXT, errText, isStale, selectedIn } from './logic/labelling.js';
-import { SCENARIO, blockIndex, blockOf, buildSteps, stepIO } from './logic/steps.js';
+import { SCENARIO, buildSteps } from './logic/steps.js';
 import { pretty } from '../tracelab/logic/timeline.js';
 import { Derivation } from './Loop.jsx';
+import { TraceView } from './TraceTab.jsx';
+import { keyTitles, nodeKeys, traceNotesIndex } from './logic/traceNotes.js';
 import './runs.css';
 
 export const EXPECTED_ANSWER_MAX = 8000;
 const TEXT_MAX = 1500;
 const PRE_MAX = 4000;
-const ROWS_MAX = 20;
-const CELL_MAX = 120;
-const PREVIEW = 140;
 const ROLES = Object.assign({ consultant: 'Consultant' }, ROLE_TEXT);
 const SOURCES = { excel: 'Excel', manual: 'typed on the page', coding_agent: 'coding agent', sync: 'synced' };
-export const LEGEND = Object.freeze([['orchestrator', 'Orchestrator'], ['model', 'Model step'], ['code', 'Code step'],
-  ['output', 'Output'], ['answer', 'Final answer']]);
 const SCENARIO_TITLE = 'Question as a whole';
 const noop = () => {};
 const resolved = () => Promise.resolve();
@@ -75,38 +72,7 @@ export function fmtRange(a, b) {
   return fmtWhen(a) + ' → ' + (x.toDateString() === y.toDateString() ? fmtTime(b) : fmtWhen(b));
 }
 
-const compact = (text) => {
-  const s = String(text || '').slice(0, PREVIEW * 3).replace(/\s+/g, ' ').trim();
-  return s.length > PREVIEW ? s.slice(0, PREVIEW) + '…' : s;
-};
-const hasSide = (side) => !!side && (Array.isArray(side.rows) || !!String(side.text || '').trim());
 const uniq = (xs) => xs.map((x) => String(x || '')).filter((x, i, all) => known(x) && all.indexOf(x) === i);
-
-// One answer's steps as the blocks of the page, in order: the question, then for each step its input block and its output
-// block (each a place for notes: step.key and step.outKey), then the final answer.
-export function blocksOf(steps) {
-  const out = [];
-  (steps || []).forEach((s) => {
-    if (s.kind === 'user') {
-      out.push({ key: s.key, side: 'user', kind: 'user', step: s, kindText: 'User', title: '' });
-    } else if (s.kind === 'answer') {
-      out.push({ key: s.key, side: 'answer', kind: 'answer', step: s, kindText: 'Assistant',
-        title: s.kindText === 'Answer' ? 'Final answer' : s.kindText });
-    } else {
-      out.push({ key: s.key, side: 'input', kind: s.kind, step: s, kindText: s.kindText, title: s.title });
-      if (s.outKey) out.push({ key: s.outKey, side: 'output', kind: s.kind, step: s, kindText: 'Output', title: s.title });
-    }
-  });
-  return out;
-}
-
-// What a step gave back: the last model call of a model step, every part of a code step. An orchestrator that routed by
-// code has no model call; whatever its parts recorded (a plan) is its output.
-export function outputsOf(step) {
-  const io = stepIO(step);
-  if (step.kind === 'orchestrator' && step.byCode) return io.inputs.filter((p) => hasSide(p.io.output));
-  return io.outputs;
-}
 
 // The models and tools of the answer in view: as the record lists them, else as its steps recorded them.
 export function modelsOf(record, steps) {
@@ -136,21 +102,6 @@ export function noteView(x, me) {
 }
 
 const atOf = (n) => { const t = Date.parse(n.at); return Number.isNaN(t) ? 0 : t; };
-
-// Everyone's notes by the block they belong to ({ [block key]: [note] }, plus "scenario" for the question as a whole and
-// "other" for a note on a step this layout no longer shows on its own), the reader's own first, then newest first.
-export function notesIndex(labels, steps, turnId, me) {
-  const index = blockIndex(steps || [], turnId);
-  const out = {};
-  (labels || []).forEach((x) => {
-    if (!x || x.cleared) return;
-    const v = noteView(x, me);
-    v.block = blockOf(index, x.step_key);
-    (out[v.block] || (out[v.block] = [])).push(v);
-  });
-  Object.keys(out).forEach((k) => out[k].sort((a, b) => (a.mine !== b.mine ? (a.mine ? -1 : 1) : atOf(b) - atOf(a))));
-  return out;
-}
 
 function parseEvidence(s) {
   const t = String(s || '').trim();
@@ -182,24 +133,6 @@ function clearPageSelection() {
 
 // ── pieces of the trace ───────────────────────────────────────────────────────────────────────────────────────────────
 
-// A part of a step: one line (its name, what this side is, the facts, a glimpse of the text) that opens in place.
-function Fold({ name, kind, meta, preview, openAll, children }) {
-  const [open, setOpen] = React.useState(!!openAll);
-  return (
-    <div className={'lab-part' + (open ? ' lab-part-open' : '')}>
-      <button type="button" className="lab-part-head" aria-expanded={open ? 'true' : 'false'} onClick={() => setOpen(!open)}>
-        <span className={'lab-chev' + (open ? ' lab-chev-open' : '')} aria-hidden="true" />
-        <span className="lab-part-name">{name}</span>
-        {kind ? <span className="lab-part-kind">{kind}</span> : null}
-        {meta ? <span className="lab-part-meta">{meta}</span> : null}
-        {!open && preview ? <span className="lab-part-preview">{preview}</span> : null}
-        <span className="lab-part-act">{open ? 'Hide' : 'Show'}</span>
-      </button>
-      {open ? <div className="lab-part-body">{children}</div> : null}
-    </div>
-  );
-}
-
 function MoreToggle({ all, chars, onToggle }) {
   return (
     <button type="button" className="lab-link lab-more" aria-expanded={all ? 'true' : 'false'} onClick={onToggle}>
@@ -230,76 +163,6 @@ function LongText({ text, className }) {
       {long ? <MoreToggle all={all} chars={s.length} onToggle={() => setAll(!all)} /> : null}
     </>
   );
-}
-
-// The rows a database read answered: up to 20 as a table, with the count the trace recorded.
-export function RowsTable({ rows, count, more }) {
-  const list = (Array.isArray(rows) ? rows : []).slice(0, ROWS_MAX);
-  const total = count === null || count === undefined ? null : Number(count);
-  if (!list.length) return <p className="lab-small">{total === 0 ? 'No rows came back.' : 'No rows recorded.'}</p>;
-  const cols = [];
-  list.forEach((r) => Object.keys(r && typeof r === 'object' ? r : {}).forEach((k) => { if (cols.indexOf(k) < 0) cols.push(k); }));
-  const cell = (v) => (v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
-  const all = total !== null ? total : list.length + (Number(more) || 0);
-  return (
-    <>
-      <div className="lab-rows">
-        <table>
-          <thead><tr>{cols.map((c) => <th key={c} scope="col">{c}</th>)}</tr></thead>
-          <tbody>
-            {list.map((r, i) => (
-              <tr key={i}>
-                {cols.map((c) => {
-                  const v = cell((r || {})[c]);
-                  return <td key={c} title={v.length > 40 ? v : undefined}>{v.length > CELL_MAX ? v.slice(0, CELL_MAX) + '…' : v}</td>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="lab-small">{plural(all, 'row', 'rows') + (all > list.length ? ' · showing the first ' + list.length : '')}</p>
-    </>
-  );
-}
-
-function PartSide({ p, side, openAll }) {
-  const io = p.io;
-  const s = side === 'input' ? io.input : io.output;
-  return (
-    <Fold name={io.name} kind={s.title} meta={(io.meta || []).join(' · ')} preview={s.rows ? '' : compact(s.text)} openAll={openAll}>
-      {s.note ? <p className="lab-small">{s.note}</p> : null}
-      {s.rows ? <RowsTable rows={s.rows} count={s.count} more={s.more} /> : <LongPre text={s.text} />}
-    </Fold>
-  );
-}
-
-function BlockBody({ b, openAll }) {
-  const s = b.step;
-  if (b.side === 'user') return <LongText text={s.text} />;
-  if (b.side === 'answer') {
-    return (
-      <>
-        <LongText text={s.text} />
-        {s.error ? <p className="lab-bad">{s.error}</p> : null}
-      </>
-    );
-  }
-  if (b.side === 'input') {
-    const parts = stepIO(s).inputs.filter((p) => hasSide(p.io.input));
-    return (
-      <>
-        {s.byCode ? <p className="lab-tb-routed">{s.routed}</p> : null}
-        {parts.map((p) => <PartSide key={p.card.id} p={p} side="input" openAll={openAll} />)}
-        {!parts.length && !s.byCode ? <p className="lab-small">{'Nothing was recorded for this step’s input.'}</p> : null}
-      </>
-    );
-  }
-  const outs = outputsOf(s).filter((p) => hasSide(p.io.output));
-  if (!outs.length) {
-    return <p className="lab-small">{s.byCode ? 'Routing ran as code, so no model output was recorded.' : 'No output was recorded for this step.'}</p>;
-  }
-  return outs.map((p) => <PartSide key={p.card.id} p={p} side="output" openAll={openAll} />);
 }
 
 // ── notes ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -381,40 +244,6 @@ export function NoteList({ items, editor, busy, confirming, on }) {
     </ul>
   );
 }
-
-// One block and the notes beside it. Memoised: typing a note re-draws only the block being annotated.
-const BlockRow = React.memo(function BlockRow({ b, selected, notes, editor, busy, error, confirming, openAll, on }) {
-  const s = b.step;
-  const label = [b.kindText, b.title].filter(Boolean).join(' · ');
-  return (
-    <li className="lab-tl-row" data-key={b.key} data-block={b.side} data-kind={b.kind}>
-      <div className={'lab-tb lab-tb-' + b.kind + (b.side === 'output' ? ' lab-tb-out' : '') + (selected ? ' lab-on' : '')}
-        role="group" aria-label={label} onClick={() => on.select(b.key)} onDoubleClick={(e) => on.blockDouble(b.key, e)}
-        onMouseUp={(e) => on.blockUp(b.key, e.currentTarget, e)}>
-        <div className="lab-tb-head">
-          {b.side === 'output' ? <span className="lab-tb-n lab-tb-n-out" aria-hidden="true">{'↳'}</span>
-            : <span className="lab-tb-n" aria-hidden="true">{s.n}</span>}
-          <span className="lab-tb-kind">{b.kindText}</span>
-          {b.title ? <span className="lab-tb-sep" aria-hidden="true">{'·'}</span> : null}
-          {b.title ? <span className="lab-tb-title">{b.title}</span> : null}
-          {b.side === 'input' && s.agent ? <span className="lab-chip">{s.agent}</span> : null}
-          {b.side === 'input' && s.facts ? <span className="lab-tb-facts">{s.facts}</span> : null}
-          <button type="button" className="lab-link lab-tb-add" aria-label={'Add note on ' + label}
-            onClick={() => on.openEditor(b.key, '')}>{'Add note'}</button>
-        </div>
-        <div className="lab-tb-body"><BlockBody b={b} openAll={openAll} /></div>
-      </div>
-      <aside className="lab-tn" aria-label={'Notes on ' + label}>
-        {editor && !editor.edit ? (
-          <NoteEditor value={editor.text} quote={editor.quote} target={editor.target} saving={editor.saving} error={editor.error}
-            onChange={on.editorText} onSave={on.editorSave} onCancel={on.editorCancel} />
-        ) : null}
-        <NoteList items={notes} editor={editor} busy={busy} confirming={confirming} on={on} />
-        {error ? <div role="alert" className="lab-error">{error}</div> : null}
-      </aside>
-    </li>
-  );
-});
 
 // ── the parts above the trace ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -697,13 +526,34 @@ const DEFAULT_ON = Object.freeze({
   blockDouble: noop, editorText: noop, editorSave: noop, editorCancel: noop, editNote: noop, askDelete: noop, deleteNote: noop
 });
 
-// The page itself, from one labApi.q answer. `steps` (buildSteps of the active answer) and `notes` (notesIndex) are worked
-// out from `data` when not given. `on` holds the handlers (turn, link, saveExpected, saveScenario, select, openEditor,
-// blockUp, blockDouble, editorText, editorSave, editorCancel, editNote, askDelete, deleteNote). `editor` is the open note
-// editor ({ block, quote, text, target, edit: { lineage, base }, saving, error }), `selected` the selected block's key.
-// `openAll` opens every part on first paint (the tests read the content that way).
+// The notes on one side (Input or Output) of a trace step: the editor when a note is being written there, everyone's notes,
+// an error, and Add note.
+function NotesSlot({ noteKey, title, items, editor, busy, error, confirming, on }) {
+  const writing = editor && !editor.edit && editor.block === noteKey ? editor : null;
+  return (
+    <div className="lab-tt-notes" aria-label={'Notes on ' + title}>
+      {writing ? (
+        <NoteEditor value={writing.text} quote={writing.quote} target={writing.target} saving={writing.saving} error={writing.error}
+          onChange={on.editorText} onSave={on.editorSave} onCancel={on.editorCancel} />
+      ) : null}
+      <NoteList items={items} editor={editor} busy={busy} confirming={confirming} on={on} />
+      {error ? <div role="alert" className="lab-error">{error}</div> : null}
+      {writing ? null : (
+        <button type="button" className="lab-link lab-tt-add" aria-label={'Add note on ' + title}
+          onClick={() => on.openEditor(noteKey, '')}>{'Add note'}</button>
+      )}
+    </div>
+  );
+}
+
+// The page itself, from one labApi.q answer and its trace (9 Nov 2026: the answer is shown only as its trace, and notes
+// are written on the trace's steps). `tree` is the /tree response ({turn_id, missing, tree}, or {loading} / {error}).
+// `on` holds the handlers (turn, link, saveExpected, saveScenario, select, openEditor, blockUp, blockDouble, editorText,
+// editorSave, editorCancel, editNote, askDelete, deleteNote). `editor` is the open note editor ({ block, quote, text, target,
+// edit: { lineage, base }, saving, error }). `traceView` seeds the trace's view (selectedId, pane, mode); `openAll` opens the
+// expected answer's evidence on first paint (the tests read the content that way).
 export function QuestionView(props) {
-  const { data, curator, selected, editor, busy, errors, confirming, loading, openAll } = props;
+  const { data, curator, editor, busy, errors, confirming, loading, openAll, tree, traceView } = props;
   const on = React.useMemo(() => Object.assign({}, DEFAULT_ON, props.on || {}), [props.on]);
   const d = data || {};
   const q = d.question || {};
@@ -712,19 +562,50 @@ export function QuestionView(props) {
   const missing = !!(active && active.missing);
   const trace = active && !missing ? active.trace || null : null;
   const turnId = active ? active.turn_id : null;
-  const steps = React.useMemo(() => props.steps || buildSteps(trace), [props.steps, trace]);
-  const notes = React.useMemo(() => props.notes || notesIndex(d.labels, steps, turnId, d.me), [props.notes, d.labels, steps, turnId, d.me]);
-  const blocks = React.useMemo(() => blocksOf(steps), [steps]);
+  const steps = React.useMemo(() => buildSteps(trace), [trace]);
   const traces = Array.isArray(d.traces) ? d.traces : [];
   const models = modelsOf(trace, steps);
   const tools = toolsOf(trace, steps);
   const time = fmtWhen((trace && trace.timestamp) || q.asked_at);
   const errs = errors || {};
-  const has = (list, test) => (list || []).some(test);
-  const editorFor = (key) => (editor && ((!editor.edit && editor.block === key)
-    || (editor.edit && has(notes[key], (n) => n.lineage === editor.edit.lineage))) ? editor : null);
-  const confirmIn = (list) => (confirming && has(list, (n) => n.id === confirming) ? confirming : null);
-  const showTrace = !!trace && blocks.length > 0;
+  const t = tree || { loading: true };
+  const tr = t.tree || null;
+  const nodes = React.useMemo(() => (tr && Array.isArray(tr.nodes) ? tr.nodes : []), [tr]);
+  const keys = React.useMemo(() => nodeKeys(trace, nodes), [trace, nodes]);
+  const notes = React.useMemo(() => traceNotesIndex(d.labels, trace, nodes, d.me, noteView), [d.labels, trace, nodes, d.me]);
+  const confirmIn = (list) => (confirming && (list || []).some((n) => n.id === confirming) ? confirming : null);
+  const hasAnswer = !!(turnId && !missing);
+  const keyOf = (id, side) => { const k = keys.get(String(id)); return k ? (side === 'in' ? k.in : k.out) : null; };
+  const annotate = {
+    keyOf,
+    count: (id) => notes.counts[String(id)] || 0,
+    up: on.blockUp,
+    double: on.blockDouble,
+    render: (id, side) => {
+      const key = keyOf(id, side);
+      const k = keys.get(String(id)) || {};
+      const items = notes.slots[String(id) + ':' + side] || [];
+      return <NotesSlot noteKey={key} title={side === 'in' ? k.inTitle : k.outTitle} items={items} editor={editor} busy={!!busy}
+        error={errs[key] || ''} confirming={confirmIn(items)} on={on} />;
+    },
+    other: () => (notes.other.length ? (
+      <section className="lab-tt-other" aria-label="Other notes">
+        <h3 className="lab-qp-h">{'Other notes'}</h3>
+        <p className="lab-small">{'Notes on steps this trace does not show on their own.'}</p>
+        <NoteList items={notes.other} editor={editor} busy={busy} confirming={confirmIn(notes.other)} on={on} />
+        {errs.other ? <div role="alert" className="lab-error">{errs.other}</div> : null}
+      </section>
+    ) : null)
+  };
+  let answer;
+  if (!hasAnswer) answer = <NoAnswer active={active} curator={curator} />;
+  else if (t.error) answer = <div role="alert" className="lab-error">{'Could not read this answer’s trace: ' + t.error}</div>;
+  else if (t.missing) answer = <NoAnswer active={{ turn_id: turnId, missing: true }} curator={curator} />;
+  else if (!tr) answer = <p className="lab-small" role="status">{'Reading the trace…'}</p>;
+  else {
+    const v = traceView || {};
+    answer = <TraceView key={turnId} tree={tr} annotate={annotate} selectedId={v.selectedId} view={v.view} pane={v.pane} mode={v.mode} />;
+  }
   return (
     <article className="lab-qp" aria-label={'Question ' + (q.code || '')}>
       <header className="lab-qp-head">
@@ -734,7 +615,7 @@ export function QuestionView(props) {
         {turnId ? <span>{'active answer: '}<code className="lab-mono">{turnId}</code></span> : null}
         {q.role ? <span className="lab-chip">{q.role}</span> : null}
         {models.map((m) => <span key={'m:' + m} className="lab-chip lab-chip-model" title="Model">{m}</span>)}
-        {tools.map((t) => <span key={'t:' + t} className="lab-chip lab-chip-tool" title="Tool">{t}</span>)}
+        {tools.map((x) => <span key={'t:' + x} className="lab-chip lab-chip-tool" title="Tool">{x}</span>)}
         {time ? <span className="lab-qp-time">{time}</span> : null}
         {loading ? <span className="lab-small" role="status">{'Reading…'}</span> : null}
       </header>
@@ -754,10 +635,10 @@ export function QuestionView(props) {
         <span className="lab-qp-label">{'Supporting answers:'}</span>
         {traces.length ? (
           <div className="lab-turns" role="group" aria-label="Recorded answers to this question">
-            {traces.map((t, i) => (
-              <button key={t.turn_id} type="button" className={'lab-turn' + (t.turn_id === turnId ? ' lab-on' : '')}
-                aria-pressed={t.turn_id === turnId ? 'true' : 'false'} title={[t.turn_id, SOURCES[t.source] || t.source, t.linked_by].filter(Boolean).join(' · ')}
-                onClick={() => { if (t.turn_id !== turnId) on.turn(t.turn_id); }}>{'Answer ' + (i + 1) + (i === 0 && traces.length > 1 ? ' (newest)' : '')}</button>
+            {traces.map((x, i) => (
+              <button key={x.turn_id} type="button" className={'lab-turn' + (x.turn_id === turnId ? ' lab-on' : '')}
+                aria-pressed={x.turn_id === turnId ? 'true' : 'false'} title={[x.turn_id, SOURCES[x.source] || x.source, x.linked_by].filter(Boolean).join(' · ')}
+                onClick={() => { if (x.turn_id !== turnId) on.turn(x.turn_id); }}>{'Answer ' + (i + 1) + (i === 0 && traces.length > 1 ? ' (newest)' : '')}</button>
             ))}
           </div>
         ) : <span className="lab-small">{'None yet'}</span>}
@@ -766,36 +647,17 @@ export function QuestionView(props) {
 
       <BrowserEvents events={d.browser} />
 
-      {turnId && !missing ? (
+      {hasAnswer ? (
         <ScenarioBox onSave={on.saveScenario}>
           <NoteList items={notes.scenario} editor={editor} busy={busy} confirming={confirmIn(notes.scenario)} on={on} />
           {errs.scenario ? <div role="alert" className="lab-error">{errs.scenario}</div> : null}
         </ScenarioBox>
       ) : null}
 
-      {showTrace ? (
-        <>
-          <ul className="lab-legend" aria-label="What the colours mean">
-            {LEGEND.map(([k, t]) => <li key={k} className={'lab-legend-item lab-legend-' + k}>{t}</li>)}
-          </ul>
-          <p className="lab-small lab-tl-hint">{'Click a block to select it. Double-click it, press Add note, or select text in it to write a note beside it.'}</p>
-          <ol className="lab-tl" aria-label="How this answer was made">
-            {blocks.map((b) => (
-              <BlockRow key={b.key} b={b} selected={selected === b.key} notes={notes[b.key]} editor={editorFor(b.key)} busy={!!busy}
-                error={errs[b.key] || ''} confirming={confirmIn(notes[b.key])} openAll={!!openAll} on={on} />
-            ))}
-          </ol>
-        </>
-      ) : <NoAnswer active={active} curator={curator} />}
-
-      {notes.other && notes.other.length ? (
-        <section className="lab-qp-other" aria-label="Other notes">
-          <h3 className="lab-qp-h">{'Other notes'}</h3>
-          <p className="lab-small">{'Notes on steps this layout no longer shows on their own.'}</p>
-          <NoteList items={notes.other} editor={editor} busy={busy} confirming={confirmIn(notes.other)} on={on} />
-          {errs.other ? <div role="alert" className="lab-error">{errs.other}</div> : null}
-        </section>
+      {hasAnswer && tr ? (
+        <p className="lab-small lab-tt-hint">{'Pick a step, then press Add note under its input or output, select text in it to quote it, or double-click it.'}</p>
       ) : null}
+      {answer}
     </article>
   );
 }
@@ -838,17 +700,26 @@ export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop
   const active = data && data.active && !data.active.missing ? data.active : null;
   const turnId = active ? active.turn_id : null;
   const org = active ? active.organization_id || undefined : undefined;
-  const steps = React.useMemo(() => buildSteps(active && active.trace), [active]);
-  const blocks = React.useMemo(() => blocksOf(steps), [steps]);
   const meId = (data && data.me) || (me && me.user_id) || null;
-  const notes = React.useMemo(() => notesIndex(rows, steps, turnId, meId), [rows, steps, turnId, meId]);
+  // The answer's trace (9 Nov 2026), read for the answer in view: the page shows the answer only as its trace.
+  const [tree, setTree] = React.useState(null);
+  const treeAsk = React.useRef(0);
+  React.useEffect(() => {
+    if (!code || !turnId) { setTree(null); return; }
+    const mine = (treeAsk.current += 1);
+    setTree({ loading: true });
+    labApi.qTree(code, turnId)
+      .then((out) => { if (mine === treeAsk.current) setTree(out || { missing: true }); })
+      .catch((e) => { if (mine === treeAsk.current) setTree({ error: errText(e) }); });
+  }, [code, turnId]);
+  const titles = React.useMemo(() => keyTitles(nodeKeys(active && active.trace, tree && tree.tree ? tree.tree.nodes : [])),
+    [active, tree]);
   const viewData = React.useMemo(() => (data ? Object.assign({}, data, { labels: rows }) : null), [data, rows]);
 
   const changed = (what) => { if (onChanged) onChanged(what); };
   const targetOf = (key) => {
     if (turnId && key === turnId + SCENARIO) return SCENARIO_TITLE;
-    const b = blocks.find((x) => x.key === key);
-    return b ? [b.kindText, b.title].filter(Boolean).join(' · ') : '';
+    return titles[key] || '';
   };
   const reloadNotes = async () => {
     if (!turnId) return;
@@ -987,7 +858,7 @@ export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop
   return (
     <>
       {st.error ? <div role="alert" className="lab-error">{st.error}</div> : null}
-      <QuestionView data={viewData} steps={steps} notes={notes} curator={isCurator(me)} selected={selected} editor={editor}
+      <QuestionView data={viewData} tree={tree} curator={isCurator(me)} editor={editor}
         busy={busy} errors={errors} confirming={confirming} loading={st.loading} on={on} />
       <NextStep step={onOpenLoop ? next : null} onClose={() => setNext(null)}
         onAct={(a) => { if (a === 'open_loop' && onOpenLoop) onOpenLoop(); }} />

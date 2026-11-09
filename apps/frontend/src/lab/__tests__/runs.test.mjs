@@ -51,7 +51,6 @@ const DATA = {
   traces: [{ turn_id: 'tq', source: 'manual' }, { turn_id: 'tq2', source: 'manual' }],
   active: { turn_id: 'tq', organization_id: 'o1', conversation_key: 'c1', trace: REC },
   labels: LABELS, me: 'me' };
-const rowOf = (out, key) => out.split('<li class="lab-tl-row"').find((chunk) => chunk.includes('data-key="' + key + '"')) || '';
 
 test('runs: each card has its code, title, synthetic or live with owner and day, source, time range and counts', () => {
   const out = html(R.RunsList, { runs: [
@@ -75,52 +74,80 @@ test('a run\'s questions: the way back, each code, the question, role, expected,
   assert.equal((out.match(/expected ✓/g) || []).length, 1);
 });
 
-test('a question: header, expected answer before the trace, input then output blocks in order, notes beside them, no Right / Wrong', () => {
-  const out = html(Q.QuestionView, { data: DATA, curator: true, openAll: true });
+// The answer as its trace (9 Nov 2026): the same record with its span ids, the tree the service builds for it, and the
+// notes written on its steps (old keys land on their step and side).
+const spanOf = (id) => { const p = String(id).split(':')[1]; return p === 'root' ? null : p; };
+const REC2 = Object.assign({}, REC, { messages: REC.messages.map((m) => Object.assign({}, m, { span_id: spanOf(m.id) })) });
+const tn = (id, parent, type, name, extra) => Object.assign({ id, parent_id: parent, depth: parent ? 1 : 0, type, name,
+  started_at: '2026-10-22T09:14:00Z', ended_at: '2026-10-22T09:14:01Z', latency_ms: 1000, level: 'DEFAULT', filled: {},
+  input: null, output: null }, extra || {});
+const TREE2 = { purged: false, turn: { turn_id: 'tq', latency_ms: 9000, cost_usd: 0.01, total_tokens: 900, models: ['gpt-5.6-terra'] },
+  nodes: [tn('s0', null, 'agent', 'chat', { input: 'Which certificates expire this month?', output: 'One certificate expires: Gas safety.' }),
+    tn('r', 's0', 'generation', 'router', { input: { prompt: 'ROUTE-THIS' }, output: 'compliance' }),
+    tn('g1', 's0', 'agent', 'compliance', { input: 'Which certificates expire this month?', output: 'ANALYST-OUT' }),
+    tn('p', 'g1', 'generation', 'plan', { input: { q: 'PLAN-IN-1' }, output: 'PLAN-OUT-1' }),
+    tn('p2', 'g1', 'generation', 'plan', { input: { q: 'PLAN-IN-2' }, output: 'PLAN-OUT-2' }),
+    tn('c', 'g1', 'span', 'certificates', { input: { sql: 'SELECT name, expires FROM certificates' }, output: { rows: [{ name: 'Gas safety' }] } }),
+    tn('an', 'g1', 'generation', 'analyst', { input: { q: 'ANALYST-IN' }, output: 'ANALYST-OUT' })] };
+const DATA2 = Object.assign({}, DATA, { active: Object.assign({}, DATA.active, { trace: REC2 }) });
+const TREE_OK = { turn_id: 'tq', missing: false, tree: TREE2 };
+
+test('a question: header, expected answer, then the trace with notes under their steps', () => {
+  const out = html(Q.QuestionView, { data: DATA2, tree: TREE_OK, curator: true });
   ['<strong class="lab-qp-code">R3-12</strong>', '>R3<', '2 supporting answers', 'active answer: <code class="lab-mono">tq</code>', 'gpt-5.6-terra',
     'claude-sonnet-5', '>lookup<', 'Opening: </strong>Which certificates expire this month?', 'Follow-up 1: </strong>And which are gas safety?',
     '<strong class="lab-qp-eid">EXP-12</strong>', 'Source: Excel · by ana@northbridge.example', '1 earlier version', 'Answer 1', 'Answer 2', 'Link an answer']
     .forEach((t) => assert.ok(out.includes(t), t));
-  assert.ok(out.indexOf('Expected answer') < out.indexOf('class="lab-tl"'), 'the expected answer comes before the trace');
-  const order = [...out.matchAll(/data-block="(\w+)" data-kind="(\w+)"/g)].map((m) => m[1] + ':' + m[2]);
-  assert.deepEqual(order, ['user:user', 'input:orchestrator', 'output:orchestrator', 'input:model', 'output:model', 'input:code', 'output:code',
-    'input:model', 'output:model', 'answer:answer']);
-  // Each side shows its own half: the plan's inputs above, only its last output below; the read's SQL above, its rows below.
-  const plan = rowOf(out, 'tq:p:call');
-  const planOut = rowOf(out, 'tq:p:call#output');
-  assert.ok(plan.includes('PLAN-IN-1') && plan.includes('PLAN-IN-2') && !plan.includes('PLAN-OUT-2'));
-  assert.ok(planOut.includes('PLAN-OUT-2') && !planOut.includes('PLAN-IN-1') && !planOut.includes('PLAN-OUT-1'));
-  assert.ok(rowOf(out, 'tq:f:note').includes('SELECT name, expires FROM certificates'));
-  assert.ok(rowOf(out, 'tq:f:note#output').includes('<th scope="col">expires</th>') && rowOf(out, 'tq:f:note#output').includes('Gas safety'));
-  // Notes sit beside their block, mine first, each with who, role and when; an old note on an agent goes to Other notes.
-  const notes = rowOf(out, 'tq:f:note#output');
-  assert.ok(notes.indexOf('Only one row came back.') < notes.indexOf('The read should include B-102.'), 'mine first');
-  ['>You<', 'Tester', 'sam@northbridge.example', 'Domain expert', 'Annotated at ', ' · edited', '>Edit<', '>Delete<']
-    .forEach((t) => assert.ok(notes.includes(t), t));
-  assert.ok(rowOf(out, 'tq:p:call').includes('Second plan call repeats the first.'), 'a note on a part belongs to its step');
-  assert.ok(out.includes('Other notes') && out.includes('An older note on the agent.'));
-  assert.ok(!/\bRight\b|\bWrong\b|Not sure/.test(out), 'no Right / Wrong / Not sure anywhere');
-  // The question as a whole.
+  assert.ok(out.indexOf('Expected answer') < out.indexOf('class="lab-tt"'), 'the expected answer comes before the trace');
+  assert.ok(!out.includes('class="lab-tl"') && !out.includes('lab-legend') && !out.includes('aria-label="Answer view"'),
+    'the block view and the tab bar are gone');
+  // Where people wrote: counts on the steps (the read has two, the second plan call one, the agent one).
+  assert.match(out, />certificates<(?:(?!<\/li>)[\s\S])*aria-label="2 notes"/);
+  assert.match(out, /aria-label="1 note"/);
+  // chat is selected on open: its Input and Output each take notes.
+  assert.equal((out.match(/>Add note</g) || []).length, 2);
+  assert.match(out, /data-note-key="tq:root:user"/);
+  assert.match(out, /data-note-key="tq:root:answer"/);
+  // The question as a whole, and no Right / Wrong anywhere.
   assert.ok(out.includes('placeholder="Add a comment about this question as a whole…"') && out.includes('>Save comment<'));
   assert.ok(out.includes('A fair question for a facilities manager.'));
-  // Folded by default: the header rows stay, the parts wait behind Show.
-  const shut = html(Q.QuestionView, { data: DATA, curator: false });
-  assert.ok(!shut.includes('lab-part-body') && !shut.includes('<th scope="col">expires</th>') && shut.includes('>Show<') && shut.includes('Orchestrator'));
-  assert.ok(!shut.includes('aria-expanded="true"'), 'every part starts folded, with a one-line glimpse');
-  assert.ok(!shut.includes('Link an answer'), 'only curators link answers');
+  assert.ok(!/\bRight\b|\bWrong\b|Not sure/.test(out), 'no Right / Wrong / Not sure anywhere');
+  // A step's notes sit under the side they were written on, mine first, each with who, role and when.
+  const read = html(Q.QuestionView, { data: DATA2, tree: TREE_OK, traceView: { selectedId: 'c' } });
+  assert.ok(read.indexOf('SELECT name, expires FROM certificates') < read.indexOf('Only one row came back.'), 'under its output');
+  assert.ok(read.indexOf('Only one row came back.') < read.indexOf('The read should include B-102.'), 'mine first');
+  ['>You<', 'Tester', 'sam@northbridge.example', 'Domain expert', 'Annotated at ', ' · edited', '>Edit<', '>Delete<', 'Gas safety']
+    .forEach((t) => assert.ok(read.includes(t), t));
+  const plan2 = html(Q.QuestionView, { data: DATA2, tree: TREE_OK, traceView: { selectedId: 'p2' } });
+  assert.ok(plan2.includes('Second plan call repeats the first.'), 'a note on a part now sits on its own step');
+  const agent = html(Q.QuestionView, { data: DATA2, tree: TREE_OK, traceView: { selectedId: 'g1' } });
+  assert.ok(agent.includes('An older note on the agent.'), 'a note on an agent sits on that agent');
 });
 
-test('no answer linked yet; the note editor opens beside its block with the selected text', () => {
+test('the note editor opens under its side with the selected text', () => {
+  const editor = { block: 'tq:an:call#output', quote: 'ANALYST-OUT', text: '', target: 'Output · analyst', saving: false, error: '' };
+  const open = html(Q.QuestionView, { data: DATA2, tree: TREE_OK, editor, traceView: { selectedId: 'an' } });
+  assert.ok(open.includes('class="lab-ne"') && open.includes('New note · Output · analyst'));
+  assert.match(open, /<button type="button" class="lab-btn lab-btn-sm" disabled="">Save</);
+  assert.equal((open.match(/class="lab-ne"/g) || []).length, 1, 'one editor, under its side');
+  assert.ok(open.indexOf('data-note-key="tq:an:call#output"') < open.indexOf('class="lab-ne"'), 'under the output');
+  assert.equal((open.match(/>Add note</g) || []).length, 1, 'the side being written on has the editor instead of Add note');
+});
+
+test('the page without a trace still works', () => {
   const none = html(Q.QuestionView, { data: Object.assign({}, DATA, { traces: [], active: null, labels: [] }), curator: true });
   assert.ok(none.includes('No recorded answer is linked to this question yet') && none.includes('Link an answer') && none.includes('Expected answer'));
-  assert.ok(!none.includes('class="lab-tl"') && !none.includes('Save comment'));
+  assert.ok(!none.includes('class="lab-tt"') && !none.includes('Save comment'));
   const empty = html(Q.QuestionView, { data: Object.assign({}, DATA, { expected: null, expected_history: [], active: null }) });
   assert.ok(empty.includes('No expected answer yet') && empty.includes('Add expected answer'));
-  const open = html(Q.QuestionView, { data: DATA, editor: { block: 'tq:an:call#output', quote: 'ANALYST-OUT', text: '', target: 'Output · analyst', saving: false, error: '' } });
-  const row = rowOf(open, 'tq:an:call#output');
-  assert.ok(row.includes('class="lab-ne"') && row.includes('New note · Output · analyst') && row.includes('ANALYST-OUT'));
-  assert.match(row, /<button type="button" class="lab-btn lab-btn-sm" disabled="">Save</);
-  assert.equal((open.match(/class="lab-ne"/g) || []).length, 1, 'one editor, beside its block');
+  const gone = html(Q.QuestionView, { data: Object.assign({}, DATA, { active: { turn_id: 'tq', missing: true } }) });
+  assert.ok(gone.includes('This answer can no longer be read'));
+  const reading = html(Q.QuestionView, { data: DATA2, tree: { loading: true } });
+  assert.ok(reading.includes('Reading the trace…') && reading.includes('Save comment'), 'the comment box does not wait for the trace');
+  assert.ok(html(Q.QuestionView, { data: DATA2 }).includes('Reading the trace…'));
+  const failed = html(Q.QuestionView, { data: DATA2, tree: { error: 'boom' } });
+  assert.match(failed, /role="alert"[^>]*>Could not read this answer’s trace: boom/);
+  assert.ok(html(Q.QuestionView, { data: DATA2, tree: { turn_id: 'tq', missing: true, tree: null } }).includes('This answer can no longer be read'));
 });
 
 test('linking an answer: recorded answers to pick from, the same question marked, a way out when none match', () => {
