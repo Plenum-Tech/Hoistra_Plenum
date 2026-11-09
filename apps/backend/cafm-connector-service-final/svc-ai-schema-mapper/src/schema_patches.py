@@ -63,6 +63,13 @@ PATCHES: list[tuple[str, str]] = [
         "fiix_ingestion_jobs.started_by_user_id",
         "ALTER TABLE plenum_cafm.fiix_ingestion_jobs ADD COLUMN IF NOT EXISTS started_by_user_id UUID",
     ),
+    # When the run last did anything at all -- stamped by a trigger on every write to its row
+    # (ensure_activity_is_stamped), so a run that died can be told from one that is busy. See
+    # services/interrupted_runs.py.
+    (
+        "last_activity_at",
+        "ALTER TABLE plenum_cafm.migration_jobs ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ",
+    ),
 ]
 
 
@@ -182,9 +189,74 @@ async def ensure_cancel_is_final(engine: Any, *, sleep: Callable[[float], Awaita
     return "lock_skipped"
 
 
+ACTIVITY_TRIGGER = "migration_jobs_stamp_activity"
+ACTIVITY_FUNCTION_DDL = """
+CREATE OR REPLACE FUNCTION plenum_cafm.migration_jobs_stamp_activity() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    NEW.last_activity_at := now();
+    RETURN NEW;
+END
+$fn$"""
+ACTIVITY_TRIGGER_DDL = (
+    "CREATE TRIGGER " + ACTIVITY_TRIGGER + " BEFORE INSERT OR UPDATE ON plenum_cafm.migration_jobs "
+    "FOR EACH ROW EXECUTE FUNCTION plenum_cafm.migration_jobs_stamp_activity()"
+)
+#: Runs already going when the stamp is installed have no last activity yet. They get one now --
+#: judged from started_at instead, a live run that began more than the threshold ago would be
+#: called dead at the first sweep.
+ACTIVITY_BACKFILL_SQL = (
+    "UPDATE plenum_cafm.migration_jobs SET last_activity_at = now() "
+    "WHERE last_activity_at IS NULL AND status = 'running'"
+)
+_COLUMN_EXISTS_FOR_TRIGGER = text(
+    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'plenum_cafm' "
+    "AND table_name = 'migration_jobs' AND column_name = 'last_activity_at'"
+)
+
+
+async def ensure_activity_is_stamped(engine: Any, *,
+                                     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> str:
+    """Install the trigger that stamps last_activity_at on every write to a run's row.
+
+    A trigger rather than a line in each writer: the nodes, the progress beat, the gate answers,
+    the cancel and the status changes all write this row, and a run whose writer forgot to stamp
+    would look dead while busy. Only when the column exists -- a trigger naming a missing column
+    fails every write to the table, which would stop every migration. Same lock discipline as the
+    column patches and the cancel trigger."""
+    try:
+        async with engine.connect() as conn:
+            if not (await conn.execute(_COLUMN_EXISTS_FOR_TRIGGER)).scalar():
+                logger.warning("migration_jobs activity trigger NOT installed: last_activity_at is "
+                               "missing (its patch was skipped); next start retries")
+                return "column_missing"
+            if (await conn.execute(_TRIGGER_EXISTS_SQL, {"name": ACTIVITY_TRIGGER})).scalar():
+                logger.info("migration_jobs activity trigger already installed, no lock taken")
+                return "already_applied"
+    except Exception:  # noqa: BLE001 - fall through; the CREATE is the authority
+        pass
+    for attempt in range(1, LOCK_RETRIES + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+                await conn.execute(text(ACTIVITY_FUNCTION_DDL))
+                await conn.execute(text(ACTIVITY_TRIGGER_DDL))
+                await conn.execute(text(ACTIVITY_BACKFILL_SQL))
+            logger.info("migration_jobs activity trigger installed")
+            return "applied"
+        except Exception as exc:  # noqa: BLE001
+            if is_lock_timeout(exc) and attempt < LOCK_RETRIES:
+                await sleep(LOCK_RETRY_SLEEP_S)
+                continue
+            logger.warning("migration_jobs activity trigger skipped (%s); next start retries", exc)
+            return "lock_skipped" if is_lock_timeout(exc) else "failed"
+    return "lock_skipped"
+
+
 async def ensure_migration_jobs_schema_patches() -> None:
     """Add columns introduced after initial deploy without requiring Alembic upgrade."""
     engine = get_async_engine()
     for name, ddl in PATCHES:
         await apply_patch(engine, name, ddl)
     await ensure_cancel_is_final(engine)
+    await ensure_activity_is_stamped(engine)

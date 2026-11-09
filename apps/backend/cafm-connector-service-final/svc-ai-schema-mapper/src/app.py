@@ -345,6 +345,22 @@ async def _activity_timeout_sweeper() -> None:
             logger.warning(f"[activity-sweeper] sweep failed: {_e}")
 
 
+async def _interrupted_run_sweeper() -> None:
+    """A run still 'running' after RUN_INTERRUPTED_AFTER_MINUTES with nothing written to its row
+    is marked failed as interrupted -- see services/interrupted_runs.py for why, and why failed.
+    Every RUN_INTERRUPTED_CHECK_SECONDS (default 5 minutes). Global, like the sweeper above."""
+    from .services import interrupted_runs
+
+    while True:
+        try:
+            await asyncio.sleep(interrupted_runs.EVERY_SECONDS)
+            await interrupted_runs.sweep_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as _e:  # never let the check die on a transient error
+            logger.warning(f"[interrupted-runs] check failed: {_e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """FastAPI lifespan context manager.
@@ -530,17 +546,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── AL.4 — start the server-side activity-timeout sweeper (15-min cron) ────
     _sweeper_task = asyncio.create_task(_activity_timeout_sweeper())
     logger.info("activity-timeout sweeper started")
+    _interrupted_task = asyncio.create_task(_interrupted_run_sweeper())
+    logger.info("interrupted-run check started")
 
     yield
 
     # Shutdown
-    _sweeper_task.cancel()
-    try:
-        await _sweeper_task
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        pass
+    for _task in (_sweeper_task, _interrupted_task):
+        _task.cancel()
+        try:
+            await _task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
     if _redis_client is not None:
         await _redis_client.aclose()
     logger.info("service_shutdown")
