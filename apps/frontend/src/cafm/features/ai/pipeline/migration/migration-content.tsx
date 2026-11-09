@@ -27,6 +27,7 @@ import { TableResolutionPanels, ColumnIntelligencePanels } from "./migration-met
 import { usePipelineStageScrollSpy, setTableStagesRevealed, setColumnStagesRevealed } from "../pipeline-stage-link";
 import StepPause from "./step-pause";
 import { MigrationStepSnapshot } from "./step-pause";
+import type { NewTable } from "./new-table-summary";
 import SemanticMappingStep from "./semantic-mapping-step";
 import GatePreSemantic from "./gates/gate-pre-semantic";
 import GatePkApproval from "./gates/gate-pk-approval";
@@ -699,8 +700,11 @@ function CenterNodeHistory({
   snapshots,
   allNodes,
   headerless = false,
+  newTables,
 }: {
   snapshots: NodeSnapshot[];
+  /** The tables this migration creates, so a finished preprocess step still lists them. */
+  newTables?: NewTable[] | null;
   /**
    * The full NodeInfo[] from the live migration status. Forwarded to each
    * snapshot renderer so cross-snapshot lookups work — e.g. Node3Semantic
@@ -758,7 +762,7 @@ function CenterNodeHistory({
               </div>
               <div className="mt-0.5 text-xs text-slate-500">Status: completed snapshot</div>
             </div>
-            <MigrationStepSnapshot stepKey={stepKey} payload={snap.payload} allNodes={allNodes} />
+            <MigrationStepSnapshot stepKey={stepKey} payload={snap.payload} allNodes={allNodes} newTables={newTables} />
           </div>
         );
       })}
@@ -1868,6 +1872,7 @@ export default function MigrationContent({
         migrationId={migrationId}
         payload={columnMappingGatePayload}
         onSubmitted={onRefresh}
+        newTables={persistedUdrColumn?.shared_attribute_tables}
       />
     </div>
   ) : null;
@@ -1904,13 +1909,13 @@ export default function MigrationContent({
       {/* Every completed step before the semantic gate (File ingestion + Deterministic mapping)
           stays read-only in history — including while the pre-semantic gate is open. Previously
           the gate hid the Deterministic-mapping card, so it vanished the moment the gate opened. */}
-      <CenterNodeHistory snapshots={historyBeforeSemanticGate} allNodes={migration.nodes} />
+      <CenterNodeHistory snapshots={historyBeforeSemanticGate} allNodes={migration.nodes}  newTables={persistedUdrColumn?.shared_attribute_tables} />
       {/* While the 2.9 classification gate is open the analysis section is the ACTIVE step (it
           carries the inline approval), so it is rendered in the active panel instead of here —
           otherwise the approve button ends up inside collapsible history and can't be reached. */}
       {classificationGatePayload ? null : analysisSection}
       <CenterPreSemanticHistory snapshots={preSemanticSnapshots} />
-      <CenterNodeHistory snapshots={historyAfterSemanticGate} allNodes={migration.nodes} />
+      <CenterNodeHistory snapshots={historyAfterSemanticGate} allNodes={migration.nodes}  newTables={persistedUdrColumn?.shared_attribute_tables} />
     </>
   ) : null;
 
@@ -2641,6 +2646,7 @@ export default function MigrationContent({
         onAdvanced={() => handleSemanticMappingContinued()}
         allNodes={migration.nodes}
         fieldMappingDraft={migration.field_mapping_draft}
+          newTables={persistedUdrColumn?.shared_attribute_tables}
       />,
       undefined,
       { kind: "pause", node: 4, auto: false },
@@ -2665,6 +2671,7 @@ export default function MigrationContent({
         }
         allNodes={migration.nodes}
         fieldMappingDraft={migration.field_mapping_draft}
+          newTables={persistedUdrColumn?.shared_attribute_tables}
       />,
       undefined,
       {
@@ -3085,6 +3092,7 @@ export default function MigrationContent({
         onAdvanced={onRefresh}
         allNodes={migration.nodes}
         fieldMappingDraft={migration.field_mapping_draft}
+          newTables={persistedUdrColumn?.shared_attribute_tables}
       />,
       undefined,
       {

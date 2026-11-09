@@ -6,6 +6,7 @@ import {
   type MigrationClassificationGatePayload,
   type UdrGroupClassification,
 } from "../../../chat-api";
+import { NewTableSummary, type NewTable } from "../new-table-summary";
 
 interface Props {
   migrationId: string;
@@ -164,6 +165,7 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
           gid: c.group_id, table: lk.table_name, preview: false,
           meta: `${lk.distinct_count} values`,
           ddl: [lk.create_ddl, ...(lk.fk_ddl ?? [])].filter(Boolean).join("\n"),
+          lookup: lk as NewTable,
         };
       }
       if (changed) {
@@ -182,6 +184,7 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                meta: "no lookup table — the values are not a vocabulary", ddl: "" };
     })
     .filter(Boolean) as Array<{ gid: string; table: string; preview: boolean; meta: string; ddl: string;
+                            lookup?: NewTable;
                             preview_of?: { table: string; key: string; sources: string[] } }>;
 
   const RowShell = ({
@@ -348,7 +351,7 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
       {ddlEntries.length ? (
         <div className="mb-4">
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Emitted DDL — {ddlEntries.filter((e) => e.ddl).length} lookup table
+            New tables — {ddlEntries.filter((e) => e.ddl).length} lookup table
             {ddlEntries.filter((e) => e.ddl).length === 1 ? "" : "s"} under your current choices
           </div>
           <div className="mb-2 text-[11px] text-slate-500">
@@ -369,10 +372,8 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                   ) : null}
                   <span className="text-[10px] text-slate-400">{e.meta}</span>
                 </div>
-                {e.ddl ? (
-                  <pre className="overflow-x-auto rounded bg-slate-900 p-2.5 text-[10px] leading-relaxed text-slate-100">
-                    <code>{e.ddl}</code>
-                  </pre>
+                {e.lookup ? (
+                  <NewTableSummary table={e.lookup} />
                 ) : e.preview_of ? (
                   <div className="rounded border border-indigo-200 bg-indigo-50/40 p-2.5 text-[11px] text-slate-700">
                     Will create <b className="font-mono">{e.preview_of.table}</b>, keyed on{" "}
@@ -382,7 +383,7 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                         {i ? ", " : ""}<span className="font-mono">{m}</span>
                       </span>
                     ))}
-                    . Its statements are shown once it is built, on submit.
+                    . Its columns are shown once it is built, on submit.
                   </div>
                 ) : null}
               </div>

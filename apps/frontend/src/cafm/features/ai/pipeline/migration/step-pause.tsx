@@ -17,6 +17,7 @@ import {
 import { useMigrationAdvance, type NodeInfo } from "../../chat-api";
 import { parseEnvelope } from "./migration-field-mapping-draft";
 import { plainTierWord } from "./migration-mapping-utils";
+import { NewTableSummary, type NewTable } from "./new-table-summary";
 
 interface Props {
   migrationId: string;
@@ -26,6 +27,9 @@ interface Props {
   allNodes?: NodeInfo[];
   /** The user's persisted field-mapping decisions (shown at the preprocess step). */
   fieldMappingDraft?: unknown;
+  /** Tables this migration creates (shared-attribute lookups). Shown beside the source sheets at
+   *  the preprocess step, which otherwise lists only what was uploaded. */
+  newTables?: NewTable[] | null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -995,9 +999,11 @@ function ColumnMappingDecisions({ draft }: { draft: unknown }) {
 function Node5Preprocess({
   payload,
   fieldMappingDraft,
+  newTables,
 }: {
   payload: Record<string, unknown>;
   fieldMappingDraft?: unknown;
+  newTables?: NewTable[] | null;
 }) {
   // Each metric resolves to `null` if no known key exists in the payload —
   // the Metric tile shows "—" rather than a misleading 0. A genuine zero from
@@ -1034,8 +1040,15 @@ function Node5Preprocess({
 
   const previewsRaw = readRecord(payload.table_previews) ?? readRecord(payload.table_previews_by_table) ?? {};
   const tableNames = Object.keys(previewsRaw);
+  // The tables this migration CREATES sit beside the uploaded sheets, so the review shows every
+  // table the write will produce -- not only the ones that came in. They have no rows yet: the
+  // write step creates and fills them, one row per distinct value. Keyed "new:<name>" so a new
+  // table can never be mistaken for a source sheet of the same name.
+  const newList = (newTables ?? []).filter((t) => t && t.table_name);
+  const newKey = (t: NewTable) => `new:${t.table_name}`;
   const [openTable, setOpenTable] = useState<string | null>(null);
-  const activeTable = openTable ?? tableNames[0] ?? null;
+  const activeTable = openTable ?? tableNames[0] ?? (newList[0] ? newKey(newList[0]) : null);
+  const activeNew = newList.find((t) => newKey(t) === activeTable) ?? null;
 
   const activePreview = activeTable ? readRecord(previewsRaw[activeTable]) : null;
   const columnsAll = readStringArray(activePreview?.columns);
@@ -1098,7 +1111,7 @@ function Node5Preprocess({
 
       <ColumnMappingDecisions draft={fieldMappingDraft} />
 
-      {tableNames.length && activeTable ? (
+      {(tableNames.length || newList.length) && activeTable ? (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <div className="px-4 pt-4">
             <div className="flex flex-wrap gap-2">
@@ -1120,9 +1133,49 @@ function Node5Preprocess({
                   </button>
                 );
               })}
+              {newList.map((t) => {
+                const isActive = newKey(t) === activeTable;
+                return (
+                  <button
+                    key={newKey(t)}
+                    type="button"
+                    onClick={() => setOpenTable(newKey(t))}
+                    className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                      isActive
+                        ? "bg-emerald-600 text-white"
+                        : "bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100"
+                    }`}
+                  >
+                    <span className="mr-1.5 text-[9px] font-semibold uppercase opacity-80">new</span>
+                    {t.table_name}
+                    {t.distinct_count ? (
+                      <span className="ml-2 opacity-80">{t.distinct_count.toLocaleString()}r</span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
+          {activeNew ? (
+            <div className="p-4 space-y-2">
+              <NewTableSummary table={activeNew} />
+              {activeNew.sample_values?.length ? (
+                <div className="text-xs text-slate-600">
+                  One row per distinct value
+                  {activeNew.distinct_count ? ` — ${activeNew.distinct_count.toLocaleString()} in all` : ""}.
+                  {" "}First values:{" "}
+                  <span className="font-mono text-slate-700">
+                    {activeNew.sample_values.slice(0, 8).join(" · ")}
+                  </span>
+                  {(activeNew.distinct_count ?? 0) > Math.min(8, activeNew.sample_values.length) ? " …" : ""}
+                </div>
+              ) : null}
+              <div className="text-xs text-slate-400 italic">
+                Created and filled at the Write step, for your company only.
+              </div>
+            </div>
+          ) : (
           <div className="p-4">
             {columns.length && shownRows.length ? (
               <div className="rounded-xl border border-slate-200 overflow-auto">
@@ -1162,6 +1215,7 @@ function Node5Preprocess({
               </div>
             ) : null}
           </div>
+          )}
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
@@ -2150,11 +2204,13 @@ export function MigrationStepSnapshot({
   payload,
   allNodes,
   fieldMappingDraft,
+  newTables,
 }: {
   stepKey: string;
   payload: Record<string, unknown>;
   allNodes?: NodeInfo[];
   fieldMappingDraft?: unknown;
+  newTables?: NewTable[] | null;
 }) {
   // Node 1 — File Ingestion
   if (stepKey === "step_1_ingest") return <Node1Ingest payload={payload} />;
@@ -2178,7 +2234,7 @@ export function MigrationStepSnapshot({
   if (
     stepKey === "step_6_preprocess" || stepKey === "step_6_data_preprocessing" ||
     stepKey === "step_5_preprocess" || stepKey === "step_5_preprocess_validate"
-  ) return <Node5Preprocess payload={payload} fieldMappingDraft={fieldMappingDraft} />;
+  ) return <Node5Preprocess payload={payload} fieldMappingDraft={fieldMappingDraft} newTables={newTables} />;
   // Node 7 — Hierarchy Detection
   if (
     stepKey === "step_7_hierarchy" || stepKey === "step_7_hierarchy_detection" ||
@@ -2198,7 +2254,7 @@ export function MigrationStepSnapshot({
   return <NodeGeneric title="Step complete" />;
 }
 
-export default function StepPause({ migrationId, stepKey, payload, onAdvanced, allNodes, fieldMappingDraft }: Props) {
+export default function StepPause({ migrationId, stepKey, payload, onAdvanced, allNodes, fieldMappingDraft, newTables }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const { mutate: advance, isPending } = useMigrationAdvance({
@@ -2257,6 +2313,7 @@ export default function StepPause({ migrationId, stepKey, payload, onAdvanced, a
           payload={payload}
           allNodes={allNodes}
           fieldMappingDraft={fieldMappingDraft}
+          newTables={newTables}
         />
       </div>
 

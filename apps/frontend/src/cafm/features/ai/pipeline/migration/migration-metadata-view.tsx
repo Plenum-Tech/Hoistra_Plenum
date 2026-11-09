@@ -12,6 +12,7 @@ import { ChevronDown, ChevronRight, Database, FileText } from "lucide-react";
 
 import type { ColumnScoreBreakdown, MigrationPkConfirmation, UdrColumnIntelligence, UdrDuplicateTableGroup, UdrTableResolution } from "../../chat-api";
 import { plainAliasSource, plainMethodLabel, plainPkList } from "./migration-mapping-utils";
+import { NewTablesSummary } from "./new-table-summary";
 
 export type DocInventoryTable = { table_name: string; row_count: number; column_count: number };
 export type DocInventoryFile = {
@@ -1971,7 +1972,7 @@ export function ColumnIntelligencePanels({
           <div className="px-5 py-2 text-[11px] text-slate-500">
             Shared attributes that are not any table&apos;s key are normalised into new <b>lookup tables</b> —
             the attribute becomes the <b>primary key</b> and its distinct values become the rows; every source
-            column is <b>rewritten as a foreign key</b> to it. The emitted DDL is shown per table.
+            column is <b>rewritten as a foreign key</b> to it.
           </div>
           <StepTable
             head={["New table", "Primary key", "FK rewrites (source → lookup PK)", "Distinct values"]}
@@ -1994,13 +1995,10 @@ export function ColumnIntelligencePanels({
               </div>,
             ])}
           />
-          <div className="px-5 py-3 space-y-2 border-t border-slate-100">
-            <div className="text-[10.5px] font-medium text-slate-500">Emitted DDL</div>
-            {(report.shared_attribute_tables ?? []).map((t, i) => (
-              <pre key={i} className="overflow-x-auto rounded bg-slate-900 p-2.5 text-[10px] leading-relaxed text-slate-100">
-                <code>{[t.create_ddl, ...(t.fk_ddl ?? [])].filter(Boolean).join("\n")}</code>
-              </pre>
-            ))}
+          {/* The tables in words -- name, columns, key -- not the CREATE TABLE text that used to
+              fill this space (9 Nov 2026). The SQL is behind "Show SQL" on each. */}
+          <div className="px-5 py-3 border-t border-slate-100">
+            <NewTablesSummary tables={report.shared_attribute_tables} showLinks={false} />
           </div>
         </CollapsibleStepCard>
       ) : null}
@@ -2025,6 +2023,16 @@ export function ColumnIntelligencePanels({
             <b> format and values</b> (e.g. <span className="font-mono">serial → serial_number</span>), not an echo of
             the source header. A column with no confident match is shown as <span className="text-slate-500">new column</span>.
           </div>
+          {/* The new tables, carried forward from B22.1 into the mapping they were confirmed with --
+              the same component, so the two cannot describe them differently. */}
+          {(report.shared_attribute_tables ?? []).length ? (
+            <div className="px-5 pb-2">
+              <div className="mb-1.5 text-[10.5px] font-medium text-slate-500">
+                New tables this migration creates ({(report.shared_attribute_tables ?? []).length})
+              </div>
+              <NewTablesSummary tables={report.shared_attribute_tables} />
+            </div>
+          ) : null}
           {/* Grouped by SOURCE TABLE, each table collapsible — so the user tracks one table's
               column mapping at a time (sites, then assets, …) instead of one long flat list. */}
           {(() => {

@@ -6,11 +6,15 @@ import {
   type MigrationColumnMappingGatePayload,
   type UdrColDestMap,
 } from "../../../chat-api";
+import { NewTablesSummary, type NewTable } from "../new-table-summary";
 
 interface Props {
   migrationId: string;
   payload: MigrationColumnMappingGatePayload;
   onSubmitted: () => void;
+  /** The tables this migration creates (the B22.1 card above), carried forward so the mapping is
+   *  confirmed knowing what they hold and which source columns now point to them. */
+  newTables?: NewTable[] | null;
 }
 
 /** Per-column decision: keep the matched destination, re-target it, or create it as a new column. */
@@ -23,9 +27,17 @@ type Decision = { kind: "keep" | "retarget" | "new"; target?: string };
  * paused here and does NOT proceed to semantic mapping / write until the user approves. On submit,
  * only the CHANGED columns are sent as overrides: `{source_table: {source_field: dest|"__new__"}}`.
  */
-export default function GateColumnMappingApproval({ migrationId, payload, onSubmitted }: Props) {
+export default function GateColumnMappingApproval({ migrationId, payload, onSubmitted, newTables }: Props) {
   const rows = payload.dest_mapping ?? [];
   const destCols = payload.dest_columns_by_table ?? {};
+  // "table.column" (any case) -> the new table it now points to.
+  const linksTo = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of newTables ?? []) {
+      for (const rw of t.fk_rewrites ?? []) m.set(String(rw.source).toLowerCase(), t.table_name);
+    }
+    return m;
+  }, [newTables]);
   const [decisions, setDecisions] = useState<Record<string, Decision>>({});
   const [error, setError] = useState<string | null>(null);
   const { mutate, isPending } = useMigrationGateColumnMappingApproval({
@@ -101,6 +113,14 @@ export default function GateColumnMappingApproval({ migrationId, payload, onSubm
           it to a different destination column, or exclude it (created as a NEW column instead of
           merged). The pipeline is paused until you approve.
         </div>
+        {newTables?.length ? (
+          <div className="mt-3">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              New tables this migration creates ({newTables.length})
+            </div>
+            <NewTablesSummary tables={newTables} />
+          </div>
+        ) : null}
       </div>
 
       <div className="space-y-3">
@@ -134,6 +154,9 @@ export default function GateColumnMappingApproval({ migrationId, payload, onSubm
                   ?? destCols[String(r.dest_table ?? "")]
                   ?? [];
                 const isNew = !r.matched_column;
+                const pointsTo = (r.source_tables?.length ? r.source_tables : [tbl])
+                  .map((t) => linksTo.get(`${t}.${col}`.toLowerCase()))
+                  .find(Boolean);
                 return (
                   <div key={r.source} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
                     <div className="min-w-0 flex-1">
@@ -151,6 +174,11 @@ export default function GateColumnMappingApproval({ migrationId, payload, onSubm
                         )}
                         {r.dest_table ? (
                           <span className="text-[10px] text-slate-400">on {r.dest_table}</span>
+                        ) : null}
+                        {pointsTo ? (
+                          <span className="inline-flex items-center rounded-sm bg-emerald-100 px-1 text-[9px] font-semibold text-emerald-800">
+                            links to new table {pointsTo}
+                          </span>
                         ) : null}
                       </div>
                       {r.outcome ? (
