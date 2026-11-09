@@ -10,6 +10,7 @@ progress, under /api/trace-lab (trace_lab.app ROUTERS):
     GET    /lab/runs/{code}/labels            its labels view: questions x failure modes, each person's newest cell
     GET    /lab/progress                      review completion and failure-mode counts (?run=R3, default newest)
     GET    /lab/q/{code}                      one question: expected answer, answers, the active answer's steps, notes
+    GET    /lab/q/{code}/tree                 the Trace tab: one answer as Langfuse's tree of steps (read only)
     PUT    /lab/q/{code}/expected             a new version of the expected answer
     POST   /lab/q/{code}/traces               attach a recorded answer                              (curators)
     PUT    /lab/q/{code}/cells                the caller's positive / negative / cleared value for one failure mode
@@ -31,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from src.services.principal import Principal
 
-from . import auth, db, golden, labelling, runs
+from . import auth, db, golden, labelling, runs, trace_tree
 from .routes_labelling import _call
 
 router = APIRouter(tags=["Trace Lab runs"])
@@ -142,6 +143,12 @@ async def lab_progress(run: str | None = Query(None, max_length=20), m: labellin
 async def lab_question(code: str, turn: str | None = Query(None, max_length=200),
                        m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
     return {"ok": True, **await _call(runs.get_question(m, code, turn_id=turn))}
+
+
+@router.get("/lab/q/{code}/tree")
+async def lab_question_tree(code: str, turn: str | None = Query(None, max_length=200),
+                            m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    return {"ok": True, **await _call(trace_tree.question_tree(m, code, turn_id=turn))}
 
 
 @router.put("/lab/q/{code}/expected")

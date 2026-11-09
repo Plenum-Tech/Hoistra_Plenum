@@ -201,6 +201,7 @@ NOT_DRIVEN = {
     "/lab/runs/{code}": "same", "/lab/runs/{code}/questions": "same", "/lab/runs/{code}/labels": "same",
     "/lab/progress": "same", "/lab/q/{code}": "same", "/lab/q/{code}/expected": "same", "/lab/q/{code}/traces": "same", "/lab/q/{code}/candidates": "same",
     "/lab/q/{code}/cells": "same", "/lab/modes": "same", "/lab/modes/{lineage_id}": "same",
+    "/lab/q/{code}/tree": "the Trace tab (9 Nov): covered by test_trace_lab_trace_tree_sql",
     "/lab/platform-members": "same",
     # Synthetic batches (3 Nov): generation is deterministic and touches no database, and
     # asking a question calls a model, so the SQL story cannot drive either. Covered by
