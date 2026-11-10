@@ -1310,19 +1310,57 @@ async def list_blocked_vendors(building_name: str | None = None) -> dict:
             if risk is not None:
                 at_risk = [{"vendor": r.get("vendor_name"), "lapsed": r.get("lapsed"), "since": r.get("since")}
                            for r in risk.mappings().all()]
+            # Each blocked vendor's open work (Trace Lab R41-4, 10 Nov 2026): the answer told the reader to "confirm no
+            # live or scheduled work orders are assigned to the four blocked vendors" because nothing in the space could
+            # read them, and Apex Mechanical, blocked, still held one In progress and two Draft. The caller's company,
+            # and a restricted caller's buildings only. Columns read through to_jsonb: the work-order table differs
+            # between production and the test database.
+            open_by_vendor: dict[str, list[dict[str, Any]]] = {}
+            if rows:
+                from ..services.principal import building_clause
+
+                done = "', '".join(wo_sla._OPEN_DONE)
+                bclause, bextra = building_clause("w.building_id", param="scope_wo_buildings")
+                wo_rows = (await session.execute(_sql(
+                    "SELECT DISTINCT v.vendor_name, "
+                    "COALESCE(to_jsonb(w)->>'wo_code', to_jsonb(w)->>'work_order_number', w.id::text) AS code, "
+                    "w.status AS status, left(COALESCE(to_jsonb(w)->>'sla_due_at', to_jsonb(w)->>'due_date', ''), 10) AS due, "
+                    "left(COALESCE(to_jsonb(w)->>'title', to_jsonb(w)->>'description', ''), 120) AS title "
+                    "FROM plenum_cafm.work_orders w JOIN plenum_cafm.vendors v "
+                    "ON (w.vendor_id::text = v.id::text OR to_jsonb(w)->>'assigned_vendor' = v.id::text "
+                    "OR lower(COALESCE(to_jsonb(w)->>'vendor_name', to_jsonb(w)->>'vendor', '')) = lower(v.vendor_name)) "
+                    "WHERE w.organization_id::text = :org AND v.organization_id::text = :org "
+                    "AND lower(COALESCE(v.block_state, '')) = 'blocked' "
+                    "AND lower(COALESCE(to_jsonb(v)->>'status', '')) <> 'deleted' "
+                    f"AND lower(COALESCE(w.status, '')) NOT IN ('{done}')" + vclause + bclause
+                    + " ORDER BY v.vendor_name, due NULLS LAST, code LIMIT 200"),
+                    {"org": org, **vextra, **bextra})).mappings().all()
+                for r in wo_rows:
+                    if not r.get("code"):
+                        continue
+                    items = open_by_vendor.setdefault(str(r.get("vendor_name")), [])
+                    if len(items) < 20:
+                        items.append({"code": r.get("code"), "status": r.get("status"), "due": r.get("due") or None,
+                                      "title": r.get("title") or None})
     except Exception as exc:  # noqa: BLE001 - a tool answers, it does not raise into the loop
         log.warning("contract_performance.blocked_vendors_failed", error=str(exc)[:200])
         return {"ok": False, "error": "The vendor records could not be read."}
-    blocked = [{"vendor": r["vendor_name"], "blocked_for": r["blocked_accreditation_type"]} for r in rows]
+    blocked = [{"vendor": r["vendor_name"], "blocked_for": r["blocked_accreditation_type"],
+                "open_work_orders": open_by_vendor.get(str(r["vendor_name"]), [])} for r in rows]
+    work_rule = (" For each blocked vendor give its open work orders (code, status, what), which must be reassigned "
+                 "or paused, or say it has no open work orders: open_work_orders is that check, so never tell the "
+                 "reader to check for live or scheduled work themselves.")
     return {
-        "ok": True, "count": len(blocked), "blocked": blocked, "at_risk": at_risk, "source": "vendor records",
+        "ok": True, "count": len(blocked), "blocked": blocked, "at_risk": at_risk,
+        "source": "vendor records and their open work orders",
         "answer_rules": (("Answer in two lists (SPEC S-5): NOT ELIGIBLE = the blocked vendors (the block flag, as on "
                           "the Vendors page), each with what its block is for; AT RISK = vendors with a lapsed "
                           "accreditation who are not blocked, each with what lapsed and since when. Never add the two "
                           "into one blocked count and never send the reader to check a list themselves. Each list is "
-                          "a short list, one line per vendor (S-4), not a paragraph.") if risk is not None else
+                          "a short list, one line per vendor (S-4), not a paragraph." + work_rule) if risk is not None else
                          ("Name each blocked vendor and, where given, what its block is for, as a short list, one "
-                          "line per vendor. Do not add certificate, expiry or document detail: this read has none.")),
+                          "line per vendor. Do not add certificate, expiry or document detail: this read has none."
+                          + work_rule)),
     }
 
 

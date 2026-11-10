@@ -92,7 +92,9 @@ def test_the_tool_reads_only_the_vendor_record_of_the_callers_company(monkeypatc
     finally:
         caller_organization_id.reset(tok)
     assert out["ok"] and out["count"] == 2
-    assert out["blocked"][0] == {"vendor": "Pennard Fire Services", "blocked_for": "BAFE_SP203_1"}
+    # 10 Nov 2026: each blocked vendor also carries its open work orders (test_blocked_vendors_carry_their_open_work_orders).
+    assert {k: out["blocked"][0][k] for k in ("vendor", "blocked_for")} == {"vendor": "Pennard Fire Services",
+                                                                            "blocked_for": "BAFE_SP203_1"}
     sqls = " ".join(s for s, _ in seen)
     assert "SET TRANSACTION READ ONLY" in sqls
     query, params = next((q, p) for q, p in seen if "FROM plenum_cafm.vendors v" in q and "compliance_certificates" not in q)
