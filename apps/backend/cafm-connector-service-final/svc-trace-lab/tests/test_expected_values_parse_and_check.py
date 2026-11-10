@@ -128,6 +128,15 @@ def _check(cell, answer, cards=None):
     ("yes", "No, it lapsed.", False),
     ('"Nine Elms Plant"', "Maintained by Nine Elms Plant.", True),
     ("code:TEN-01", "Ref TEN-01 open.", True),
+    # 10 Nov 2026 (R46): "WO-B-301-4527, 4551 and 4561" names three work orders; Compare found only the first.
+    ("WO-B-301-4551", "WO-B-301-4527, 4551 and 4561 (AHU-3, FCU L4-12, CHW pump P1): all three held.", True),
+    ("WO-B-301-4561", "WO-B-301-4527, 4551 and 4561 (AHU-3, FCU L4-12, CHW pump P1): all three held.", True),
+    ("WO-B-301-4561", "Held: WO-B-301-4527/4551/4561.", True),
+    ("WO-B-301-4552", "WO-B-301-4527, 4551 and 4561 held.", False),
+    ("WO-B-301-4551", "WO-B-301-4527 cost 4551 to fix.", False),
+    ("WO-B-301-4551", "Job 4551 is late.", False),
+    ("WO-B-301-4551", "WO-B-301-4527, 45510 held.", False),
+    ("!WO-B-301-4551", "WO-B-301-4527, 4551 and 4561 held.", False),
 ])
 def test_the_value_table(cell, answer, ok):
     det = _check(cell, answer)

@@ -639,6 +639,17 @@ async def add_correction(m: labelling.Member, *, kind: str, reference: str, mode
 
 # ── regression runs ─────────────────────────────────────────────────────────────────────────────
 
+def _expected_out(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """An expected answer as the Loop page's form takes it: text, the records it was read from, its values and rule."""
+    if not row:
+        return None
+    ev = _json(row.get("evidence"))
+    ev = ev if isinstance(ev, dict) else {}
+    values = ev.get("values") or []
+    return {"text": row.get("expected") or "", "records": str(ev.get("data") or ""), "rule": ev.get("spec_rule"),
+            "values": [str(v) for v in values] if isinstance(values, list) else [str(values)]}
+
+
 async def _current_expected(conn: Any, question_id: str) -> dict[str, Any] | None:
     r = (await conn.execute(text(
         "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence, e.created_at FROM tracelab.lab_expected_answers e "
@@ -858,6 +869,75 @@ def _verdict(before: str | None, after: str | None, *, answered: bool = True) ->
     return "regressed" if before == "all_found" else "still_failing"
 
 
+#: Where an expected value went missing on its way to the answer (10 Nov 2026). R42, R44, R45 and R46 came back Still
+#: failing for four different reasons and each took a person reading the rerun's steps to find which.
+LOST_STAGES = ("not_in_data", "not_stated", "dropped_by_writer", "removed_in_review", "lost_at_the_end", "said_anyway")
+#: Figures an answer works out from the rows (a count, a total, a share): no read carries them, so one that is missing
+#: is the answer's to state, never a data gap (R47, 10 Nov 2026).
+_FIGURES = ("number", "money", "percent")
+_REVISION = ("analyst_revision", "revision")
+
+
+def _is_figure(item: dict[str, Any]) -> bool:
+    """A count, total or share - "7", "seven", "£4,200", "12%" - which an answer works out rather than reads."""
+    if item.get("kind") in _FIGURES:
+        return True
+    v = grading.words_to_digits(str(item.get("value") or "")).strip().replace(",", "")
+    return bool(re.fullmatch(r"[£$€]?\d+(?:\.\d+)?%?", v))
+
+
+def _text_of(v: Any) -> str:
+    return v if isinstance(v, str) else json.dumps(v, default=str) if v is not None else ""
+
+
+def _has(item: dict[str, Any], text_: str) -> bool:
+    return bool(grading.check_values([{**item, "negate": False}], text_, [])["items"][0]["ok"])
+
+
+def where_lost(items: list[dict[str, Any]], spans: list[dict[str, Any]], answer: str,
+               cards: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    """Each expected value the final answer misses (or a must-not value it says) and the first step it is lost at:
+    the reads (`tool` steps), the step that wrote the answer (the analyst, else the last model call before any
+    review), the review's revision, then the final answer."""
+    steps = sorted(spans or [], key=lambda x: x.get("seq") or 0)
+    tools = "\n".join(_text_of(x.get("output")) for x in steps if x.get("kind") == "tool")
+    review_at = next((i for i, x in enumerate(steps) if x.get("name") == "review"), len(steps))
+    writer = next((x for x in steps if x.get("name") == "analyst"), None) or next(
+        (x for x in reversed(steps[:review_at]) if x.get("kind") in ("llm", "generation")), None)
+    revision = next((x for x in steps if x.get("name") in _REVISION), None)
+    final = grading.check_values(items, answer or "", cards or []) if items else {"items": []}
+    out = []
+    for item, got in zip(items, final["items"]):
+        if got.get("ok") is not False:
+            continue
+        if item.get("negate"):
+            out.append({"raw": item.get("raw"), "stage": "said_anyway"})
+            continue
+        written = writer is not None and _has(item, _text_of(writer.get("output")))
+        if not written and not _has(item, tools):
+            stage = "not_stated" if _is_figure(item) else "not_in_data"
+        elif not written:
+            stage = "dropped_by_writer"
+        elif revision is not None and not _has(item, _text_of(revision.get("output"))):
+            stage = "removed_in_review"
+        else:
+            stage = "lost_at_the_end"
+        out.append({"raw": item.get("raw"), "stage": stage})
+    return out
+
+
+async def _steps_of(turn_id: str) -> list[dict[str, Any]]:
+    """A rerun's steps as Trace Lab keeps them (name, kind, output), read-only."""
+    async with db.lab_engine().connect() as conn:
+        rows = (await conn.execute(text(
+            "SELECT seq, span FROM tracelab.evidence_spans WHERE turn_id = :t ORDER BY seq"), {"t": turn_id})).mappings().all()
+    out = []
+    for r in rows:
+        sp = _json(r["span"]) or {}
+        out.append({"seq": r["seq"], "name": sp.get("name"), "kind": sp.get("kind"), "output": sp.get("output")})
+    return out
+
+
 async def compare(m: labelling.Member, code: str) -> dict[str, Any]:
     """Each question of a regression run: the answer people marked, the newest answer, and whether each carries the
     expected values; with what people say of the newest answer for the run's failure mode."""
@@ -904,11 +984,19 @@ async def compare(m: labelling.Member, code: str) -> dict[str, Any]:
                                (after or {}).get("check", {}).get("status") if after else None,
                                answered=bool(after and str(after.get("answer") or "").strip()))
         summary[verdict] += 1
+        # Where each missing value was lost in the rerun (10 Nov 2026), so the next draft starts from it.
+        lost: list[dict[str, str]] = []
+        if verdict in ("still_failing", "regressed") and after_t:
+            try:
+                a = answers.get(after_t) or {"answer": "", "cards": []}
+                lost = where_lost(items, await _steps_of(after_t), a["answer"], a["cards"])
+            except Exception as exc:  # noqa: BLE001 - a verdict without its diagnosis, never a broken compare
+                log.warning("loop.where_lost_failed", error=str(exc)[:200])
         said = [c["value"] for c in cells if c["question_id"] == q["id"] and c["value"]]
         out.append({"question": runs.question_code(run["run_no"], q["seq_no"]), "text": q["question"],
                     "from": q.get("scenario_ref"), "expected": exp["expected"] if exp else None,
                     "derived": derivation((exp or {}).get("evidence"), codes)["derived"] if exp else False,
-                    "before": before, "after": after, "verdict": verdict,
+                    "before": before, "after": after, "verdict": verdict, "lost": lost,
                     "people": {"positive": said.count("positive"), "negative": said.count("negative")}})
     return {"run": runs.run_code(run["run_no"]), "mode": reg["mode"], "spec_rule": reg["spec_rule"],
             "space": reg["space"], "summary": summary, "questions": out}
@@ -932,6 +1020,12 @@ async def overview(m: labelling.Member) -> dict[str, Any]:
             f"EXISTS (SELECT 1 FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id AND {CURRENT_EXPECTED_WHERE}) "
             f"AS has_expected FROM tracelab.lab_questions q JOIN tracelab.lab_runs r ON r.id = q.run_id "
             f"WHERE q.id = ANY(CAST(:ids AS uuid[])) AND {where}"), {**p, "ids": all_ids})).mappings().all()}
+        # Each question's current expected answer, so the Loop page can open it for editing (10 Nov 2026: once saved
+        # it could only be read from the question page, as raw JSON).
+        current = {r["question_id"]: dict(r) for r in (await conn.execute(text(
+            "SELECT DISTINCT ON (e.question_id) e.question_id::text AS question_id, e.expected, e.evidence "
+            f"FROM tracelab.lab_expected_answers e WHERE e.question_id = ANY(CAST(:ids AS uuid[])) AND {CURRENT_EXPECTED_WHERE} "
+            "ORDER BY e.question_id, e.created_at DESC, e.id DESC"), {"ids": list(qrows)})).mappings().all()}
         corr = (await conn.execute(text(
             "SELECT mode_lineage_id::text AS mode, spec_rule, count(*) AS n, max(created_at) AS last "
             "FROM tracelab.lab_corrections GROUP BY 1, 2"))).mappings().all()
@@ -956,7 +1050,8 @@ async def overview(m: labelling.Member) -> dict[str, Any]:
         mine_q = sorted((qrows[qid] for qid in pos.get(lin, []) if qid in qrows),
                         key=lambda r: (-r["run_no"], -r["seq_no"]))[:QUESTIONS_SHOWN]
         questions = [{"code": runs.question_code(r["run_no"], r["seq_no"]), "text": r["question"],
-                      "has_expected": bool(r["has_expected"]), "company": r["company"]} for r in mine_q]
+                      "has_expected": bool(r["has_expected"]), "company": r["company"],
+                      "expected": _expected_out(current.get(r["id"]))} for r in mine_q]
         out.append({**md, "positives": len(pos.get(lin, [])), "rule": rule, "corrections": n_corr,
                     "regression_runs": mine, "steps": steps, "next": nxt, "questions": questions,
                     "companies": sorted({q["company"] for q in questions if q["company"]})})

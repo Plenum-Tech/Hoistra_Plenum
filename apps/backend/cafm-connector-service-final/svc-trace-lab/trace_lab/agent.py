@@ -179,6 +179,227 @@ FIX_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["doc
                              "why": {"type": "string"}}}
 
 
+#: The second draft (10 Nov 2026). R41-5's first draft was a generic paragraph appended after 14,000 characters of
+#: rules such as "do not append the full list" and "at most four": replayed on the same data the analyst listed 0 of the
+#: 5 at-risk work orders with it, and 5 of 5 (twice) with a rule scoped to the read's own fields that names what it
+#: overrides. This pass is given the document as it reads now and the tools and fields the failing answers read.
+REFINE_SYSTEM = ("You are given a section drafted for an instruction document of a facilities-management assistant, the "
+                 "document's CURRENT TEXT, the approved rule, the failure, people's notes and the tools and data fields the "
+                 "failing answers read. Rewrite the section so the agent follows it when it reads the whole document:\n"
+                 "1. Scope: name the read (tool) and the field (e.g. a list returned as `at_risk`) the failure is about - "
+                 "only the fields the failing answers left out or got wrong. Never ask to list a field that the read or the "
+                 "document says to only count (e.g. a `clear` list).\n"
+                 "2. Layout: the document says how an answer is laid out (groups or sections, KPIs, actions). Say exactly "
+                 "where the items go in that layout - e.g. 'a group of its own, one line per item with its code, vendor "
+                 "and reason' - and that a count, KPI or sentence never stands in for the items it counts.\n"
+                 "3. Conflicts: quote every line of the current text that pulls the other way (a cap, a 'do not list', a "
+                 "'count only') and say this rule takes precedence over it for this case only.\n"
+                 "4. Only this rule: add nothing about any other failure, even if the notes mention one.\n"
+                 "5. If a LAST TEST is given, the change before this one was tested and still failed: read what that "
+                 "answer did and where each value was lost, and make the rule say exactly what that answer got wrong "
+                 "- stronger and more specific, not the same wording again.\n"
+                 "Keep it short and plain, with no data values from the failing answers. Return the document name you "
+                 "were given as `doc`, and a title without the rule code.")
+
+_ENGINE_ALIASES = {"maintenance": "wo_engine"}
+
+
+def _engines_of_route(route: str | None) -> list[str]:
+    """The engines a recorded route names: 'single:compliance', 'multi:compliance,contract_performance'."""
+    r = str(route or "")
+    if ":" not in r:
+        return []
+    return [_ENGINE_ALIASES.get(e.strip(), e.strip()) for e in r.split(":", 1)[1].split(",") if e.strip()]
+
+
+def _skill_from_meta(meta: dict[str, Any]) -> str | None:
+    """The skill the failing answers were routed to - the agent that actually wrote them. The first engine of a route
+    counts twice. None when nothing was recorded."""
+    from src.agents import skills
+
+    slugs: Counter = Counter()
+    for route in meta.get("routes") or []:
+        for i, engine in enumerate(_engines_of_route(route)):
+            skill = skills.skill_for_agent(engine)
+            if skill:
+                slugs[skill.slug] += 2 if i == 0 else 1
+    return slugs.most_common(1)[0][0] if slugs else None
+
+
+_KEY = re.compile(r'\\?"([a-z][a-z0-9_]{1,40})\\?": [\[{]')
+
+
+def _keys_of(raw: Any) -> list[str]:
+    """The list- and object-valued fields of a read, in the order they appear (a record cut at 16,000 characters
+    still names the ones before the cut)."""
+    s = raw if isinstance(raw, str) else json.dumps(raw, default=str)
+    return list(dict.fromkeys(_KEY.findall(s or "")))[:15]
+
+
+def _data_lines(meta: dict[str, Any]) -> str:
+    tools = meta.get("tools") or {}
+    return "\n".join(f"- {name}: {', '.join(keys)}" if keys else f"- {name}" for name, keys in tools.items()) \
+        or "(none recorded)"
+
+
+async def _answer_meta(turn_ids: list[str]) -> dict[str, Any]:
+    """The routes and the tool reads (name and fields) of the failing answers: Trace Lab's own records first, then
+    the chat's, read-only. Missing records give less to go on, never an error."""
+    ids = [t for t in dict.fromkeys(turn_ids) if t and not t.startswith("browser:")]
+    routes: list[str] = []
+    tools: dict[str, list[str]] = {}
+
+    def add(name: Any, output: Any) -> None:
+        if not name:
+            return
+        have = tools.setdefault(str(name), [])
+        for k in _keys_of(output):
+            if k not in have and len(have) < 15:
+                have.append(k)
+
+    if not ids:
+        return {"routes": routes, "tools": tools}
+    seen: set[str] = set()
+    try:
+        async with db.lab_engine().connect() as conn:
+            for r in (await conn.execute(text(
+                    "SELECT turn_id, turn->>'route' AS route FROM tracelab.evidence_turns WHERE turn_id = ANY(:ids)"),
+                    {"ids": ids})).mappings().all():
+                seen.add(r["turn_id"])
+                if r["route"]:
+                    routes.append(r["route"])
+            for r in (await conn.execute(text(
+                    "SELECT span->>'name' AS name, span->>'output' AS output FROM tracelab.evidence_spans "
+                    "WHERE turn_id = ANY(:ids) AND span->>'kind' = 'tool' ORDER BY turn_id, seq"),
+                    {"ids": ids})).mappings().all():
+                add(r["name"], r["output"])
+    except Exception as exc:  # noqa: BLE001 - a draft with less context, not a failure
+        log.warning("agent.answer_meta_lab_failed", error=str(exc)[:200])
+    rest = [t for t in ids if t not in seen]
+    if rest:
+        try:
+            from . import conversations
+
+            async with conversations._read() as conn:
+                for r in (await conn.execute(text(
+                        f"SELECT route FROM {conversations.TURNS} WHERE turn_id = ANY(:ids)"), {"ids": rest})).mappings().all():
+                    if r["route"]:
+                        routes.append(r["route"])
+                for r in (await conn.execute(text(
+                        f"SELECT name, output::text AS output FROM {conversations.SPANS} WHERE turn_id = ANY(:ids) "
+                        "AND kind = 'tool' ORDER BY started_at"), {"ids": rest})).mappings().all():
+                    add(r["name"], r["output"])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("agent.answer_meta_chat_failed", error=str(exc)[:200])
+    return {"routes": routes, "tools": tools}
+
+
+_STAGE_TEXT = {
+    "not_in_data": "never in the data: a tool has to return it (a code change)",
+    "not_stated": "a figure worked out from the data, not stated",
+    "dropped_by_writer": "in the data, left out by the answer",
+    "removed_in_review": "written, then removed by the review",
+    "lost_at_the_end": "written, then lost before the final answer",
+    "said_anyway": "still said",
+}
+
+
+def _last_test(cmp: dict[str, Any] | None) -> tuple[str, list[str]]:
+    """What the mode's last test says for the next draft (10 Nov 2026): each question still failing, its answer and
+    where each value was lost. The second part lists the values the data never had - only when nothing else is
+    missing, because then no instruction change can pass."""
+    lines: list[str] = []
+    gaps: list[str] = []
+    other = False
+    for q in (cmp or {}).get("questions") or []:
+        lost = q.get("lost") or []
+        if q.get("verdict") not in ("still_failing", "regressed") or not lost:
+            continue
+        lines.append(f"- {q.get('question')}: the answer was:\n{str((q.get('after') or {}).get('answer') or '')[:1500]}")
+        for x in lost:
+            lines.append(f"  - {x.get('raw')}: {_STAGE_TEXT.get(x.get('stage'), x.get('stage'))}")
+            if x.get("stage") == "not_in_data":
+                gaps.append(str(x.get("raw")))
+            else:
+                other = True
+    block = (f"LAST TEST {(cmp or {}).get('run') or ''} (still failing)\n" + "\n".join(lines)) if lines else ""
+    return block, ([] if other else gaps)
+
+
+def _refuse_data_gap(gaps: list[str]) -> None:
+    if gaps:
+        raise Invalid("data_gap", "The last test shows the data never contained " + ", ".join(gaps[:6])
+                      + ". A change to the instructions cannot add data: a tool has to return it, which is a code "
+                        "change. Record it as a correction once it is made, then test again.")
+
+
+def _without_rule(doc: str, code: str) -> str:
+    """The document without the earlier sections for this rule, so a redraft replaces them instead of stacking a
+    second, older wording beside the new one."""
+    pat = re.compile(r"\n*^## [^\n]*\(" + re.escape(code) + r"\)[ \t]*$.*?(?=^#{1,2} |\Z)", re.M | re.S)
+    out = pat.sub("\n\n", doc)
+    return doc if out == doc else re.sub(r"\n{3,}", "\n\n", out).rstrip() + "\n"
+
+
+async def _mode_last_test(m: labelling.Member, lin: str) -> dict[str, Any] | None:
+    """The newest regression run of the mode, compared, or None."""
+    async with db.lab_engine().connect() as conn:
+        row = (await conn.execute(text(
+            "SELECT r.run_no FROM tracelab.lab_regression_runs g JOIN tracelab.lab_runs r ON r.id = g.run_id "
+            "WHERE g.mode_lineage_id = CAST(:m AS uuid) ORDER BY g.created_at DESC LIMIT 1"), {"m": lin})).first()
+    if row is None:
+        return None
+    return await loop.compare(m, runs.run_code(row[0]))
+
+
+def _refine_prompt(*, rule: dict[str, Any], mode: dict[str, Any], notes: list[str], draft: dict[str, Any],
+                   doc_text: str, data: str, last_test: str = "") -> str:
+    return (f"RULE {rule.get('code')}: {rule.get('text')}\nFAILURE MODE {mode.get('name')}: {mode.get('definition') or ''}"
+            "\n\nNOTES\n" + "\n".join(f"- {n[:500]}" for n in notes)
+            + f"\n\nTOOLS AND FIELDS THE FAILING ANSWERS READ\n{data}"
+            + (f"\n\n{last_test}" if last_test else "")
+            + f"\n\nDRAFTED SECTION\nTitle: {draft.get('title') or ''}\n{draft.get('text') or ''}"
+            + f"\n\nCURRENT TEXT OF THE DOCUMENT\n{doc_text[:30000]}")
+
+
+def _primary_doc(chosen: str, docs: list[str]) -> str:
+    """The document the rule is written into. A reviewer's document (review, scope-eval) is read only after the answer
+    is written, so a rule the answer must follow goes to the writer's (answering) and the reviewer gets its clause
+    beside it (R41-6, 10 Nov 2026: a count rule drafted into review.md never reached the step that writes counts)."""
+    return "answering" if chosen in ("review", "scope-eval") and "answering" in docs else chosen
+
+
+def _review_doc(docs: list[str]) -> str | None:
+    """The document the skill's reviewer judges scope by: scope-eval, else review, else none."""
+    return next((d for d in ("scope-eval", "review") if d in docs), None)
+
+
+def _keep_section(code: str, rule_text: str) -> str:
+    """The reviewer's half of a fix (10 Nov 2026): R45's review ordered the at-risk list S-13 requires removed as "a
+    different, forward-looking question", and the revision dropped it."""
+    return (f"## Keep what rule {code} requires ({code})\n\nThis rule takes precedence over anything above that "
+            f"conflicts with it, for the case it covers.\n\nThe answering document requires this (rule {code}):\n\n"
+            + str(rule_text or "").strip()[:SECTION_MAX]
+            + f"\n\nWhen an answer contains what rule {code} requires, that IS what the question earns: do not list it as "
+              "not asked for, do not ask for it to be removed or shortened, and if it is missing, ask for it.")
+
+
+_LEADING_HEAD = re.compile(r"^\s*#{1,3} [^\n]*\n+")
+_LEADING_PRECEDENCE = re.compile(r"^\s*This rule takes precedence over[^\n]*\n+", re.I)
+
+
+def _section(code: str, title: str, body: str) -> str:
+    text_ = str(body or "")
+    # The model sometimes starts its text with its own heading and precedence line; one of each is enough.
+    while True:
+        cut = _LEADING_PRECEDENCE.sub("", _LEADING_HEAD.sub("", text_, count=1), count=1)
+        if cut == text_:
+            break
+        text_ = cut
+    return (f"## {title} ({code})\n\nThis rule takes precedence over anything above that conflicts with it, for the "
+            f"case it covers.\n\n" + text_.strip()[:SECTION_MAX])
+
+
 def _skill_docs(slug: str) -> list[str]:
     from src.agents.skills import skills_dir
 
@@ -272,8 +493,20 @@ async def draft_fix(m: labelling.Member, lineage_id: str, *, authorization: str 
         turns = {r["id"]: (await loop.question_turns(conn, r["id"]))[-1:] for r in rows}
     if not rows:
         raise Invalid("no_positives", "Nobody has marked a question positive for this failure mode.")
-    answers = await loop.turn_answers([t for ts in turns.values() for t in ts])
-    slug = _skill_for([r["question"] for r in rows])
+    turn_ids = [t for ts in turns.values() for t in ts]
+    answers = await loop.turn_answers(turn_ids)
+    # The skill of the agent that wrote the failing answers, else the router's guess from the questions (10 Nov 2026:
+    # the guess filed R41-4's fix under udr while the compliance agent answered).
+    meta = await _answer_meta(turn_ids)
+    slug = _skill_from_meta(meta) or _skill_for([r["question"] for r in rows])
+    # The mode's last test, if it has one (10 Nov 2026): what the answer did and where each value was lost. A value the
+    # data never had is a code change, and no instruction draft is made for it.
+    try:
+        last_block, gaps = _last_test(await _mode_last_test(m, lin))
+    except Exception as exc:  # noqa: BLE001 - a draft without the last test, not a failure
+        log.warning("agent.last_test_unreadable", error=str(exc)[:200])
+        last_block, gaps = "", []
+    _refuse_data_gap(gaps)
     docs = _skill_docs(slug)
     prompt = (f"RULE {rule['code']}: {rule.get('text')}\nFAILURE MODE {modes[lin]['name']}: {modes[lin].get('definition') or ''}\n\n"
               f"DOCUMENTS of skill '{slug}' (choose one by name):\n{_doc_lines(slug, docs)}\n\nNOTES\n"
@@ -285,16 +518,52 @@ async def draft_fix(m: labelling.Member, lineage_id: str, *, authorization: str 
     doc_name = str(reply.get("doc") or "").strip()
     if doc_name not in docs:
         doc_name = "answering" if "answering" in docs else docs[0]
-    title = re.sub(r"\s+", " ", str(reply.get("title") or modes[lin]["name"]))[:120]
-    section = f"## {title} ({rule['code']})\n\n" + str(reply.get("text") or "").strip()[:SECTION_MAX]
-    content = (await _base_text(slug, doc_name)).rstrip() + "\n\n" + section + "\n"
+    doc_name = _primary_doc(doc_name, docs)
+    base = _without_rule(await _base_text(slug, doc_name), str(rule["code"]))
+    # Drafted again with the document as it reads now and the reads the failing answers used (10 Nov 2026).
+    try:
+        refined = await _ask(REFINE_SYSTEM, _refine_prompt(
+            rule=rule, mode=modes[lin], notes=[n["note"] for n in notes], draft=reply, doc_text=base,
+            data=_data_lines(meta), last_test=last_block), FIX_SCHEMA, max_tokens=1500)
+        if str(refined.get("text") or "").strip():
+            reply = {**reply, **{k: refined[k] for k in ("title", "text", "why") if str(refined.get(k) or "").strip()}}
+    except Exception as exc:  # noqa: BLE001 - the first draft still stands
+        log.warning("agent.refine_failed", error=str(exc)[:200])
+    title = re.sub(r"\s+", " ", str(reply.get("title") or modes[lin]["name"]))
+    title = re.sub(r"\s*\((?:rule\s+)?" + re.escape(str(rule["code"])) + r"\s*\)", "", title, flags=re.I).strip()[:120] \
+        or modes[lin]["name"]
+    section = _section(rule["code"], title, str(reply.get("text") or ""))
+    content = base.rstrip() + "\n\n" + section + "\n"
     out = await _deepagents("POST", "/overlays", authorization, {
         "skill": slug, "doc": doc_name, "content": content,
         "evidence": {"trace_lab": {"mode": lin, "mode_name": modes[lin]["name"], "spec_rule": rule["code"],
                                    "questions": [r["code"] for r in rows], "section": section,
                                    "why": str(reply.get("why") or "")[:1000], "by": m.email}}})
+    companions = []
+    review = _review_doc(docs)
+    if out.get("id") and review and review != doc_name:
+        # The reviewer's half: without it the review step removes what the rule makes the answer add (10 Nov 2026).
+        keep = _keep_section(rule["code"], str(reply.get("text") or ""))
+        extra = await _deepagents("POST", "/overlays", authorization, {
+            "skill": slug, "doc": review,
+            "content": _without_rule(await _base_text(slug, review), str(rule["code"])).rstrip() + "\n\n" + keep + "\n",
+            "evidence": {"trace_lab": {"mode": lin, "mode_name": modes[lin]["name"], "spec_rule": rule["code"],
+                                       "questions": [r["code"] for r in rows], "section": keep, "companion_of": out["id"],
+                                       "why": "So the review step keeps what the rule requires.", "by": m.email}}})
+        if extra.get("id"):
+            companions.append({"id": extra["id"], "of": out["id"], "path": f"skills/{slug}/{review}.md"})
+    # The new draft replaces this mode's earlier changes to the same document that are still waiting or under test
+    # (10 Nov 2026): two wordings of one rule under test at once is two experiments in one rerun.
+    if out.get("id"):
+        try:
+            seen = await changes(m, authorization=authorization)
+            for c in seen["proposed"] + seen["testing"]:
+                if c.get("mode") == lin and c["id"] != out["id"] and c.get("doc") == doc_name:
+                    await reject_change(m, c["id"], authorization=authorization)
+        except Exception as exc:  # noqa: BLE001 - the old change stays for a person to reject
+            log.warning("agent.supersede_failed", error=str(exc)[:200])
     return {"id": out.get("id"), "skill": slug, "doc": doc_name, "path": f"skills/{slug}/{doc_name}.md", "section": section,
-            "why": reply.get("why")}
+            "why": reply.get("why"), "companions": companions}
 
 
 # ── 3. the approved spec, the changes under test, live, and the export ─────────────────────────
@@ -320,6 +589,7 @@ def _change_out(o: dict[str, Any]) -> dict[str, Any]:
             "path": f"skills/{o['skill']}/{o['doc']}.md", "mode": tl.get("mode"), "mode_name": tl.get("mode_name"),
             "spec_rule": tl.get("spec_rule"), "spec_version": tl.get("spec_version"), "section": tl.get("section"),
             "why": tl.get("why"), "questions": tl.get("questions") or [], "by": o.get("created_by"),
+            "companion_of": tl.get("companion_of"),
             "at": o.get("created_at"), "decided_by": o.get("reviewed_by"), "decided_at": o.get("reviewed_at")}
 
 
@@ -327,7 +597,12 @@ async def changes(m: labelling.Member, *, authorization: str | None) -> dict[str
     """The instruction changes this loop made: waiting for a decision, under test, and live."""
     runs.require_taxonomist(m)
     rows = (await _deepagents("GET", "/overlays", authorization)).get("overlays") or []
-    mine = [_change_out(o) for o in rows if o.get("skill") == "spec" or "trace_lab" in json.dumps(o.get("evidence") or {})]
+    every = [_change_out(o) for o in rows if o.get("skill") == "spec" or "trace_lab" in json.dumps(o.get("evidence") or {})]
+    # A change's companions (the reviewer's clause) are shown with it and decided with it, not on their own.
+    mine = [c for c in every if not c.get("companion_of")]
+    for c in mine:
+        c["companions"] = [{"id": x["id"], "path": x["path"], "status": x["status"]}
+                           for x in every if x.get("companion_of") == c["id"]]
     return {"proposed": [c for c in mine if c["status"] == "proposed"],
             "testing": [c for c in mine if c["status"] == "testing"],
             "live": [c for c in mine if c["status"] == "active"]}
@@ -342,6 +617,9 @@ async def approve_change(m: labelling.Member, overlay_id: str, *, authorization:
         raise NotFound("not_found", "That change is not waiting for a decision.")
     out = await _deepagents("POST", f"/overlays/{overlay_id}/test", authorization)
     c = found[overlay_id]
+    for x in c.get("companions") or []:
+        if x["status"] == "proposed":
+            await _deepagents("POST", f"/overlays/{x['id']}/test", authorization)
     if c.get("mode"):
         async with db.lab_engine().begin() as conn:
             await _limits(conn)
@@ -354,15 +632,33 @@ async def approve_change(m: labelling.Member, overlay_id: str, *, authorization:
     return {**out, "path": c["path"]}
 
 
+async def _companions_of(m: labelling.Member, overlay_id: str, authorization: str | None) -> list[dict[str, Any]]:
+    seen = await changes(m, authorization=authorization)
+    for c in seen["proposed"] + seen["testing"] + seen["live"]:
+        if c["id"] == overlay_id:
+            return c.get("companions") or []
+    return []
+
+
 async def reject_change(m: labelling.Member, overlay_id: str, *, authorization: str | None) -> dict[str, Any]:
     runs.require_taxonomist(m)
-    return await _deepagents("POST", f"/overlays/{overlay_id}/drop", authorization)
+    companions = await _companions_of(m, overlay_id, authorization)
+    out = await _deepagents("POST", f"/overlays/{overlay_id}/drop", authorization)
+    for x in companions:
+        if x["status"] != "rejected":
+            await _deepagents("POST", f"/overlays/{x['id']}/drop", authorization)
+    return out
 
 
 async def make_live(m: labelling.Member, overlay_id: str, *, authorization: str | None) -> dict[str, Any]:
     """A person confirms a change that passed its tests: every agent reads it from now on, with no rebuild."""
     runs.require_taxonomist(m)
-    return await _deepagents("POST", f"/overlays/{overlay_id}/live", authorization)
+    companions = await _companions_of(m, overlay_id, authorization)
+    out = await _deepagents("POST", f"/overlays/{overlay_id}/live", authorization)
+    for x in companions:
+        if x["status"] == "testing":
+            await _deepagents("POST", f"/overlays/{x['id']}/live", authorization)
+    return out
 
 
 async def export_zip(m: labelling.Member, *, authorization: str | None) -> bytes:

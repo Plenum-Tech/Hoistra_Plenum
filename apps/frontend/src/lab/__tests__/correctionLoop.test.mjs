@@ -6,6 +6,7 @@
 // the top bar says the service syncs new answers by itself.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { bundle, cleanBundles } from '../../tracelab/__tests__/esbuild-helper.mjs';
 
 globalThis.window = globalThis.window || { location: { origin: 'http://test.local', pathname: '/lab/', search: '' }, history: { replaceState: () => {} } };
@@ -103,6 +104,21 @@ test('a rerun that saved no answer says so, not still failing', () => {
     before: { answer: 'old', check: { status: 'mismatch' } }, after: { answer: '', check: { status: 'mismatch' } }, verdict: 'no_answer', people: {} }] };
   const out = html(LP.CompareView, { data });
   assert.ok(out.includes('No answer (timed out or failed)'));
+});
+
+test('a question still failing says where each missing value was lost, and what to do next (10 Nov 2026)', () => {
+  const data = { run: 'R46', summary: { still_failing: 2 }, questions: [
+    { question: 'R46-1', text: 'q', expected: 'x', before: { answer: 'a', check: { status: 'mismatch' } },
+      after: { answer: 'b', check: { status: 'mismatch' } }, verdict: 'still_failing', people: {},
+      lost: [{ raw: 'WO-B-301-4560', stage: 'dropped_by_writer' }, { raw: 'WO-B-301-4567', stage: 'removed_in_review' }] },
+    { question: 'R46-2', text: 'q', expected: 'x', before: { answer: 'a', check: { status: 'mismatch' } },
+      after: { answer: 'b', check: { status: 'mismatch' } }, verdict: 'still_failing', people: {},
+      lost: [{ raw: 'WO-B-301-4551', stage: 'not_in_data' }] }] };
+  const out = html(LP.CompareView, { data });
+  assert.ok(out.includes('WO-B-301-4560') && out.includes('in the data, left out by the answer'));
+  assert.ok(out.includes('written, then removed by the review'));
+  assert.ok(out.includes('never in the data') && /code change/i.test(out));
+  assert.ok(out.includes('Agent: draft fix again'), 'says the next draft reads this test');
 });
 
 test('compare: the summary, and each question before and after against its expected values', () => {
@@ -212,6 +228,23 @@ test('instruction changes: proposed, under test, live, and the download for comm
   const none = html(LP.ChangesPanel, { changes: { proposed: [], testing: [], live: [] } });
   assert.ok(none.includes('No instruction changes yet'));
   assert.equal(html(LP.ChangesPanel, { changes: null }), '', 'hidden for anyone who cannot change instructions');
+});
+
+test('a saved expected answer opens prefilled to edit (10 Nov 2026)', () => {
+  const out = html(LP.ExpectedForm, { code: 'R41-6', rule: 'S-15', busy: false, onSave() {}, onCancel() {},
+    initial: { text: 'Eleven lapsed.', records: 'vendors', values: ['seven', '!nine of them'] } });
+  assert.ok(out.includes('Eleven lapsed.') && out.includes('vendors') && out.includes('seven\n!nine of them'), out);
+  const src = readFileSync(new URL('../Loop.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes("'Edit the expected answer for ' + q.code") && src.includes('initial={q.has_expected ? q.expected : null}'));
+});
+
+test('a change names the reviewer clause that goes with it (10 Nov 2026)', () => {
+  // The review step removed what the fixed rule made the answer add; the fix now also writes a clause into the reviewer's
+  // document, decided with the change. The person sees both files before approving.
+  const withKeep = { proposed: [Object.assign({}, CHANGES.proposed[0], {
+    companions: [{ id: 'o9', path: 'docs/compliance/scope-eval.md', status: 'proposed' }] })], testing: [], live: [] };
+  const out = html(LP.ChangesPanel, { changes: withKeep, busy: false, onApprove() {}, onReject() {}, onLive() {}, onExport() {} });
+  assert.ok(out.includes('docs/compliance/scope-eval.md') && /decided together/i.test(out), out);
 });
 
 test('the agent buttons: propose from notes, and draft a fix for a mode with a rule', () => {

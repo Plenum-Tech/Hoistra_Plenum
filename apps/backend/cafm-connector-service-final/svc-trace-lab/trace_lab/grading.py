@@ -87,6 +87,26 @@ def _code_norm(s: str) -> str:
     return re.sub(r"[-_/.]", "", s).casefold()
 
 
+_CODE_TAIL = re.compile(r"^(.*?[-_/.])(\d{2,})$")
+
+
+def _code_in_list(code: str, hay: str) -> tuple[bool, tuple[int, int] | None]:
+    """A code written in a shortened list: "WO-B-301-4527, 4551 and 4561" names WO-B-301-4551 and -4561 (10 Nov 2026,
+    R46). Counted only inside a run that starts with the same prefix and continues with numbers of the same length
+    joined by commas, "and", "or", "&" or "/" - so a stray 4551 elsewhere never counts."""
+    m = _CODE_TAIL.match(code.strip())
+    if not m:
+        return False, None
+    prefix, tail = m.group(1), m.group(2)
+    n = len(tail)
+    sep = r"\s*(?:,|/|&|\band\b|\bor\b)\s*(?:and\s+)?"
+    run = re.compile(re.escape(prefix) + r"\d{%d}(?:%s\d{%d}(?!\d))+" % (n, sep, n), re.IGNORECASE)
+    for r in run.finditer(hay):
+        if re.search(r"(?<!\d)" + re.escape(tail) + r"(?!\d)", r.group(0)):
+            return True, (r.start(), r.end())
+    return False, None
+
+
 def _snippet(hay: str, start: int, end: int) -> str:
     return "…" + " ".join(hay[max(0, start - 40):end + 40].split()) + "…"
 
@@ -137,8 +157,16 @@ def check_values(items: list[dict], answer: str, cards: list[dict]) -> dict:
             found = bool(needle) and (" " + needle + " ") in words_hay
             i = hay.lower().find(value.lower())
             evidence = _snippet(hay, i, i + len(value)) if found and i >= 0 else None
+            if not found and re.search(r"[A-Za-z]", value) and _CODE_TAIL.match(value.strip()):
+                # A code typed without "code:" (WO-B-301-4551) is read as a name; a shortened list names it too.
+                found, span = _code_in_list(value, hay)
+                evidence = _snippet(hay, span[0], span[1]) if span else None
         elif kind == "code":
-            found = _code_norm(words_to_digits(str(it.get("value") or ""))) in codes
+            value = words_to_digits(str(it.get("value") or ""))
+            found = _code_norm(value) in codes
+            if not found:
+                found, span = _code_in_list(value, hay)
+                evidence = _snippet(hay, span[0], span[1]) if span else None
         elif kind == "yesno":
             said = _first_sentence_says(answer)
             if said is None:

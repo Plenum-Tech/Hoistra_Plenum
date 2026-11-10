@@ -125,6 +125,13 @@ async def test_rule_to_change_to_test_to_live_to_the_repo(main_scratch, lab_scra
     assert pub["status"] == "testing", "the agent writes the approved SPEC.md to the store, under test, not live"
 
     async def model(system, prompt, schema, max_tokens):
+        if "CURRENT TEXT OF THE DOCUMENT" in prompt:
+            # 10 Nov 2026: the second draft sees the document as it reads now, and is the text that is saved.
+            assert system == agent.REFINE_SYSTEM and "LIVE ANSWERING TEXT." in prompt and "Keep me." in prompt
+            assert "Answer NOT ELIGIBLE (block flag)" in prompt, "the first draft is what it rewrites"
+            return {"doc": "answering", "title": "Blocked and at risk are two lists",
+                    "text": "Where `list_blocked_vendors` returns `blocked` and `at_risk`, answer them as two lists.",
+                    "why": "Scoped to the read's fields."}
         assert "S-1" in prompt and "Which vendors" in prompt
         # each document is offered with what it governs, so a filtering mistake can go to the planner's document
         assert "- planner: How the compliance planner turns a question into a register query" in prompt
@@ -162,17 +169,25 @@ async def test_rule_to_change_to_test_to_live_to_the_repo(main_scratch, lab_scra
     assert (row["skill"], row["doc"], row["status"]) == ("compliance", "answering", "proposed")
     assert fix["path"] == "skills/compliance/answering.md"
     assert row["content"].rstrip().endswith("as two lists.") and "## Blocked and at risk are two lists (S-1)" in row["content"]
+    assert "`at_risk`" in row["content"] and "takes precedence over anything above" in row["content"], "the second draft is saved"
     assert len(row["content"]) > len(fix["section"]) + 100, "the change is added to the document, which is kept whole"
 
     seen = await agent.changes(boss, authorization=BEARER)
     assert [c["id"] for c in seen["proposed"]] == [fix["id"]] and seen["testing"][0]["skill"] == "spec"
+    # 10 Nov 2026: the reviewer's document gets the matching clause, shown with the change and decided with it.
+    keep = [r for r in store.rows.values() if r["doc"] == "scope-eval"]
+    assert len(keep) == 1 and "Keep what rule S-1 requires (S-1)" in keep[0]["content"]
+    assert keep[0]["evidence"]["trace_lab"]["companion_of"] == fix["id"] == fix["companions"][0]["of"]
+    assert seen["proposed"][0]["companions"] == [{"id": keep[0]["id"], "path": "skills/compliance/scope-eval.md",
+                                                  "status": "proposed"}]
     await agent.approve_change(boss, fix["id"], authorization=BEARER)
     assert store.rows[fix["id"]]["status"] == "testing", "approved means under test, not live"
+    assert keep[0]["status"] == "testing", "the reviewer's clause is tested with the change"
     view = await loop.overview(boss)
     assert view["modes"][0]["corrections"] == 1, "the approved change is the mode's correction"
 
     await agent.make_live(boss, fix["id"], authorization=BEARER)
-    assert store.rows[fix["id"]]["status"] == "active"
+    assert store.rows[fix["id"]]["status"] == "active" and keep[0]["status"] == "active", "live together"
     z = zipfile.ZipFile(io.BytesIO(await agent.export_zip(boss, authorization=BEARER)))
     assert "svc-deepagents/skills/compliance/answering.md" in z.namelist()
     assert all(a == BEARER for _m, _p, a in store.calls), "every store call is made in the person's name"

@@ -306,8 +306,11 @@ export function expectedBody(f, rule) {
     evidence: Object.assign({ spec_rule: rule, data: String((f && f.records) || '').trim() }, values.length ? { values } : {}) };
 }
 
-function ExpectedForm({ code, rule, busy, onSave, onCancel }) {
-  const [f, setF] = React.useState({ expected: '', records: '', values: '' });
+// `initial` ({ text, records, values }): an expected answer already saved, opened to edit (10 Nov 2026). Saving adds a new
+// version; the newest is the one Compare checks.
+export function ExpectedForm({ code, rule, busy, onSave, onCancel, initial }) {
+  const [f, setF] = React.useState(() => ({ expected: (initial && initial.text) || '', records: (initial && initial.records) || '',
+    values: ((initial && initial.values) || []).join('\n') }));
   const set = (k) => (e) => { const v = e.target.value; setF((p) => Object.assign({}, p, { [k]: v })); };
   const ok = f.expected.trim() && f.records.trim() && rule;
   return (
@@ -376,19 +379,23 @@ export function ModeRow({ mode, canTaxonomy, canCurate, wide, companies, busy, r
       {questions.length ? (
         <ul className="lab-loop-qs" aria-label={'Questions marked positive for ' + mode.name}>
           {questions.map((q) => {
-            const open = !q.has_expected && (expOpen === q.code || openExpected === q.code);
+            const open = expOpen === q.code || (!q.has_expected && openExpected === q.code);
             return (
               <li key={q.code}>
                 <div className="lab-row">
                   {onOpenQuestion ? <button type="button" className="lab-lv-code" onClick={() => onOpenQuestion(q.code)}>{q.code}</button> : <strong>{q.code}</strong>}
                   <span className="lab-small">{excerpt(q.text, 120)}</span>
-                  {q.has_expected ? <span className="lab-chip lab-loop-ok">{'Expected answer ✓'}</span>
+                  {q.has_expected ? <><span className="lab-chip lab-loop-ok">{'Expected answer ✓'}</span>
+                    {canCurate && onSaveExpected && !open ? (
+                      <button type="button" className="lab-link" onClick={() => setExpOpen(q.code)} disabled={busy || !rule}
+                        aria-label={'Edit the expected answer for ' + q.code}>{'Edit'}</button>) : null}</>
                     : (canCurate && onSaveExpected && !open ? (
                       <button type="button" className="lab-link" onClick={() => setExpOpen(q.code)} disabled={busy || !rule}
                         title={rule ? undefined : 'Add this failure mode’s rule to SPEC.md first'}>{'Add expected answer'}</button>
                     ) : (!open ? <span className="lab-small">{'No expected answer yet'}</span> : null))}
                 </div>
                 {open ? <ExpectedForm code={q.code} rule={rule && rule.code} busy={busy} onCancel={() => setExpOpen(null)}
+                  initial={q.has_expected ? q.expected : null}
                   onSave={async (c, body) => { if (await onSaveExpected(c, body, mode)) setExpOpen(null); }} /> : null}
               </li>
             );
@@ -447,6 +454,10 @@ function ChangeHead({ c }) {
       {c.spec_rule ? <span className="lab-chip">{c.spec_rule}</span> : null}
       {c.spec_version ? <span className="lab-chip">{'SPEC.md version ' + c.spec_version}</span> : null}
       {c.mode_name ? <span className="lab-small">{c.mode_name}</span> : null}
+      {(c.companions || []).length ? (
+        <span className="lab-small">{'with '}{(c.companions || []).map((x) => <code key={x.id} className="lab-loop-path">{x.path}</code>)}
+          {' (the reviewer\u2019s clause, decided together)'}</span>
+      ) : null}
     </div>
   );
 }
@@ -523,6 +534,29 @@ export function ChangesPanel({ changes, busy, error, onApprove, onReject, onLive
 
 // A regression run compared: each question's expected answer, the answer people marked, the newest answer, and whether
 // each carries the expected values.
+// Where each missing value was lost in the rerun (10 Nov 2026), and what the next step is: a value the data never had
+// needs a code change; anything else is drafted again, and the next draft reads this test.
+const LOST = {
+  not_in_data: 'never in the data: a tool has to return it (a code change)',
+  not_stated: 'a figure worked out from the data, not stated',
+  dropped_by_writer: 'in the data, left out by the answer',
+  removed_in_review: 'written, then removed by the review',
+  lost_at_the_end: 'written, then lost before the final answer',
+  said_anyway: 'still said'
+};
+
+function LostList({ lost }) {
+  const gapsOnly = lost.every((x) => x.stage === 'not_in_data');
+  return (
+    <div className="lab-small lab-loop-lost">
+      <div>{'Where it was lost:'}</div>
+      <ul>{lost.map((x, i) => <li key={i}><code>{x.raw}</code>{' \u2014 ' + (LOST[x.stage] || x.stage)}</li>)}</ul>
+      <div>{gapsOnly ? 'Fix the tool, record the code correction, then test again.'
+        : 'Press Agent: draft fix again: the next draft reads this test.'}</div>
+    </div>
+  );
+}
+
 export function CompareView({ data, onClose, onOpenQuestion }) {
   if (!data) return null;
   const sm = data.summary || {};
@@ -551,7 +585,8 @@ export function CompareView({ data, onClose, onOpenQuestion }) {
                   {q.expected && !q.derived ? <div className="lab-loop-warn">{'Not derived from the specification'}</div> : null}</td>
                 <td>{q.before ? <><div>{excerpt(q.before.answer, 240)}</div>{q.before.check ? <div className="lab-small">{STATUS[q.before.check.status] || q.before.check.status}</div> : null}</> : '—'}</td>
                 <td>{q.after ? <><div>{excerpt(q.after.answer, 240)}</div>{q.after.check ? <div className="lab-small">{STATUS[q.after.check.status] || q.after.check.status}</div> : null}</> : '—'}</td>
-                <td><span className={'lab-chip lab-loop-v-' + q.verdict}>{VERDICT[q.verdict] || q.verdict}</span></td>
+                <td><span className={'lab-chip lab-loop-v-' + q.verdict}>{VERDICT[q.verdict] || q.verdict}</span>
+                  {(q.lost || []).length ? <LostList lost={q.lost} /> : null}</td>
                 <td className="lab-small">{((q.people && q.people.positive) || 0) + ' positive · ' + ((q.people && q.people.negative) || 0) + ' negative'}</td>
               </tr>
             ))}
