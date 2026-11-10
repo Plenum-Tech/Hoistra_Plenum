@@ -876,6 +876,7 @@ LOST_STAGES = ("not_in_data", "not_stated", "dropped_by_writer", "removed_in_rev
 #: is the answer's to state, never a data gap (R47, 10 Nov 2026).
 _FIGURES = ("number", "money", "percent")
 _REVISION = ("analyst_revision", "revision")
+_DATA_KINDS = ("tool", "stage", "db_query", "retrieval", "span")
 
 
 def _is_figure(item: dict[str, Any]) -> bool:
@@ -900,9 +901,12 @@ def where_lost(items: list[dict[str, Any]], spans: list[dict[str, Any]], answer:
     the reads (`tool` steps), the step that wrote the answer (the analyst, else the last model call before any
     review), the review's revision, then the final answer."""
     steps = sorted(spans or [], key=lambda x: x.get("seq") or 0)
-    tools = "\n".join(_text_of(x.get("output")) for x in steps if x.get("kind") == "tool")
+    # What the answer read: every data step - a tool call, a pipeline stage (the compliance pipeline's 'fetch'), a query.
+    tools = "\n".join(_text_of(x.get("output")) for x in steps if x.get("kind") in _DATA_KINDS)
     review_at = next((i for i, x in enumerate(steps) if x.get("name") == "review"), len(steps))
-    writer = next((x for x in steps if x.get("name") == "analyst"), None) or next(
+    # The step that wrote the answer: the last analyst call before any review (a first reply can be unreadable and asked
+    # again), else the last model call before it.
+    writer = next((x for x in reversed(steps[:review_at]) if x.get("name") == "analyst"), None) or next(
         (x for x in reversed(steps[:review_at]) if x.get("kind") in ("llm", "generation")), None)
     revision = next((x for x in steps if x.get("name") in _REVISION), None)
     final = grading.check_values(items, answer or "", cards or []) if items else {"items": []}

@@ -127,3 +127,25 @@ def test_the_loop_page_gets_each_expected_answer_to_edit():
                                        "values": ["seven", "!nine of them"]}
     assert loop._expected_out(None) is None
     assert loop._expected_out({"expected": "x", "evidence": None}) == {"text": "x", "records": "", "rule": None, "values": []}
+
+
+# -- the compliance pipeline and a wrong lookup (Gas Safe, 10 Nov 2026) ---------------------------------------------------
+#
+# "Which vendors hold Gas Safe registration?" answered "no vendor holds one": the planner looked up
+# US_STATE_CONTRACTOR_LICENSE instead of GAS_SAFE, so the three holders were never read. The data exists; the lookup
+# was wrong - an instruction fix for the planner, not a code change. And the compliance pipeline reads its rows in a
+# 'fetch' step of kind 'stage', and may call the analyst twice (the first reply unreadable).
+
+def test_rows_read_by_a_pipeline_stage_count_as_data_and_the_last_analyst_writes():
+    items = golden.parse_expected_values("Corvane Mechanical")
+    spans = [span(1, "plan", "llm", "{}"), span(2, "fetch", "stage", json.dumps({"rows": [{"vendor": "Corvane Mechanical"}]})),
+             span(3, "analyst", "llm", "Unterminated string"), span(4, "analyst", "llm", "No vendor holds one.")]
+    assert {x["raw"]: x["stage"] for x in loop.where_lost(items, spans, "No vendor holds one.", [])} == {
+        "Corvane Mechanical": "dropped_by_writer"}
+
+
+def test_a_value_never_read_is_drafted_for_first_and_called_a_code_change_only_after_a_fix_was_tried():
+    assert agent._should_refuse(["Corvane Mechanical"], tried=False) is False, "the lookup may have asked for the wrong thing"
+    assert agent._should_refuse(["Corvane Mechanical"], tried=True) is True
+    assert agent._should_refuse([], tried=True) is False
+    assert "lookup" in agent.REFINE_SYSTEM.lower() and "type code" in agent.REFINE_SYSTEM.lower()

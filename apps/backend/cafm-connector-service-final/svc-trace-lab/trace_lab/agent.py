@@ -198,6 +198,9 @@ REFINE_SYSTEM = ("You are given a section drafted for an instruction document of
                  "5. If a LAST TEST is given, the change before this one was tested and still failed: read what that "
                  "answer did and where each value was lost, and make the rule say exactly what that answer got wrong "
                  "- stronger and more specific, not the same wording again.\n"
+                 "6. If a value was not in the data the answer read, the fix belongs where the question is turned into "
+                 "a lookup (the planner or tool-selection document): make it map the names people use to the data's own "
+                 "type code (e.g. a brand name to its certificate type code) and never substitute a different type.\n"
                  "Keep it short and plain, with no data values from the failing answers. Return the document name you "
                  "were given as `doc`, and a title without the rule code.")
 
@@ -295,7 +298,7 @@ async def _answer_meta(turn_ids: list[str]) -> dict[str, Any]:
 
 
 _STAGE_TEXT = {
-    "not_in_data": "never in the data: a tool has to return it (a code change)",
+    "not_in_data": "not in the data it read: the lookup asked for the wrong thing, or no tool returns it",
     "not_stated": "a figure worked out from the data, not stated",
     "dropped_by_writer": "in the data, left out by the answer",
     "removed_in_review": "written, then removed by the review",
@@ -326,11 +329,17 @@ def _last_test(cmp: dict[str, Any] | None) -> tuple[str, list[str]]:
     return block, ([] if other else gaps)
 
 
+def _should_refuse(gaps: list[str], *, tried: bool) -> bool:
+    """A value the answer never read can be a wrong lookup (Gas Safe looked up as another type: a planner fix) or data
+    no tool returns (a code change). Drafted for the first time; called a code change only when a fix was tried."""
+    return bool(gaps) and tried
+
+
 def _refuse_data_gap(gaps: list[str]) -> None:
     if gaps:
-        raise Invalid("data_gap", "The last test shows the data never contained " + ", ".join(gaps[:6])
-                      + ". A change to the instructions cannot add data: a tool has to return it, which is a code "
-                        "change. Record it as a correction once it is made, then test again.")
+        raise Invalid("data_gap", "An instruction change was tried and the answer still never read "
+                      + ", ".join(gaps[:6]) + ". If the records hold it, no tool returns it to the answer: that is a "
+                        "code change. Record it as a correction once it is made, then test again.")
 
 
 def _without_rule(doc: str, code: str) -> str:
@@ -506,7 +515,12 @@ async def draft_fix(m: labelling.Member, lineage_id: str, *, authorization: str 
     except Exception as exc:  # noqa: BLE001 - a draft without the last test, not a failure
         log.warning("agent.last_test_unreadable", error=str(exc)[:200])
         last_block, gaps = "", []
-    _refuse_data_gap(gaps)
+    async with db.lab_engine().connect() as conn:
+        tried = bool((await conn.execute(text(
+            "SELECT 1 FROM tracelab.lab_corrections WHERE mode_lineage_id = CAST(:m AS uuid) AND kind = 'skill' LIMIT 1"),
+            {"m": lin})).first())
+    if _should_refuse(gaps, tried=tried):
+        _refuse_data_gap(gaps)
     docs = _skill_docs(slug)
     prompt = (f"RULE {rule['code']}: {rule.get('text')}\nFAILURE MODE {modes[lin]['name']}: {modes[lin].get('definition') or ''}\n\n"
               f"DOCUMENTS of skill '{slug}' (choose one by name):\n{_doc_lines(slug, docs)}\n\nNOTES\n"

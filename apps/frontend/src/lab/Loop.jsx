@@ -537,7 +537,7 @@ export function ChangesPanel({ changes, busy, error, onApprove, onReject, onLive
 // Where each missing value was lost in the rerun (10 Nov 2026), and what the next step is: a value the data never had
 // needs a code change; anything else is drafted again, and the next draft reads this test.
 const LOST = {
-  not_in_data: 'never in the data: a tool has to return it (a code change)',
+  not_in_data: 'not in the data it read: the lookup asked for the wrong thing, or no tool returns it',
   not_stated: 'a figure worked out from the data, not stated',
   dropped_by_writer: 'in the data, left out by the answer',
   removed_in_review: 'written, then removed by the review',
@@ -551,7 +551,7 @@ function LostList({ lost }) {
     <div className="lab-small lab-loop-lost">
       <div>{'Where it was lost:'}</div>
       <ul>{lost.map((x, i) => <li key={i}><code>{x.raw}</code>{' \u2014 ' + (LOST[x.stage] || x.stage)}</li>)}</ul>
-      <div>{gapsOnly ? 'Fix the tool, record the code correction, then test again.'
+      <div>{gapsOnly ? 'Press Agent: draft fix: it fixes the lookup first. If a fix was already tried, the tool needs a code change.'
         : 'Press Agent: draft fix again: the next draft reads this test.'}</div>
     </div>
   );

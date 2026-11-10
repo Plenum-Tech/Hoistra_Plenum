@@ -117,7 +117,7 @@ test('a question still failing says where each missing value was lost, and what 
   const out = html(LP.CompareView, { data });
   assert.ok(out.includes('WO-B-301-4560') && out.includes('in the data, left out by the answer'));
   assert.ok(out.includes('written, then removed by the review'));
-  assert.ok(out.includes('never in the data') && /code change/i.test(out));
+  assert.ok(out.includes('not in the data it read') && /no tool returns it/i.test(out));
   assert.ok(out.includes('Agent: draft fix again'), 'says the next draft reads this test');
 });
 
