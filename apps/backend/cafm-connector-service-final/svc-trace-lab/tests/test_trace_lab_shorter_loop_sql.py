@@ -147,8 +147,9 @@ async def test_the_loop_page_lists_each_modes_questions_and_a_regression_follows
     await loop.add_rule(boss, mode["lineage_id"])
 
     row = (await loop.overview(boss))["modes"][0]
+    # 10 Nov 2026: each question also carries its current expected answer, for the Loop page's Edit (none yet here).
     assert row["questions"] == [{"code": code, "text": "Which certificates are due for renewal?", "has_expected": False,
-                                 "company": ORG}]
+                                 "company": ORG, "expected": None}]
     assert row["companies"] == [ORG]
 
     made = await loop.make_regression(boss, mode["lineage_id"], company=ORG)
