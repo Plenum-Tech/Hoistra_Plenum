@@ -28,9 +28,22 @@ export function nodeKeys(record, nodes) {
   }
   const user = msgs.find((m) => m && m.role === 'user');
   const answers = msgs.filter((m) => m && m.role === 'assistant');
+  // The agent a step ran in (its nearest agent above it, chat aside), named in its notes' titles: "Input · model
+  // (maintenance)". Learning files a note against the engine its title names (10 Nov 2026).
+  const byId = new Map(list.map((n) => [sid(n.id), n]));
+  const agentOf = (n) => {
+    const seen = new Set();
+    for (let p = byId.get(sid(n.parent_id)); p && !seen.has(sid(p.id)); p = byId.get(sid(p.parent_id))) {
+      seen.add(sid(p.id));
+      if (root && sid(p.id) === sid(root.id)) return null;
+      if (p.type === 'agent') return String(p.name || '') || null;
+    }
+    return null;
+  };
   for (const n of list) {
     const id = sid(n.id);
-    const name = String(n.name || '');
+    const agent = n.type === 'agent' ? null : agentOf(n);
+    const name = String(n.name || '') + (agent ? ' (' + agent + ')' : '');
     let k = { in: null, out: null };
     if (root && id === sid(root.id)) {
       k = { in: user ? String(user.id) : null, out: answers.length ? String(answers[answers.length - 1].id) : null };
@@ -57,6 +70,39 @@ export function keyTitles(keys) {
 const atOf = (n) => { const t = Date.parse(n.at); return Number.isNaN(t) ? 0 : t; };
 const order = (a, b) => (a.mine !== b.mine ? (a.mine ? -1 : 1) : atOf(b) - atOf(a));
 
+// Where a note key sits in the trace: '<node>:in' / '<node>:out', or null when it matches no step. The note's own key
+// first, then any message of a step (older notes were left on a step's other messages, e.g. a tool's result).
+function placer(record, list, keys) {
+  const where = new Map();
+  for (const [id, k] of keys) {
+    if (k.in) where.set(k.in, id + ':in');
+    if (k.out) where.set(k.out, id + ':out');
+  }
+  const msgs = (record && Array.isArray(record.messages)) ? record.messages : [];
+  const known = new Set(list.map((n) => sid(n.id)));
+  const spanOf = new Map(msgs.map((m) => [String(m.id), sid(m.span_id)]));
+  return (key) => {
+    if (where.has(key)) return where.get(key);
+    const out_ = key.endsWith(OUTPUT);
+    const base = out_ ? key.slice(0, -OUTPUT.length) : key;
+    const span = spanOf.get(base);
+    if (span && known.has(span)) return span + (out_ ? ':out' : ':in');
+    return null;
+  };
+}
+
+// The step and side a note key belongs to ({ id, side: 'in' | 'out' }), or null for the question comment, a key that
+// matches no step, or no key. The Notes page opens a question on the step its note was written on (10 Nov 2026).
+export function stepOfKey(record, nodes, key) {
+  const k = key == null ? '' : String(key);
+  if (!k) return null;
+  const list = Array.isArray(nodes) ? nodes : [];
+  const slot = placer(record, list, nodeKeys(record, list))(k);
+  if (!slot) return null;
+  const at = slot.lastIndexOf(':');
+  return { id: slot.slice(0, at), side: slot.slice(at + 1) };
+}
+
 // Everyone's notes by trace step and side: slots['<node>:in' | '<node>:out'], the question comment (scenario), notes
 // that match no step (other, shown under chat), and how many notes each step holds (counts, for the tree's badges).
 // `viewOf(label, me)` is the question page's noteView, passed in so this module imports nothing from the page. Each
@@ -68,22 +114,7 @@ export function traceNotesIndex(labels, record, nodes, me, viewOf) {
   const tid = String((record && record.id) || '');
   const root = rootOf(list);
   const keys = nodeKeys(record, list);
-  const where = new Map();
-  for (const [id, k] of keys) {
-    if (k.in) where.set(k.in, id + ':in');
-    if (k.out) where.set(k.out, id + ':out');
-  }
-  const msgs = (record && Array.isArray(record.messages)) ? record.messages : [];
-  const known = new Set(list.map((n) => sid(n.id)));
-  const spanOf = new Map(msgs.map((m) => [String(m.id), sid(m.span_id)]));
-  const place = (key) => {
-    if (where.has(key)) return where.get(key);
-    const out_ = key.endsWith(OUTPUT);
-    const base = out_ ? key.slice(0, -OUTPUT.length) : key;
-    const span = spanOf.get(base);
-    if (span && known.has(span)) return span + (out_ ? ':out' : ':in');
-    return null;
-  };
+  const place = placer(record, list, keys);
   for (const x of Array.isArray(labels) ? labels : []) {
     if (!x || x.cleared) continue;
     const v = viewOf(x, me);

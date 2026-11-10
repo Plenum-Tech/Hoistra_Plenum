@@ -97,9 +97,15 @@ function Switch({ label, items, value, onChange, className }) {
   );
 }
 
-function TreeView({ nodes, selected, onSelect, count }) {
+function TreeView({ nodes, selected, onSelect, count, reveal }) {
   const [collapsed, setCollapsed] = React.useState(() => new Set());
   const [query, setQuery] = React.useState('');
+  // Opened on one step (the Notes page links to the step a note is on, 10 Nov 2026): bring that row into view once.
+  const list = React.useRef(null);
+  React.useEffect(() => {
+    const row = reveal && list.current ? list.current.querySelector('.lab-on') : null;
+    if (row && row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = visibleRows(nodes, collapsed, query);
   const toggle = (id) => setCollapsed((prev) => {
     const next = new Set(prev);
@@ -114,7 +120,7 @@ function TreeView({ nodes, selected, onSelect, count }) {
           onChange={(e) => setQuery(e.target.value)} />
       </label>
       {rows.length ? (
-        <ul className="lab-tt-tree" role="tree" aria-label="Steps">
+        <ul className="lab-tt-tree" role="tree" aria-label="Steps" ref={list}>
           {rows.map((r) => {
             const n = r.node;
             const id = String(n.id);
@@ -251,7 +257,7 @@ function GraphView({ nodes, selected, onSelect }) {
         <button type="button" className="lab-tt-tool" aria-label="Zoom out" disabled={z === 0} onClick={() => setZ(Math.max(0, z - 1))}><Minus /></button>
         <button type="button" className="lab-tt-tool" aria-label="Fit" onClick={() => setZ(2)}><Fit /></button>
       </div>
-      <svg className="lab-tt-graph" width={width * scale} height={height * scale} viewBox={'0 0 ' + width + ' ' + height} role="img"
+      <svg className="lab-tt-graph" width={width * scale} height={height * scale} viewBox={'0 0 ' + width + ' ' + height} role="group"
         aria-label="The steps of this answer in the order they ran">
         <defs>
           <marker id="lab-tt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
@@ -259,7 +265,7 @@ function GraphView({ nodes, selected, onSelect }) {
           </marker>
         </defs>
         {items.slice(1).map((st, i) => (
-          <path key={'e' + i} className="lab-tt-edge" markerEnd="url(#lab-tt-arrow)"
+          <path key={'e' + i} className="lab-tt-edge" markerEnd="url(#lab-tt-arrow)" aria-hidden="true"
             d={'M' + cx + ',' + (y(i) + G.h) + ' L' + cx + ',' + (y(i + 1) - 2)} />
         ))}
         {items.map((st, i) => {
@@ -267,7 +273,7 @@ function GraphView({ nodes, selected, onSelect }) {
           const x = cx - w / 2;
           if (st.start) {
             return (
-              <g key="start" className="lab-tt-gstart" transform={'translate(' + x + ',' + y(i) + ')'}>
+              <g key="start" className="lab-tt-gstart" aria-hidden="true" transform={'translate(' + x + ',' + y(i) + ')'}>
                 <rect width={w} height={G.h} rx="7" />
                 <text x={w / 2} y={G.h / 2 + 4} textAnchor="middle">{'__start__'}</text>
               </g>
@@ -278,7 +284,7 @@ function GraphView({ nodes, selected, onSelect }) {
           const err = st.ids.some((id) => { const n = nodes.find((m) => String(m.id) === id); return n && n.level === 'ERROR'; });
           const name = st.name.length > 44 ? st.name.slice(0, 43) + '…' : st.name;
           return (
-            <g key={st.name} className={'lab-tt-gnode lab-tt-gnode-' + type + (on ? ' lab-on' : '') + (err ? ' lab-tt-gnode-error' : '')}
+            <g key={st.key} className={'lab-tt-gnode lab-tt-gnode-' + type + (on ? ' lab-on' : '') + (err ? ' lab-tt-gnode-error' : '')}
               role="button" tabIndex={0} transform={'translate(' + x + ',' + y(i) + ')'}
               aria-label={TYPE_TEXT[type] + ' ' + st.name + (st.ids.length > 1 ? ', ' + st.ids.length + ' runs' : '')}
               onClick={() => pick(st)} onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(st); } }}>
@@ -421,7 +427,8 @@ export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', m
           <Switch label="Trace view" className="lab-tt-views" items={VIEWS} value={v} onChange={setV} />
           {v === 'timeline' ? <TimelineView nodes={nodes} turn={t} selected={node && String(node.id)} onSelect={setSel} count={count} />
             : v === 'graph' ? <GraphView nodes={nodes} selected={node && String(node.id)} onSelect={setSel} />
-              : <TreeView nodes={nodes} selected={node && String(node.id)} onSelect={setSel} count={count} />}
+              : <TreeView nodes={nodes} selected={node && String(node.id)} onSelect={setSel} count={count}
+                reveal={selectedId != null} />}
         </div>
         <div className="lab-tt-right">
           {node ? <Detail node={node} turn={t} pane={p} setPane={setP} mode={md} setMode={setMd} annotate={annotate} />

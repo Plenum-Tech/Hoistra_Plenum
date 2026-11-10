@@ -29,7 +29,8 @@ export const labApi = {
   runScenarios: (body, org) => call('POST', '/scenarios/run', { body, org, timeoutMs: 600000 }),
   // What reviewers have left, drafted. `run` narrows it to one run; without it the draft
   // covers every run this company has annotated.
-  learningDraft: (run) => call('GET', '/learning/draft', { query: run ? { run } : {} }),
+  // org: the platform team works in All companies and the draft is one company's (10 Nov 2026).
+  learningDraft: (run, org) => call('GET', '/learning/draft', { query: run ? { run } : {}, org }),
   members: () => call('GET', '/lab/members'),
   member: (userId) => call('GET', '/lab/members/' + enc(userId)),
   decide: (userId, body) => call('PUT', '/lab/members/' + enc(userId), { body }),

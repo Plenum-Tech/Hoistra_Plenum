@@ -72,6 +72,17 @@ test('flow: one node per step name in the order they ran, repeats grouped, edges
   assert.deepEqual(T.flowOf([]), { steps: [], edges: [] });
 });
 
+test('flow: a step name shared by two kinds of step is two nodes, each with its own icon (10 Nov 2026)', () => {
+  // A 'plan' stage and a 'plan' model call are different steps; grouped by name alone the graph showed one node with the
+  // first one's icon, and clicking it cycled through runs of both.
+  const f = T.flowOf([n('r', null, 0, 'agent', 'chat', 0, 100), n('p1', 'r', 1, 'span', 'plan', 1, 2),
+    n('p2', 'r', 1, 'generation', 'plan', 3, 4), n('p3', 'r', 1, 'span', 'plan', 5, 6)]);
+  assert.deepEqual(f.steps.map((x) => x.name + ':' + x.type), ['chat:agent', 'plan:span', 'plan:generation']);
+  assert.deepEqual(f.steps.map((x) => x.ids), [['r'], ['p1', 'p3'], ['p2']]);
+  assert.equal(new Set(f.steps.map((x) => x.key)).size, 3, 'each node has its own key');
+  assert.deepEqual(f.edges.map((e) => e.fromKey + '>' + e.toKey), [f.steps[0].key + '>' + f.steps[1].key, f.steps[1].key + '>' + f.steps[2].key]);
+});
+
 test('timeline: Langfuse durations, a ruler, and costs that roll up', () => {
   assert.equal(T.fmtDur(0), '0ms'); assert.equal(T.fmtDur(101), '101ms'); assert.equal(T.fmtDur(2050), '2.05s');
   assert.equal(T.fmtDur(50980), '50.98s'); assert.equal(T.fmtDur(62000), '1m 02s'); assert.equal(T.fmtDur(null), '');

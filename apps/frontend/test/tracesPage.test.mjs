@@ -68,7 +68,9 @@ test('the tiles, charts and run rows read from the aggregates and the list', () 
   assert.equal(v.tpDays[1].turnsPct, 60);
   assert.equal(v.tpModels[0].cost, '$2.60');
   assert.equal(v.tpTools[0].p95, '2.50 s');
-  assert.equal(v.tpRuns[0].when, 'today 09:30'.replace('09:30', String(new Date('2026-10-02T09:30:00Z').getHours()).padStart(2, '0') + ':30'));
+  // The reader's own clock, minutes included: a half-hour zone (India, +5:30) shows 09:30Z as 15:00, not 15:30.
+  const ran = new Date('2026-10-02T09:30:00Z');
+  assert.equal(v.tpRuns[0].when, 'today ' + String(ran.getHours()).padStart(2, '0') + ':' + String(ran.getMinutes()).padStart(2, '0'));
   assert.equal(v.tpRuns[0].cost, '$0.072');
   assert.equal(v.tpRuns[0].rating, 'up');
   assert.equal(v.tpRuns[1].ok, false);

@@ -69,6 +69,22 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "which work orders breached their fix sla",
         "how much reactive maintenance did we do last month",
         "which buildings have the oldest open work orders",
+    # Added 10 Nov 2026: a batch of 50-100 (30 Oct feedback, item 7) came back short -- Compliance
+    # 44 of 100, Ops 62, Assets 84 -- because a batch never asks one question twice and these
+    # engines had too few. Each was put through the real router and kept only if it reached this
+    # engine, as above.
+        "which work orders have been open longer than 30 days",
+        "how many reactive repairs did each building raise this month",
+        "what is the maintenance backlog at each building",
+        "which technician closed the most work orders last week",
+        "who maintains the chillers at each building",
+        "which assets have had repeat breakdowns",
+        "when was each boiler last serviced",
+        "which repairs are waiting for my decision",
+        "what planned maintenance is scheduled for next week",
+        "which assets are near end of life",
+        "what is the service history of the main air handling unit",
+        "how many work orders were raised out of hours",
     ),
     "contract_performance": (
         "which vendor is costing me money",
@@ -107,6 +123,70 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "what is the first fix rate by contractor and building",
         "which contractor had the most recalls last year",
         "has any contractor breached its contract terms",
+    # Added 10 Nov 2026: a batch of 50-100 (30 Oct feedback, item 7) came back short -- Compliance
+    # 44 of 100, Ops 62, Assets 84 -- because a batch never asks one question twice and these
+    # engines had too few. Each was put through the real router and kept only if it reached this
+    # engine, as above.
+        "which contractor responds slowest to p1 sla calls",
+        "what is the average sla response time per contractor",
+        "how many sla breaches did we have last month",
+        "which building has the most sla breaches this quarter",
+        "which contractor improved its performance the most this year",
+        "which contractor's performance is getting worse",
+        "what is the kpi trend for each contractor over six months",
+        "which vendor score fell below target last month",
+        "which contractor has a falling scorecard trend",
+        "show the scorecard trend for our hvac contractor",
+        "what is the first fix rate across the portfolio",
+        "which contractor has the lowest first fix rate",
+        "how many recalls did each contractor have this quarter",
+        "which jobs were a recall within 30 days",
+        "which invoices are still unpaid from contractors",
+        "which invoices do not match the agreed day rate",
+        "how much did we pay above the capped day rate this year",
+        "which contractor billed the highest hourly rate last month",
+        "are we overpaying any contractor for call-outs",
+        "which invoices were submitted twice",
+        "what is the total invoice value per contractor this quarter",
+        "which contractor overran the most on cost this year",
+        "how much cost overrun did we have last quarter",
+        "what is the cost variance by building this quarter",
+        "which contractor is most over budget against contract terms",
+        "which contractors are meeting their kpi targets",
+        "which contractors missed their kpi targets last month",
+        "how is our cleaning contractor performing",
+        "how is the lift contractor performing this quarter",
+        "which contractor is performing worst at our biggest building",
+        "what is the ppm compliance rate for each building",
+        "which contractor has the lowest ppm compliance this month",
+        "has ppm compliance improved since last quarter",
+        "what service credits are owed for sla breaches this month",
+        "how much could we claim back for missed sla targets",
+        "which contractor's labour rate went up this year",
+        "are any labour rates above what the contract terms allow",
+        "which contractor has the highest hourly rate for out of hours work",
+        "compare contractor performance across our buildings",
+        "rank our contractors by sla performance",
+        "rank vendors by vendor score this quarter",
+        "which contractor should we review at the next performance meeting",
+        "which contractor is closest to a contract breach",
+        "has anyone breached sla on a p1 emergency this week",
+        "what percentage of jobs met the sla last month",
+        "what is the average invoice per job for each contractor",
+        "which contractor's invoices rose fastest this year",
+        "are we being overcharged on materials by any contractor",
+        "which contractor gives the best value for its performance",
+        "show the kpi results for every contractor",
+        "what is the sla attainment by priority",
+        "which contractor has improved its first fix rate",
+        "which contractor had a recall at the same asset twice",
+        "how many invoices were disputed last quarter",
+        "what is our total overrun against the agreed contract terms",
+        "which contractor scorecard is below 70 percent",
+        "how did contractor performance change after the new kpis",
+        "which subcontractor is dragging down performance",
+        "is our security contractor inside its sla",
+        "which contractor has the best response sla record",
     ),
     "compliance": (
         "which buildings are out of compliance today",
@@ -132,6 +212,45 @@ BY_ENGINE: dict[str, tuple[str, ...]] = {
         "what compliance documents are missing for each building",
         "which certificates were issued by an unverified body",
         "how many certificates lapsed last quarter",
+    # Added 10 Nov 2026: a batch of 50-100 (30 Oct feedback, item 7) came back short -- Compliance
+    # 44 of 100, Ops 62, Assets 84 -- because a batch never asks one question twice and these
+    # engines had too few. Each was put through the real router and kept only if it reached this
+    # engine, as above.
+        "which gas safety certificates expire next month",
+        "which buildings have an expired eicr",
+        "when does each building's fire risk assessment need renewal",
+        "which vendors have lapsed accreditations",
+        "which vendor accreditation expires soonest",
+        "is every gas engineer on the gas safe register",
+        "which electricians are not niceic registered",
+        "which lifts are overdue a loler inspection",
+        "what remedial actions are open from the last eicr",
+        "which certificates are not on record for each building",
+        "what is our insurance risk from expired certificates",
+        "which statutory inspections are due next quarter",
+        "how many certificates expire this year",
+        "which building has the most expired certificates",
+        "list every certificate that expired last month",
+        "which vendors are blocked because of lapsed insurance",
+        "which buildings are missing a gas safety record",
+        "what is the compliance status of each building",
+        "which compliance items are overdue at our largest building",
+        "which water hygiene inspections are overdue",
+        "when is the next fire alarm inspection due",
+        "which buildings have no asbestos certificate",
+        "which vendor certs expire in the next 90 days",
+        "which building certs are due for renewal this quarter",
+        "what remedial works are outstanding from fire risk assessments",
+        "which emergency lighting certificates have lapsed",
+        "what is our statutory compliance percentage",
+        "which certificate renewals are overdue",
+        "which vendors are missing an accreditation for the work they do",
+        "what compliance deadlines fall next month",
+        "which pressure system inspections are due",
+        "which buildings have expired legionella certificates",
+        "show the expiry date of every lift certificate",
+        "which accreditations were checked and failed",
+        "which vendors cannot work on site until their certs are renewed",
     ),
     "energy_intelligence": (
         "which assets are losing value",
@@ -741,6 +860,17 @@ def _sid(space: str, seed: int, i: int) -> str:
     return f"{space.upper()}-{seed}-{i + 1:03d}"
 
 
+def pool_of(space: str) -> int:
+    """How many questions are written for this space: its engines' own, and the cross-domain ones
+    whose every area it has. 10 Nov 2026: the cross-domain questions (6 Nov) were left out, so an
+    Ops batch of 62 said it came from a pool of 53."""
+    from src.agents.spaces import allows
+
+    mine = engines_of(space)
+    cross = sum(1 for c in CROSS_DOMAIN if all(e in mine and allows(space, e) for e in c["needs"]))
+    return sum(len(BY_ENGINE[e]) for e in mine) + cross
+
+
 def batch(space: str, *, count: int = 50, seed: int = 0,
           challenge_ratio: float = 0.0) -> dict[str, Any]:
     """A generated batch as the golden-set upload takes it: one row per question."""
@@ -755,7 +885,7 @@ def batch(space: str, *, count: int = 50, seed: int = 0,
         "cross_domain": sum(1 for r in rows if r.needs),
         # The ceiling, so "7 of 25" reads as "this instance has seven" rather than as a failure.
         # Every question is used at most once in a batch, so the pool IS the largest batch.
-        "pool": sum(len(BY_ENGINE[e]) for e in engines_of(space)),
+        "pool": pool_of(space),
         "scenarios": [r.as_dict() for r in rows],
         "fingerprint": fingerprint(rows),
     }

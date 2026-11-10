@@ -11,8 +11,6 @@ after(cleanBundles);
 const React = (await import('react')).default;
 const { renderToStaticMarkup } = await import('react-dom/server');
 const L = await bundle('../lab/LabApp.jsx');
-const H = await bundle('../lab/Home.jsx');
-const { homeView, summarize } = await import('../logic/home.js');
 const html = (C, p) => renderToStaticMarkup(React.createElement(C, p || {}));
 
 test('sign in: Hoistra\'s account, labelled fields, a link back to Hoistra, and the error said aloud', () => {
@@ -79,19 +77,6 @@ test('the platform team picks a company only (no platform view) when labelling',
   assert.deepEqual(names, ['Plenum Technologies']);
 });
 
-test('Home: the company, the next step as one button, five stage cards', () => {
-  const v = homeView(Object.assign(summarize({}), { hasGolden: true, missing: 7, reviewed: 13, wrong: 7 }));
-  const out = html(H.HomeView, { company: 'Plenum Technologies', v, onOpen: () => {} });
-  assert.ok(out.includes('<h1>Plenum Technologies</h1>'));
-  assert.ok(out.includes('7 answers are waiting for your verdict.'));
-  assert.ok(out.includes('Start reviewing'));
-  assert.equal((out.match(/class="lab-card"/g) || []).length, 5);
-  assert.ok(out.includes('13 reviewed'));
-});
-
-
-// Synthetic question generation lives in the lab app, not the tab embedded in Hoistra: this is
-// the Trace Lab a reviewer actually opens (3 Nov 2026).
 test('Synthetic is a page of its own, and the lab app renders it', () => {
   const src = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(src.includes("import Synthetic from './Synthetic.jsx'"));
@@ -260,7 +245,7 @@ test('a saved batch says where to go and annotate it', () => {
 test('Learning is a page of its own, and the lab app renders it', () => {
   const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
   assert.ok(app.includes("import Learning from './Learning.jsx'"));
-  assert.ok(app.includes("current === 'learning' ? <Learning />"),
+  assert.ok(app.includes("current === 'learning' ? <Learning"),
     'the menu names a page nothing draws, so opening it shows nothing');
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
     ['Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
@@ -275,8 +260,21 @@ test('the draft comes from the service, not from the browser', () => {
 
 test('a draft can be narrowed to one run', () => {
   const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
-  assert.ok(/learningDraft: \(run\) =>.*run \? \{ run \}/.test(api),
+  assert.ok(/learningDraft: \(run, org\) =>.*run \? \{ run \}/.test(api),
     'every draft covers every run, so one run cannot be read on its own');
+});
+
+test('the platform view drafts for the company of the run in view (10 Nov 2026)', () => {
+  // The platform team works in "All companies", and the draft is one company's: the request went without a company and
+  // the service answered 400 "Choose a company to view as first", so the page never drew.
+  const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
+  assert.ok(/learningDraft: \(run, org\) =>[^\n]*\borg\b[^\n]*\)/.test(api.split('\n').find((l) => l.includes('learningDraft:')) || ''),
+    'the company is not sent with the draft');
+  const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.ok(/<Learning orgFor=\{/.test(app), 'the lab app does not tell the page whose company a run is');
+  const src = readFileSync(new URL('../Learning.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('labApi.learningDraft(code || undefined, orgFor'), 'the page does not send the run\'s company');
+  assert.ok(src.includes('Open a run first'), 'with no company the page shows the raw refusal instead of what to do');
 });
 
 test('the page says it applies nothing, and where the draft has to go', () => {

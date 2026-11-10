@@ -40,18 +40,51 @@ MAX_PER_SOURCE = 50
 #: The skill documents a lesson can be filed against, by the step it was left on. A note on the
 #: orchestrator step is about routing; one on a model step inside an engine is about that engine's
 #: instructions. Anything else is filed as general so it is never silently dropped.
+#:
+#: 10 Nov 2026: the kinds Trace Lab really stores are here too. A note is saved with its message's
+#: role (model_call, tool_call, tool_result, db_query, plan, assistant) or 'agent', with '_output'
+#: added for a note on a step's output (labelling._step_kind). The first five keys were the only
+#: ones listed, and nothing stores them, so nearly every note was filed as "general".
 _STEP_TO_SKILL = {
     "orchestrator": "orchestrator routing",
     "router": "orchestrator routing",
+    "plan": "orchestrator routing",
     "model": "the engine's own instructions",
+    "model_call": "the engine's own instructions",
+    "agent": "the engine's own instructions",
     "tool": "tool choice",
+    "tool_call": "tool choice",
+    "tool_result": "tool choice",
     "code": "the deterministic step",
+    "db_query": "the deterministic step",
     "output": "how the answer is written",
+    "assistant": "how the answer is written",
 }
 
+#: Steps that ARE the routing, whatever kind of step recorded them: the router is a model call.
+_ROUTING_STEPS = {"router", "orchestrator", "plan", "planner"}
 
-def _skill_for(step_kind: str | None) -> str:
-    return _STEP_TO_SKILL.get(str(step_kind or "").lower(), "general")
+_OUTPUT = "_output"
+
+
+def _base_kind(step_kind: str | None) -> str:
+    """The step's kind without the '_output' a note on its output carries."""
+    k = str(step_kind or "").strip().lower()
+    return k[: -len(_OUTPUT)] if k.endswith(_OUTPUT) and k != _OUTPUT else k
+
+
+def _step_name(step_title: str | None) -> str:
+    """The step a trace-view title names: "Input · model (maintenance)" -> "model"."""
+    t = str(step_title or "").strip()
+    if "·" in t:
+        t = t.split("·", 1)[1]
+    return t.split("(", 1)[0].strip().lower()
+
+
+def _skill_for(step_kind: str | None, step_title: str | None = None) -> str:
+    if _step_name(step_title) in _ROUTING_STEPS:
+        return "orchestrator routing"
+    return _STEP_TO_SKILL.get(_base_kind(step_kind), "general")
 
 
 #: The real skill folders in svc-deepagents, by the engine a step ran in. The reviewer picks the
@@ -59,6 +92,8 @@ def _skill_for(step_kind: str | None) -> str:
 #: name a candidate leaves them hunting through nine folders for the one the note is about.
 _ENGINE_TO_SKILL = {
     "wo_engine": "wo-engine",
+    # The work-order engine's agent is called "maintenance" in the trace (meta_tools.py).
+    "maintenance": "wo-engine",
     "compliance": "compliance",
     "contract_performance": "contract-performance",
     "energy_intelligence": "energy-intelligence",
@@ -67,12 +102,39 @@ _ENGINE_TO_SKILL = {
     "migration": "migration",
 }
 
-#: Which document inside that folder a note of this kind is usually about.
+#: Which document inside that folder a note of this kind is usually about. Looked up by the kind as
+#: stored first ('agent_output': what the agent answered), then by its base kind.
 _KIND_TO_DOC = {
     "tool": "tool-selection.md",
+    "tool_call": "tool-selection.md",
+    "tool_result": "tool-selection.md",
     "output": "answering.md",
     "model": "answering.md",
+    "model_call": "answering.md",
+    "agent_output": "answering.md",
 }
+
+
+def _doc_for(step_kind: str | None) -> str:
+    k = str(step_kind or "").strip().lower()
+    return _KIND_TO_DOC.get(k) or _KIND_TO_DOC.get(_base_kind(k), "SKILL.md")
+
+
+def _engine_in(step_title: str | None) -> str | None:
+    """The skill folder of the engine a note's step ran in. The agent the trace view names in
+    brackets decides first -- "Input · list_compliance_certs (maintenance)" ran in the work-order
+    engine, whatever its own name says -- then any engine named in the title."""
+    raw = str(step_title or "").strip().lower()
+    places = []
+    if "(" in raw and raw.endswith(")"):
+        places.append(raw[raw.rindex("(") + 1:-1])
+    places.append(raw)
+    for place in places:
+        norm = place.replace("-", "_").replace(" ", "_")
+        for engine, folder in _ENGINE_TO_SKILL.items():
+            if engine in norm:
+                return folder
+    return None
 
 #: Notes that are not about one engine. Routing and the way an answer is written are shared, and
 #: query-builder is where the shared instructions live (fm-lens is read by every answer writer).
@@ -82,15 +144,12 @@ _SHARED = ("query-builder", "SKILL.md")
 def suggest(step_kind: str | None, step_title: str | None) -> tuple[str, str]:
     """A candidate (skill, doc) for a note. A SUGGESTION, and labelled as one everywhere it is
     shown: filing a lesson against the wrong document teaches the wrong agent."""
-    title = str(step_title or "").strip().lower().replace("-", "_").replace(" ", "_")
-    skill = None
-    for engine, folder in _ENGINE_TO_SKILL.items():
-        if engine in title:
-            skill = folder
-            break
+    if _step_name(step_title) in _ROUTING_STEPS:
+        return _SHARED
+    skill = _engine_in(step_title)
     if skill is None:
         return _SHARED
-    return skill, _KIND_TO_DOC.get(str(step_kind or "").lower(), "SKILL.md")
+    return skill, _doc_for(step_kind)
 
 
 def by_skill(found: dict[str, Any]) -> list[dict[str, Any]]:
@@ -220,8 +279,8 @@ def draft(found: dict[str, Any], *, org_name: str | None = None) -> str:
 
     if notes:
         out += ["## What reviewers said went wrong", ""]
-        for skill in sorted({_skill_for(n["step_kind"]) for n in notes}):
-            rows = [n for n in notes if _skill_for(n["step_kind"]) == skill]
+        for skill in sorted({_skill_for(n["step_kind"], n.get("step_title")) for n in notes}):
+            rows = [n for n in notes if _skill_for(n["step_kind"], n.get("step_title")) == skill]
             out += [f"### {skill}", ""]
             for n in rows:
                 who = n.get("reviewer_email") or n.get("reviewer_role") or "a reviewer"

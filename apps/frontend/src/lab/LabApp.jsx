@@ -223,6 +223,12 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
     return (r && r.organization_id) || null;
   }, [runs, run]);
   const pickInstance = React.useCallback((k) => { setInstance(k); writeInstance(k); }, []);
+  // The company the Learning draft is read as: the named run's, else the run in view's (10 Nov 2026).
+  const learningOrg = React.useCallback((code) => {
+    const want = String(code || '').trim().toUpperCase() || run;
+    const r = (runs || []).find((x) => x && x.code === want);
+    return (r && r.organization_id) || null;
+  }, [runs, run]);
   const [syncing, setSyncing] = React.useState(false);
   const [synced, setSynced] = React.useState('');
   const [auto, setAuto] = React.useState('');
@@ -239,8 +245,17 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
     .then((out) => setRuns((out && out.runs) || [])).catch(() => setRuns([])), []);
   React.useEffect(() => { loadRuns(); }, [loadRuns]);
   React.useEffect(() => { keepPlace(current, run, question); }, [current, run, question]);
-  const pickRun = (code) => { setRun(code); setQuestion(null); };
-  const openQuestion = (code) => { const r = runOf(code); if (!r) return; setRun(r); setQuestion(code); onView('runs'); };
+  // The answer and step a question is opened on ({ code, turn, step }): the Notes page opens a note where it was written
+  // (10 Nov 2026). Any other way of opening a question opens its newest answer, as before.
+  const [focus, setFocus] = React.useState(null);
+  const pickRun = (code) => { setRun(code); setQuestion(null); setFocus(null); };
+  const pickQuestion = (code) => { setFocus(null); setQuestion(code); };
+  const openQuestion = (code, at) => {
+    const r = runOf(code); if (!r) return;
+    setRun(r); setQuestion(code);
+    setFocus(at && (at.turn || at.step) ? { code, turn: at.turn || null, step: at.step || null } : null);
+    onView('runs');
+  };
   const sync = async () => {
     setSyncing(true); setSynced('');
     try {
@@ -277,7 +292,8 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
         </nav>
       </div>
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
-        {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={setQuestion}
+        {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion}
+          focus={focus && focus.code === question ? focus : null}
           onOpenLoop={() => onView('loop')} /> : null}
         {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion}
@@ -285,7 +301,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'loop' ? <Loop me={me} runs={runs} run={run} onOpenQuestion={openQuestion} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}
-        {current === 'learning' ? <Learning /> : null}
+        {current === 'learning' ? <Learning orgFor={learningOrg} /> : null}
         {current === 'people' ? <People me={me} /> : null}
       </main>
     </div>

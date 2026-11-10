@@ -32,7 +32,8 @@ test('every node has keys', () => {
   assert.deepEqual([k.get('f').in, k.get('f').out], [null, null], 'a step with no message of its own takes no notes');
   for (const n of NODES) assert.ok(k.has(n.id), n.id);
   const titles = N.keyTitles(k);
-  assert.equal(titles['tq:t:call#output'], 'Output · lookup');
+  assert.equal(titles['tq:t:call#output'], 'Output · lookup (compliance)', 'a step inside an agent names the agent');
+  assert.equal(titles['tq:r:call'], 'Input · router', 'a step directly under chat names no agent');
   assert.equal(titles['tq:turn:user'], 'Input · chat');
 });
 
@@ -51,6 +52,20 @@ test('old and new notes land on their step and side', () => {
   // Each note knows the key of the place it shows under (edit, delete and their errors land there).
   assert.deepEqual([ix.slots['t:out'][0].block, ix.slots['c:out'][0].block, ix.scenario[0].block, ix.slots['s0:in'][0].block],
     ['tq:t:call#output', 'tq:c:query#output', 'scenario', 'tq:turn:user']);
+});
+
+test('a note key finds its step and side, so the Notes page can open the question on it (10 Nov 2026)', () => {
+  const at = (key) => N.stepOfKey(RECORD, NODES, key);
+  assert.deepEqual(at('tq:t:call'), { id: 't', side: 'in' });
+  assert.deepEqual(at('tq:t:call#output'), { id: 't', side: 'out' });
+  assert.deepEqual(at('tq:t:result#output'), { id: 't', side: 'out' }, 'any message of a step finds it, as notes are placed');
+  assert.deepEqual(at('tq:turn:answer'), { id: 's0', side: 'out' });
+  assert.deepEqual(at('tq:g1:agent#output'), { id: 'g1', side: 'out' });
+  assert.equal(at('tq:scenario'), null);
+  assert.equal(at('tq:orchestrator'), null);
+  assert.equal(at(''), null);
+  assert.equal(at(null), null);
+  assert.equal(N.stepOfKey(null, [], 'tq:t:call'), null);
 });
 
 test('unmatched notes go to other', () => {

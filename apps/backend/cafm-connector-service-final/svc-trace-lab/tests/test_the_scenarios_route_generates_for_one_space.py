@@ -153,7 +153,12 @@ async def test_a_batch_asked_for_with_no_refusals_contains_none(space):
 
 
 @pytest.mark.asyncio
-async def test_a_short_batch_says_it_is_the_whole_pool_rather_than_a_failure():
+async def test_a_short_batch_says_it_is_the_whole_pool_rather_than_a_failure(monkeypatch):
+    # 10 Nov 2026: every space now fills a batch of 100 (test_a_batch_is_generated_for_one_instance),
+    # so the short case is made here with a pool too small for the batch asked for.
+    from trace_lab import scenarios as sc
+    monkeypatch.setitem(sc.BY_ENGINE, "wo_engine", sc.BY_ENGINE["wo_engine"][:5])
+    monkeypatch.setitem(sc.BY_ENGINE, "contract_performance", sc.BY_ENGINE["contract_performance"][:5])
     out = await rs.generate(rs.GenerateRequest(space="ops", count=100, seed=1), who=None)
     assert out["short"] is True
     assert "every distinct question" in out["short_reason"]

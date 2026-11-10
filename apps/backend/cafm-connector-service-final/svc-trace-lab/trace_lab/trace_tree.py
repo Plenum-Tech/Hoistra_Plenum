@@ -11,9 +11,13 @@ database, READ ONLY) and conversations._lab_read() (Trace Lab's own evidence cop
 """
 from __future__ import annotations
 
+import gzip
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
 from sqlalchemy import text
 
 from src.agents import langfuse_export as lf
@@ -182,3 +186,22 @@ async def question_tree(m: labelling.Member, code: str, *, turn_id: str | None =
     if got is None:
         return {"turn_id": pick["turn_id"], "missing": True, "tree": None}
     return {"turn_id": pick["turn_id"], "missing": False, "tree": build_tree(*got)}
+
+
+#: Below this a compressed answer saves too little to be worth the work.
+_GZIP_FROM = 2048
+
+
+def json_answer(payload: Mapping[str, Any], accept_encoding: str | None) -> Response:
+    """The /tree answer as JSON, gzipped when the browser accepts gzip (10 Nov 2026).
+
+    The tree carries every step's input and output, so a long answer is megabytes of JSON that
+    compresses about tenfold. Production's nginx compresses nothing, and switching it on there would
+    change every response of the app; this compresses only this route's answer.
+    """
+    body = json.dumps(jsonable_encoder(payload), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    accepts = any(p.split(";")[0].strip().lower() == "gzip" for p in str(accept_encoding or "").split(","))
+    if accepts and len(body) >= _GZIP_FROM:
+        return Response(gzip.compress(body, compresslevel=5), media_type="application/json",
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(body, media_type="application/json", headers={"Vary": "Accept-Encoding"})

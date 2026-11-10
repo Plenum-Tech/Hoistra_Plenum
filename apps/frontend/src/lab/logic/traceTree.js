@@ -69,17 +69,21 @@ export function timelineBars(nodes, turn) {
 
 // The graph Langfuse draws (9 Nov 2026): one node per step name, in the order the steps first ran, each holding the ids of
 // its runs in order; an arrow from each node to the next. A step that ran several times is one node, as in Langfuse.
+// 10 Nov 2026: a node is one name AND one kind of step. A 'plan' stage and a 'plan' model call are different steps; grouped
+// by name alone they drew as one node with the first one's icon. `key` tells the nodes apart.
 export function flowOf(nodes) {
   const list = listOf(nodes).map((x, i) => ({ x, i, t: ms(x.started_at) }));
   list.sort((a, b) => (a.t === null || b.t === null ? 0 : a.t - b.t) || a.i - b.i);
   const steps = [];
-  const byName = new Map();
+  const byKey = new Map();
   for (const { x } of list) {
     const name = String(x.name || '');
-    if (!byName.has(name)) { byName.set(name, { name, type: x.type, ids: [] }); steps.push(byName.get(name)); }
-    byName.get(name).ids.push(sid(x.id));
+    const type = x.type;
+    const key = String(type || '') + ':' + name;
+    if (!byKey.has(key)) { byKey.set(key, { key, name, type, ids: [] }); steps.push(byKey.get(key)); }
+    byKey.get(key).ids.push(sid(x.id));
   }
-  const edges = steps.slice(1).map((st, k) => ({ from: steps[k].name, to: st.name }));
+  const edges = steps.slice(1).map((st, k) => ({ from: steps[k].name, to: st.name, fromKey: steps[k].key, toKey: st.key }));
   return { steps, edges };
 }
 

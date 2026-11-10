@@ -18,7 +18,7 @@ import { SCENARIO, buildSteps } from './logic/steps.js';
 import { pretty } from '../tracelab/logic/timeline.js';
 import { Derivation } from './Loop.jsx';
 import { TraceView } from './TraceTab.jsx';
-import { keyTitles, nodeKeys, traceNotesIndex } from './logic/traceNotes.js';
+import { keyTitles, nodeKeys, stepOfKey, traceNotesIndex } from './logic/traceNotes.js';
 import './runs.css';
 
 export const EXPECTED_ANSWER_MAX = 8000;
@@ -665,7 +665,8 @@ export function QuestionView(props) {
 // The page with its data: one request for the question (its expected answer, answers, the active answer's steps and
 // everyone's notes), then notes saved and removed one at a time. `onChanged(what)` tells the run's list to read its counts
 // again ('expected', 'note' or 'link'); `onLinked(turnId)` follows a newly linked answer.
-export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop }) {
+// `focus` ({ turn, step }, from the Notes page) opens the question on the answer and step a note was written on.
+export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop, focus }) {
   // After a note is saved: a pop-up says the next step is the agent's proposal on the Loop page (6 Nov 2026).
   const [next, setNext] = React.useState(null);
   const [st, setSt] = React.useState({ data: null, loading: true, error: '' });
@@ -676,6 +677,9 @@ export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop
   const [errors, setErrors] = React.useState({});
   const [confirming, setConfirming] = React.useState(null);
   const ask = React.useRef(0);
+  // Read once: the page opens on the note's answer and step, and after that the reviewer moves freely.
+  const firstTurn = React.useRef((focus && focus.turn) || null);
+  const focusStep = React.useRef((focus && focus.step) || null);
 
   const load = React.useCallback(async (turn) => {
     const mine = (ask.current += 1);
@@ -693,7 +697,7 @@ export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop
   React.useEffect(() => {
     setSt({ data: null, loading: !!code, error: '' });
     setRows([]); setEditor(null); setSelected(null); setErrors({}); setConfirming(null);
-    if (code) load(null);
+    if (code) load(firstTurn.current);
   }, [load]);
 
   const data = st.data;
@@ -715,6 +719,8 @@ export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop
   const titles = React.useMemo(() => keyTitles(nodeKeys(active && active.trace, tree && tree.tree ? tree.tree.nodes : [])),
     [active, tree]);
   const viewData = React.useMemo(() => (data ? Object.assign({}, data, { labels: rows }) : null), [data, rows]);
+  const focusAt = React.useMemo(() => (focusStep.current && tree && tree.tree
+    ? stepOfKey(active && active.trace, tree.tree.nodes, focusStep.current) : null), [active, tree]);
 
   const changed = (what) => { if (onChanged) onChanged(what); };
   const targetOf = (key) => {
@@ -859,7 +865,8 @@ export default function QuestionPage({ code, me, onChanged, onLinked, onOpenLoop
     <>
       {st.error ? <div role="alert" className="lab-error">{st.error}</div> : null}
       <QuestionView data={viewData} tree={tree} curator={isCurator(me)} editor={editor}
-        busy={busy} errors={errors} confirming={confirming} loading={st.loading} on={on} />
+        busy={busy} errors={errors} confirming={confirming} loading={st.loading} on={on}
+        traceView={focusAt ? { selectedId: focusAt.id } : undefined} />
       <NextStep step={onOpenLoop ? next : null} onClose={() => setNext(null)}
         onAct={(a) => { if (a === 'open_loop' && onOpenLoop) onOpenLoop(); }} />
     </>

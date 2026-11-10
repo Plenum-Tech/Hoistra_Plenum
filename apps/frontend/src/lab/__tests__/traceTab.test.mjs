@@ -106,6 +106,15 @@ test('graph: a start node, then every step in the order it ran, repeats counted'
   assert.ok(html(TT.TraceView, { tree: twice, view: 'graph', selectedId: 'c' }).includes('(1/2)'));
 });
 
+test('graph: its step buttons are reachable by screen readers (10 Nov 2026)', () => {
+  // role="img" makes everything inside one picture, so the step buttons in it were hidden from assistive technology.
+  const g = html(TT.TraceView, { tree: TREE, view: 'graph' });
+  const svg = g.slice(g.indexOf('<svg class="lab-tt-graph"'), g.indexOf('>', g.indexOf('<svg class="lab-tt-graph"')));
+  assert.ok(svg.includes('role="group"') && !svg.includes('role="img"'), svg);
+  assert.ok(g.includes('role="button"') && g.includes('aria-label="Model call router"'));
+  assert.ok(/<g[^>]*class="lab-tt-gstart"[^>]*aria-hidden="true"/.test(g), 'the start marker is decoration');
+});
+
 test('formatted output renders the markdown table', () => {
   const s = html(TT.TraceView, { tree: TREE });
   assert.match(s, /<table[\s\S]*<th[^>]*>WO<\/th>[\s\S]*<td[^>]*>WO-B-301-4562<\/td>/);

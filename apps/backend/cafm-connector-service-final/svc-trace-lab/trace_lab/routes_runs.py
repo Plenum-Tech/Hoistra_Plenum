@@ -27,7 +27,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from src.services.principal import Principal
@@ -146,9 +147,11 @@ async def lab_question(code: str, turn: str | None = Query(None, max_length=200)
 
 
 @router.get("/lab/q/{code}/tree")
-async def lab_question_tree(code: str, turn: str | None = Query(None, max_length=200),
-                            m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
-    return {"ok": True, **await _call(trace_tree.question_tree(m, code, turn_id=turn))}
+async def lab_question_tree(request: Request, code: str, turn: str | None = Query(None, max_length=200),
+                            m: labelling.Member = Depends(_wide)) -> Response:
+    # Every step's input and output is in here, so it goes gzipped when the browser can read it.
+    out = {"ok": True, **await _call(trace_tree.question_tree(m, code, turn_id=turn))}
+    return trace_tree.json_answer(out, request.headers.get("accept-encoding"))
 
 
 @router.put("/lab/q/{code}/expected")

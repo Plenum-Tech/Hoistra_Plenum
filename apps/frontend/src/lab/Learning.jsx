@@ -52,7 +52,9 @@ function Copy({ text, label }) {
   );
 }
 
-export default function Learning() {
+// `orgFor(code)`: the company of a run (or of the run in view when none is named). The platform team works in All
+// companies and a draft is one company's notes, so the page asks for it as that company (10 Nov 2026).
+export default function Learning({ orgFor } = {}) {
   const [run, setRun] = React.useState('');
   const [asked, setAsked] = React.useState('');
   const [out, setOut] = React.useState(null);
@@ -62,11 +64,17 @@ export default function Learning() {
   const load = React.useCallback((code) => {
     setBusy(true);
     setError('');
-    labApi.learningDraft(code || undefined)
+    labApi.learningDraft(code || undefined, orgFor ? orgFor(code) || undefined : undefined)
       .then((res) => { setOut(res); setAsked(code || ''); })
-      .catch((e) => { setError((e && e.message) || String(e)); setOut(null); })
+      .catch((e) => {
+        const msg = (e && e.message) || String(e);
+        setError(/choose a company/i.test(msg)
+          ? 'Open a run first (pick one in the top bar, or name one above): the draft is one company\u2019s notes, and the platform view is every company.'
+          : msg);
+        setOut(null);
+      })
       .finally(() => setBusy(false));
-  }, []);
+  }, [orgFor]);
 
   React.useEffect(() => { load(''); }, [load]);
 

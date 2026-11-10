@@ -330,7 +330,7 @@ function RunsHome({ me, onRun }) {
   );
 }
 
-function RunDetail({ me, code, onRun, question, onQuestion, onOpenLoop }) {
+function RunDetail({ me, code, onRun, question, onQuestion, onOpenLoop, focus }) {
   const [st, setSt] = React.useState({ run: null, questions: [], loading: true, error: '' });
   const ask = React.useRef(0);
   const pane = React.useRef(null);
@@ -353,7 +353,7 @@ function RunDetail({ me, code, onRun, question, onQuestion, onOpenLoop }) {
       <RunQuestionsList code={code} run={st.run} questions={st.questions} selected={question} loading={st.loading} error={st.error}
         onOpen={(c) => { if (onQuestion) onQuestion(c); }} onBack={back} />
       <div className="lab-flow-wrap" ref={pane}>
-        {question ? <QuestionPage key={question} code={question} me={me} onChanged={() => load(true)} onOpenLoop={onOpenLoop} /> : (
+        {question ? <QuestionPage key={question} code={question} me={me} onChanged={() => load(true)} onOpenLoop={onOpenLoop} focus={focus} /> : (
           <div className="lab-empty">
             <h2>{'Pick a question'}</h2>
             <p className="lab-small">{'Choose a question on the left to see its expected answer and how its answer was made. Click a step to select it; double-click it or select text in it to write a note.'}</p>
@@ -366,8 +366,9 @@ function RunDetail({ me, code, onRun, question, onQuestion, onOpenLoop }) {
 
 // Runs: the list of runs, or one run's questions beside the chosen question. `run` and `question` are codes (R3, R3-12)
 // the caller keeps; `onRun(code | null)` and `onQuestion(code | null)` change them.
-export default function RunsPage({ me, run, onRun, question, onQuestion, onOpenLoop }) {
+export default function RunsPage({ me, run, onRun, question, onQuestion, onOpenLoop, focus }) {
   const go = onRun || (() => {});
   if (!run) return <RunsHome me={me} onRun={(code) => { if (onQuestion) onQuestion(null); go(code); }} />;
-  return <RunDetail me={me} code={run} onRun={go} question={question || null} onQuestion={onQuestion} onOpenLoop={onOpenLoop} />;
+  return <RunDetail me={me} code={run} onRun={go} question={question || null} onQuestion={onQuestion} onOpenLoop={onOpenLoop}
+    focus={focus || null} />;
 }
