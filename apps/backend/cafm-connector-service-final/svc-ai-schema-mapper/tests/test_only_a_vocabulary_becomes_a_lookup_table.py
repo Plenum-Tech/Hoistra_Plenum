@@ -133,22 +133,26 @@ class TestAPersonCanStillAskForOne:
                            ("bms_alarms", "nuisance", ["True", "False"] * 10)], "flag", **kw) is None
 
     def test_the_gate_override_path_does_not_enforce_the_vocabulary_rules(self):
-        """apply_classification_decisions builds on a person's instruction."""
+        """apply_classification_decisions builds on a person's instruction -- for a column that
+        is nobody's key. (One that is a key is refused outright since 9 Nov 2026; see
+        test_a_primary_key_group_marked_shared.) 50 distinct codes over 59 rows: the automatic
+        vocabulary test would never build this table."""
         from udr.column_intelligence import apply_classification_decisions
         codes = [f"ALM-{i:05d}" for i in range(50)]
         tables = {
-            "bms_alarms": {"rows": [{"alarm_id": v} for v in codes], "columns": ["alarm_id"]},
-            "work_orders": {"rows": [{"linked_alarm_id": v} for v in codes[:9]],
-                            "columns": ["linked_alarm_id"]},
+            "bms_events": {"rows": [{"alarm_code": v} for v in codes], "columns": ["alarm_code"]},
+            "work_orders": {"rows": [{"alarm_code": v} for v in codes[:9]],
+                            "columns": ["alarm_code"]},
         }
         ci = {"classification": [{
-            "group_id": "G25", "canonical_name": "alarm_id",
-            "members": ["bms_alarms.alarm_id", "work_orders.linked_alarm_id"],
-            "has_pk": "bms_alarms.alarm_id", "canonical_has_pk": "bms_alarms.alarm_id",
-            "fk_column": None, "ri": 1.0, "verdict": "Foreign Key relationship"}],
+            "group_id": "G25", "canonical_name": "alarm_code",
+            "members": ["bms_events.alarm_code", "work_orders.alarm_code"],
+            "has_pk": None, "canonical_has_pk": None,
+            "fk_column": None, "ri": 1.0, "verdict": "Foreign Key relationship",
+            "human_override": "shared_to_fk"}],
             "shared_attribute_tables": [], "fk_candidates": [], "summary": {}}
         out = apply_classification_decisions(ci, tables, overrides={"G25": "shared"})
-        assert out["lookup_tables_added"] == ["shared_alarms"], (
+        assert out["lookup_tables_added"] == ["shared_alarm_codes"], (
             "the person asked for this table; the automatic vocabulary rules must not veto it")
 
 

@@ -514,9 +514,10 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 review_items_by_table,        # display copy (reviewable rows)
                 auto_approved_by_table,        # display copy (auto-approved rows)
                 dest_columns_by_table=_cols_by_tbl,
-                # Lets a group whose owning table is absent from the workbook reference the
-                # destination entity instead of becoming a new lookup table.
-                dest_pk_by_table=_pk_by_tbl,
+                # No dest_pk_by_table here. It belongs to build_column_intelligence above; pasted
+                # onto this call on 30 Oct (e5e851e) it raised TypeError on every run, and the
+                # except below logged it and skipped the alignment -- the tier-1 mappings that
+                # drive the write went unaligned to B21 until 9 Nov 2026.
                 dest_table_by_source=_dest_table,
             )
             if _aligned:

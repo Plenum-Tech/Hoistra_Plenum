@@ -1917,6 +1917,19 @@ def _normalize_verdict_target(value) -> str | None:
     return None
 
 
+def _key_owner(row: dict) -> str | None:
+    """The table that already has this group's values as its key -- "buildings.building_id",
+    "contracts.contract_id" -- or None for a column that is nobody's key (a status, a currency).
+    A group with an owner can only link to it; see apply_classification_decisions."""
+    owner = (row.get("owned_by_destination") or row.get("has_pk")
+             or row.get("canonical_has_pk"))
+    if owner:
+        return str(owner)
+    if "primary" in str(row.get("verdict") or "").lower():
+        return str(row.get("canonical_name") or "a primary key")
+    return None
+
+
 def apply_classification_decisions(
     ci: dict,
     tables: dict | None = None,
@@ -2014,6 +2027,24 @@ def apply_classification_decisions(
         # `"foreign" in verdict`, true for only one of the three verdicts a group can carry, so
         # marking a "Primary Key group" shared — alarm_id, schedule_id — matched no branch at
         # all: the verdict stayed, no lookup table was built, and nothing was recorded.
+        # A group that is already SOME table's key is never made "shared". Shared builds a lookup
+        # table whose primary key is the column's values -- a second table keyed on the same ids:
+        #   * owned by the destination: building_id -> buildings, vendor_id -> vendors. Run 5ea53444
+        #     (9 Nov 2026) was about to write shared_buildings and shared_vendors beside them --
+        #     "two tables preparing the same primary key id";
+        #   * owned by an uploaded sheet: alarm_id in bms_alarms, contract_id in contracts. The
+        #     table literally named alarm_id in hoistra_test is one of these, from 30 Oct.
+        # Asked on 9 Nov 2026: no id may be the primary key of more than one table. So only a
+        # column that is nobody's key -- a status, a category, a currency -- can be shared. This
+        # reverses the 30 Oct change that made marking alarm_id / schedule_id shared build its
+        # table. Refused here, whoever asks: the gate screen does not offer it, but a gate can
+        # also be answered by the chat or the API.
+        _owner = _key_owner(row)
+        if target == "shared" and _owner:
+            result.setdefault("overrides_refused", {})[gid] = (
+                f"already the key of {_owner}; kept as a reference to it")
+            row["override_refused"] = "already_a_key"
+            continue
         if target == "shared" and "shared" not in verdict:
             label = "pk_to_shared" if "primary" in verdict else "fk_to_shared"
             row["verdict"] = "Shared Attribute"
@@ -2048,6 +2079,12 @@ def apply_classification_decisions(
             row["verdict"] = "Foreign Key relationship"
             row["human_override"] = label
             pk_key = row.get("has_pk") or row.get("canonical_has_pk")
+            if not pk_key and row.get("owned_by_destination"):
+                # A destination-owned group that an earlier answer made shared lost its has_pk (the
+                # demotion clears it). Without this the promotion back took the branch below and
+                # REBUILT the lookup table -- asking for the link kept the copy. The owner is the key.
+                pk_key = row["owned_by_destination"]
+                row["has_pk"] = row["canonical_has_pk"] = pk_key
             if pk_key and "." in str(pk_key):
                 # A member of this group is some table's primary key, so the others point at it
                 # and the lookup table is not needed.

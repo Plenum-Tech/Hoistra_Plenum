@@ -88,16 +88,14 @@ class TestPromotingToAForeignKey:
         assert dst == {(entry["table_name"], entry["pk_column"])}
 
     def test_a_reference_table_already_built_is_reused_not_duplicated(self):
-        # A reviewer who demotes a foreign key and then changes their mind: the reference table
-        # the demotion built is the one the promotion points at, not a second copy of it.
-        row = _shared_row()
-        row.update(verdict="Foreign Key relationship", has_pk="assets.asset_type")
-        ci = _ci(rows=[row])
-        apply_classification_decisions(ci, _tables(), overrides={"G1": "shared"})
+        # A reviewer who promotes, demotes and promotes again: the reference table the first
+        # promotion built is the one every later answer uses, not a second copy of it.
+        ci = _ci()
+        apply_classification_decisions(ci, _tables(), overrides={"G1": "fk"})
         assert len(ci["shared_attribute_tables"]) == 1
         built = dict(ci["shared_attribute_tables"][0])
-        ci["classification"][0]["has_pk"] = None          # the demotion made it a shared group
-        ci["classification"][0]["canonical_has_pk"] = None
+        apply_classification_decisions(ci, _tables(), overrides={"G1": "shared"})
+        assert len(ci["shared_attribute_tables"]) == 1
         apply_classification_decisions(ci, _tables(), overrides={"G1": "fk"})
         assert len(ci["shared_attribute_tables"]) == 1
         assert ci["shared_attribute_tables"][0]["table_name"] == built["table_name"]
@@ -138,17 +136,30 @@ class TestPromotingToAForeignKey:
         assert out["overrides_applied"]["G1"] == "shared_to_fk"
 
 
-class TestDemotingStillWorks:
-    def test_a_foreign_key_demoted_still_gets_its_reference_table(self):
-        row = _shared_row()
-        row.update(verdict="Foreign Key relationship", has_pk="assets.asset_type")
-        ci = _ci(rows=[row], fk_candidates=[
-            {"src_table": "work_orders", "src_column": "asset_type",
-             "dst_table": "assets", "dst_column": "asset_type"}])
+class TestDemoting:
+    def test_a_link_with_no_key_behind_it_can_go_back_to_shared(self):
+        """A shared group a reviewer promoted is nobody's key; changing their mind still works."""
+        ci = _ci()
+        apply_classification_decisions(ci, None, overrides={"G1": "fk"})
         out = apply_classification_decisions(ci, _tables(), overrides={"G1": "shared"})
         assert ci["classification"][0]["verdict"] == "Shared Attribute"
-        assert out["fk_candidates_removed"] == 1
+        assert out["overrides_applied"]["G1"] == "fk_to_shared"
         assert len(ci["shared_attribute_tables"]) == 1
+
+    def test_a_foreign_key_into_a_real_key_is_never_demoted(self):
+        """9 Nov 2026: asset_type here IS assets' key, so a shared_asset_types table would be a
+        second table keyed on the same values. The link stays; the refusal is recorded."""
+        row = _shared_row()
+        row.update(verdict="Foreign Key relationship", has_pk="assets.asset_type")
+        fk = {"src_table": "work_orders", "src_column": "asset_type",
+              "dst_table": "assets", "dst_column": "asset_type"}
+        ci = _ci(rows=[row], fk_candidates=[dict(fk)])
+        out = apply_classification_decisions(ci, _tables(), overrides={"G1": "shared"})
+        assert ci["classification"][0]["verdict"] == "Foreign Key relationship"
+        assert ci["classification"][0]["override_refused"] == "already_a_key"
+        assert "G1" in out["overrides_refused"]
+        assert ci["fk_candidates"] == [fk]
+        assert ci["shared_attribute_tables"] == []
 
 
 class TestABooleanGroupGetsNoReferenceTable:

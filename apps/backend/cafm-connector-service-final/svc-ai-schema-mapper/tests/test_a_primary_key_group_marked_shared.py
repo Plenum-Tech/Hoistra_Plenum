@@ -1,4 +1,8 @@
-"""Marking a primary-key group as a shared attribute has to build the lookup table.
+"""A primary-key group marked shared is refused, and says so; marked a foreign key, it links.
+
+9 Nov 2026: the half of this file that built shared_alarms when alarm_id was marked shared is
+reversed -- see TestAPrimaryKeyGroupIsNeverMadeShared. The history below is why an answer at this
+gate must never be silently dropped, which still holds: it is now refused, with a reason.
 
 Reported 30 Oct: alarm_id and schedule_id were marked "Shared Attribute" at the classification
 gate and no lookup table appeared. The answer was not wrong and the panel was not stale — the
@@ -65,65 +69,46 @@ def _tables():
     }
 
 
-class TestAPrimaryKeyGroupDemotedToShared:
-    def test_the_verdict_actually_changes(self):
+class TestAPrimaryKeyGroupIsNeverMadeShared:
+    """Reversed 9 Nov 2026. Building shared_alarms beside bms_alarms gave two tables keyed on the
+    same alarm ids (run 5ea53444: shared_buildings and shared_vendors beside buildings and
+    vendors). A column that is already some table's key can only link to that table."""
+
+    def test_the_answer_is_refused_and_says_why(self):
         ci = _ci()
         out = apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        assert ci["classification"][0]["verdict"] == "Shared Attribute"
-        assert out["overrides_applied"]["G25"] == "pk_to_shared"
+        row = ci["classification"][0]
+        assert row["override_refused"] == "already_a_key"
+        assert "bms_alarms.alarm_id" in out["overrides_refused"]["G25"]
+        assert "G25" not in out["overrides_applied"]
 
-    def test_the_lookup_table_is_built(self):
-        # The reported bug: no table appeared under "New tables from shared attributes".
-        ci = _ci()
-        out = apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        assert out["lookup_tables_added"] == ["shared_alarms"]
-        assert len(ci["shared_attribute_tables"]) == 1
-        assert ci["shared_attribute_tables"][0]["from_group"] == "G25"
-
-    def test_the_lookup_table_names_every_table_that_shares_the_column(self):
-        ci = _ci()
-        apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        entry = ci["shared_attribute_tables"][0]
-        assert entry["table_name"] == "shared_alarms"
-        assert set(entry["source_columns"]) == {
-            "work_orders.linked_alarm_id", "bms_alarms.alarm_id"}
-        named = " ".join(entry["source_columns"]) + entry["create_ddl"]
-        assert "work_orders" in named and "bms_alarms" in named, (
-            "the entry and its COMMENT must name every contributing table")
-
-    def test_its_rows_are_the_union_of_both_columns(self):
-        ci = _ci()
-        apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        entry = ci["shared_attribute_tables"][0]
-        assert entry["distinct_count"] == 3, "ALM-0001, ALM-0002 and ALM-0003"
-
-    def test_the_old_key_stops_being_enforced(self):
-        """It is no longer bms_alarms' key to own, so a foreign key into it must not survive."""
-        ci = _ci(fk_candidates=[{"src_table": "work_orders", "src_column": "linked_alarm_id",
-                                 "dst_table": "bms_alarms", "dst_column": "alarm_id"}])
-        out = apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        assert out["fk_candidates_removed"] == 1
-        assert ci["fk_candidates"] == []
-
-    def test_the_row_no_longer_claims_a_primary_key_member(self):
-        """Left in place, has_pk sends a later promotion down the wrong branch."""
+    def test_the_verdict_and_the_key_stay(self):
         ci = _ci()
         apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
         row = ci["classification"][0]
-        assert not row.get("has_pk") and not row.get("canonical_has_pk")
+        assert row["verdict"] == "Primary Key group"
+        assert row["has_pk"] == row["canonical_has_pk"] == "bms_alarms.alarm_id"
+        assert "human_override" not in row
 
-    def test_the_summary_chips_follow(self):
+    def test_no_second_table_is_planned(self):
         ci = _ci()
-        apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        assert ci["summary"]["pk_groups"] == 0
-        assert ci["summary"]["shared_groups"] == 1
-
-    def test_a_group_already_shared_is_not_rebuilt_twice(self):
-        ci = _ci()
-        apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
         out = apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        assert len(ci["shared_attribute_tables"]) == 1
+        assert ci["shared_attribute_tables"] == []
         assert out["lookup_tables_added"] == []
+
+    def test_the_existing_foreign_key_survives(self):
+        fk = {"src_table": "work_orders", "src_column": "linked_alarm_id",
+              "dst_table": "bms_alarms", "dst_column": "alarm_id"}
+        ci = _ci(fk_candidates=[dict(fk)])
+        apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
+        assert ci["fk_candidates"] == [fk]
+
+    def test_a_primary_key_group_with_no_member_named_is_still_refused(self):
+        """The verdict alone is enough: a Primary Key group is somebody's key."""
+        ci = _ci(rows=[dict(_pk_group_row(), has_pk=None, canonical_has_pk=None)])
+        out = apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
+        assert "G25" in out["overrides_refused"]
+        assert ci["shared_attribute_tables"] == []
 
 
 class TestAPrimaryKeyGroupPromotedToForeignKey:
@@ -146,8 +131,8 @@ class TestAPrimaryKeyGroupPromotedToForeignKey:
 
 @pytest.mark.parametrize("target", ["shared", "fk"])
 def test_no_answer_at_this_gate_is_silently_discarded(target):
-    """The shape of the bug, independent of these two verdicts: an override always applies."""
+    """The shape of the 30 Oct bug: an answer is either applied or refused with a reason."""
     ci = _ci()
     out = apply_classification_decisions(ci, _tables(), overrides={"G25": target})
-    assert out["overrides_applied"], (
+    assert out["overrides_applied"] or out.get("overrides_refused"), (
         f"marking a Primary Key group '{target}' was accepted by the gate and then dropped")

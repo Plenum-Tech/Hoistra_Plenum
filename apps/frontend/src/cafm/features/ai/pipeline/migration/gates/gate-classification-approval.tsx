@@ -56,7 +56,12 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
     /foreign/i.test(c.verdict) ? "fk" : "shared";
 
   const [choices, setChoices] = useState<Record<string, Choice>>(() =>
-    Object.fromEntries([...fkRows, ...sharedRows].map((c) => [c.group_id, defaultChoice(c)])),
+    Object.fromEntries([...fkRows, ...sharedRows].map((c) => [
+      c.group_id,
+      // A column the destination owns starts on its link -- also when an earlier answer made it
+      // shared, which then goes back as an explicit "fk" (its verdict default is "shared").
+      c.owned_by_destination ? "fk" : defaultChoice(c),
+    ])),
   );
   const [error, setError] = useState<string | null>(null);
   const { mutate, isPending } = useMigrationGateClassificationApproval({
@@ -94,7 +99,8 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
   const ChoicePicker = ({ row }: { row: UdrGroupClassification }) => {
     const gid = row.group_id;
     const current = choices[gid];
-    const fkDisabled = !/foreign/i.test(row.verdict) && !row.has_pk && !row.canonical_has_pk;
+    const fkDisabled = !row.owned_by_destination
+      && !/foreign/i.test(row.verdict) && !row.has_pk && !row.canonical_has_pk;
     const btn = (value: Choice, label: string, disabled = false, title?: string) => (
       <button
         type="button"
@@ -114,15 +120,29 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
         {label}
       </button>
     );
+    // A column that is already some table's key can only link to it: one the destination has a
+    // table for (building_id -> buildings) or one an uploaded sheet is keyed on (contract_id ->
+    // contracts). "Shared" would build a second table holding the same ids beside the real one --
+    // which is what run 5ea53444 was about to write on 9 Nov 2026 -- so it is not offered; the
+    // service refuses it too, for answers that do not come through this screen.
+    const owner = row.owned_by_destination ?? row.has_pk ?? row.canonical_has_pk;
+    const ownerTable = owner ? String(owner).split(".")[0] : null;
     return (
       <div className="flex shrink-0 items-center gap-1">
         {btn(
           "fk",
-          "Foreign Key",
+          ownerTable ? `Link to ${ownerTable}` : "Foreign Key",
           fkDisabled,
           fkDisabled ? "No primary-key member to enforce this FK against" : undefined,
         )}
-        {btn("shared", "Shared Attribute")}
+        {btn(
+          "shared",
+          "Shared Attribute",
+          !!ownerTable,
+          ownerTable
+            ? `${ownerTable} already holds these ids - a shared table would be a second copy of it`
+            : undefined,
+        )}
         {btn("exclude", "Exclude")}
       </div>
     );
@@ -308,8 +328,8 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                     <div className="mt-1 text-[10px] text-slate-500">
                       No table in this file owns this column, but{" "}
                       <b className="font-mono">{String(c.owned_by_destination).split(".")[0]}</b>{" "}
-                      already exists in the destination and does — so these columns reference it.
-                      Switching to Shared Attribute would create a second table of the same values.
+                      already exists in the destination and does — so these columns link to it. A
+                      shared table is not offered here: it would be a second table of the same ids.
                     </div>
                   ) : null}
                 </RowShell>
