@@ -25,6 +25,7 @@ from . import db, jobs, migrate, routes_conversations, routes_status
 from . import review_labels, routes_golden, routes_judges, routes_mode_proposals, routes_monitor, routes_review
 from . import routes_labelling, routes_runs, routes_scenarios, routes_taxonomy, spend
 from . import autosync, routes_loop
+from . import routes_eval
 from .migrate import SchemaState
 from .settings import Settings, load
 
@@ -50,6 +51,7 @@ ROUTERS: list[APIRouter] = [
     routes_runs.router,
     routes_scenarios.router,
     routes_loop.router,
+    routes_eval.router,
 ]
 
 

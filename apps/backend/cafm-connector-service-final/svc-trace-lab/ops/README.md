@@ -85,15 +85,15 @@ type anything.
 ```sh
 docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate status
 docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate plan
-docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0013 --applied-by YOURNAME --dry-run
-docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0013 --applied-by YOURNAME
+docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0015 --applied-by YOURNAME --dry-run
+docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0015 --applied-by YOURNAME
 ```
 
 * `status` and `plan` only read. `status` prints the state as JSON and exits 0 only when it is `ready`.
 * `apply` needs an interactive terminal: it asks you to type the database name (`hoist_tracelab`) and refuses
   without a TTY. With `docker compose exec` never pass `-T`, which removes the terminal.
 * `--dry-run` runs the files in a transaction and rolls back. Do it first.
-* `--expect-db` must equal the database the container is connected to, or it refuses. `--through 0013` is the last
+* `--expect-db` must equal the database the container is connected to, or it refuses. `--through 0015` is the last
   file in `svc-trace-lab/migrations/`; `--applied-by` is recorded in the ledger as `cli:YOURNAME`.
 * After a real apply it prints `SHIPPED_CHECKSUMS` lines. Send them to a developer to add to
   `trace_lab/migrate.py`: that is a code change after the run, not part of it.
@@ -240,6 +240,60 @@ Without the accounts grant the role only suits reading stored conversations, lab
 already stored. To use it at all, point the trace-lab container's `DB_URL` at this role: that needs an edit to
 `docker-compose.tracelab.yml` locally (not made here), and cannot be done on Azure's all-in-one container, where
 `DB_URL` is shared by every program.
+
+## The eval store: sessions, scenarios and pushing to the development instance
+
+Migration 0014 adds the eval store (11 Nov 2026): sessions, traces, observations and scores named as Langfuse names
+them, with run tags, versioned scenarios and the sections of the specification. It is filled by reading what the chat
+already recorded, and it can be copied from one Trace Lab database to another.
+
+Migration 0015 (11 Nov 2026) adds `trace_label_cells`: a person's failure-mode label (present or absent) on one trace,
+written on the session page. It is not pushed to the development instance yet: a label names its failure mode, and
+the failure modes are numbered per database and not pushed, so a pushed label would show nowhere there.
+
+**Sessions.** A conversation becomes a session when its chat session id names its run tag and scenario:
+
+```
+scn__<run tag>__<scenario id>__<attempt>        for example  scn__baseline_v0__MT-014__1
+```
+
+Every turn asked in that chat session is one trace of the session, in the order asked. On the Sessions page a curator
+presses **Read new sessions** (or calls `POST /api/trace-lab/eval/ingest`); the application database is only read.
+Chat sessions that did not follow the rule can still be filed: send their ids with the run tag, as
+`{"run_tag": "baseline_v0", "sessions": {"<chat session id>": "<scenario id or null>"}}`.
+
+Set `TRACE_LAB_ORIGIN` on each machine (for example `aasim-vps`): every session keeps the name of the machine it was
+read in on. Without it the host name is used.
+
+**Pushing to the development instance.** Set `DEV_DB_URL` on the machine that holds the results to the development
+instance's **Trace Lab** database (the one with schema `tracelab`, `hoist_tracelab` on Azure). It is never the
+application database, and it is read from the environment only: nothing stores or logs it, and pages and logs show
+`host/database` and nothing else.
+
+```sh
+python -m trace_lab.sync_push --dry-run     # counts what would go, writes nothing
+python -m trace_lab.sync_push               # sends it; prints how many sessions, traces, spans and scores went
+python -m trace_lab.sync_push --full        # reads every row, not only those since the last push that finished
+```
+
+The **Sync to dev** button on the Sessions page does the same for the platform team and the consultant.
+
+* Both databases must be on the same migration. The push refuses otherwise and says which is behind; it also refuses
+  the same database, a database with no Trace Lab in it and one it cannot reach. A refusal writes nothing.
+* Every table it sends is append-only, so a row is inserted under its own key or left alone. Pushing twice adds
+  nothing, and a push that stops half way is finished by the next one.
+* Give the pushing machine its own login that can only read and insert in schema `tracelab`. A DBA runs this once on
+  the development Trace Lab database (it is not a migration, because migrations never grant):
+
+```sql
+CREATE ROLE tracelab_push LOGIN PASSWORD '...';
+GRANT USAGE ON SCHEMA tracelab TO tracelab_push;
+GRANT SELECT ON tracelab.schema_migrations TO tracelab_push;
+GRANT SELECT, INSERT ON tracelab.run_tags, tracelab.spec_sections, tracelab.scenarios, tracelab.sessions,
+    tracelab.traces, tracelab.observations, tracelab.scores TO tracelab_push;
+```
+
+A real push writes to a shared database. No Claude session runs one: a person does, after the dry run.
 
 ## The final Golden Rule audit
 
