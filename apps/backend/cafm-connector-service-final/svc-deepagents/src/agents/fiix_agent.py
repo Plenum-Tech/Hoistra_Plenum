@@ -30,6 +30,7 @@ from langchain_core.tools import tool
 
 
 
+from .evidence import http_failure
 from ..config import settings
 from ..http_client import caller_headers
 
@@ -66,18 +67,9 @@ _FIIX_SETUP_FIELDS = [
 
 
 def _err(exc: Exception, op: str) -> dict:
-
-    if isinstance(exc, httpx.HTTPStatusError):
-
-        body = (exc.response.text or "")[:400]
-
-        log.error(f"fiix.{op}.http_error", status=exc.response.status_code, body=body[:200])
-
-        return {"error": body, "status_code": exc.response.status_code}
-
-    log.error(f"fiix.{op}.error", error=str(exc)[:300])
-
-    return {"error": str(exc)[:300]}
+    # Workstream A3 (11 Nov 2026): the service's response body and the exception go to the log;
+    # the model gets a failure record in business words (agents/evidence.py), never the raw text.
+    return http_failure(exc, service="fiix", op=op, keep_detail=True)
 
 
 

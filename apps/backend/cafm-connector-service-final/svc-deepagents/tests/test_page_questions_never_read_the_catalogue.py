@@ -144,7 +144,9 @@ class TestTheDoorRefuses:
         """The one UDR tool that reads the database itself, not through svc-udr."""
         hc.turn_page_engines.set(frozenset({"energy_intelligence", "wo_engine"}))
         out = await get_schema.ainvoke({})
-        assert "error" in out and "energy_intelligence, wo_engine" in str(out["error"])
+        # The refusal is guidance for the model, carried whole (agents/evidence.py, Workstream A3).
+        assert "error" in out and "energy_intelligence, wo_engine" in str(out["guidance"])
+        assert out["category"] == "routed_elsewhere"
 
 
 class TestTheNoteSaysSo:

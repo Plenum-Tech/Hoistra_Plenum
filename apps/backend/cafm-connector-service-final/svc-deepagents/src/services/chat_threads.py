@@ -197,7 +197,11 @@ async def record_answer(session_id: str, answer: str, *, tools: list | None = No
             previous = head[0] if head else None
             if isinstance(previous, str):
                 previous = json.loads(previous)
-            ws = thread_scope.derive(previous, row[0] if row else "", answer, tools)
+            # Every tool the turn ran, sub-agents' included (the trace keeps them), so the records the
+            # answer showed are taken from the rows that returned them (Workstream A4, 11 Nov 2026).
+            from ..agents import trace as _trace
+
+            ws = thread_scope.derive(previous, row[0] if row else "", answer, [*(tools or []), *_trace.tool_outputs()])
             await conn.execute(text(f"UPDATE {THREADS} SET last_message_at = now(), updated_at = now(),"
                                     f" working_set = CAST(:ws AS jsonb) WHERE id = :tid"),
                                {"tid": session_id, "ws": json.dumps(ws) if ws else None})

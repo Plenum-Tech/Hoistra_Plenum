@@ -1129,10 +1129,13 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
             await websocket.send_text(json.dumps(event, default=str))
 
     except Exception as exc:
-        log.error("ws_workflow.error", session_id=session_id, error=str(exc))
+        log.error("ws_workflow.error", session_id=session_id, error=str(exc), exc_info=True)
         try:
+            # What happened and what to do - never the exception's own text (Workstream A3, 11 Nov 2026).
+            from ...agents.evidence import user_message as _user_message
+
             await websocket.send_text(json.dumps({
-                "type": "error", "error": str(exc), "session_id": session_id,
+                "type": "error", "error": _user_message(exc), "session_id": session_id,
             }))
         except Exception:
             pass

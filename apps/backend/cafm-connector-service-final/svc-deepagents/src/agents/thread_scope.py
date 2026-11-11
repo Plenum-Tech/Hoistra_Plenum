@@ -56,6 +56,34 @@ def is_followup(question: str) -> bool:
     return bool(_FOLLOWUP.search(q)) and not _NEW_SCOPE.search(q)
 
 
+#: A short question that leans on the last answer without a pronoun: "what about the vendors?",
+#: "and for Kingsway?", "which of them are blocked?".
+_ELLIPTICAL = re.compile(r"^\s*(?:and\s+|so\s+)?(?:what about|how about|same for|and for|what of|of which|which of (?:them|those|these)|"
+                         r"for (?:each|every) (?:one|of them)|(?:now|then) (?:show|list|tell))\b", re.I)
+MAX_ELLIPTICAL_WORDS = 14
+
+
+def continues(question: str) -> bool:
+    """Whether a question continues the thread, so it reads inside the thread's working set without
+    asking again (Workstream A4, 11 Nov 2026): "those"/"these" (is_followup), a reference to the last
+    answer ("for each of them", "the previous list" - domain_chooser.refers_back), or a short
+    elliptical follow-up ("what about the vendors?"). A question that names its own scope ("across all
+    buildings") never does.
+
+    Until now the working set was applied on is_followup alone, which was kept narrow on purpose;
+    "what about the vendors?" after a Bishopsgate answer read the whole estate."""
+    q = question or ""
+    if _NEW_SCOPE.search(q):
+        return False
+    if is_followup(q):
+        return True
+    from .domain_chooser import refers_back
+
+    if refers_back(q):
+        return True
+    return bool(_ELLIPTICAL.search(q)) and len(q.split()) <= MAX_ELLIPTICAL_WORDS
+
+
 def parse_period(text: str, today: date | None = None) -> dict[str, Any] | None:
     """'last month', 'this month', 'September 2026', 'last 90 days' -> {from, to (exclusive), label, key}."""
     t = today or date.today()
@@ -132,9 +160,13 @@ def derive(previous: dict[str, Any] | None, question: str, answer: str, tools: l
     q_code = _code(question)
     period = parse_period(question, today) or next((parse_period(str(i["period"]), today) for i in inputs if i.get("period")), None)
     named = list(dict.fromkeys(_WO.findall(answer or "")))[:MAX_WO]
-    if is_followup(question) and previous and _same_building(previous, q_name, q_code, several):
+    shown = entities(tools, answer)
+    if continues(question) and previous and _same_building(previous, q_name, q_code, several):
         ws = dict(previous or {})
         ws["last_mentioned"] = named
+        if any(shown.values()):
+            # "those" now means what this answer showed (Workstream A4).
+            ws["entities"] = shown
         ws["turns"] = int(ws.get("turns") or 1) + 1
         if (q_name or q_code) and not (ws.get("building_name") or ws.get("building_code") or ws.get("building_id")):
             ws.update(building_name=q_name, building_id=q_id, building_code=q_code)   # narrowed to a building
@@ -144,14 +176,37 @@ def derive(previous: dict[str, Any] | None, question: str, answer: str, tools: l
     else:
         building_name, building_id = _first_building(inputs)
     code = q_code or (None if several else _code(answer))
-    if not (building_name or building_id or code or period or named or several):
+    if not (building_name or building_id or code or period or named or several or any(shown.values())):
         return previous if previous and _NEW_SCOPE.search(question or "") is None else None
     ws = {"building_name": building_name, "building_id": building_id, "building_code": code,
           "period": period, "work_orders": named, "last_mentioned": named, "anchor_question": (question or "")[:300],
           "turns": 1}
+    if any(shown.values()):
+        ws["entities"] = shown
     if several:
         ws["buildings"] = several
     return ws
+
+
+def carry(ws: dict[str, Any] | None, question: str, named: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """The working set as a continuing question reads it. "And for Kingsway?" after a Bishopsgate
+    answer continues the thread but names its own building: the building is the question's, the
+    period stays, and the records the last answer showed (Bishopsgate's) go. `named` is the scope the
+    question names for itself as the caller resolved it (the company's buildings register knows names
+    this module cannot read off the text)."""
+    if not ws:
+        return ws
+    name, bid, several = _question_buildings(question or "", [])
+    if not name and named and named.get("building_name"):
+        name, bid = str(named["building_name"]), (str(named["building_id"]) if named.get("building_id") else None)
+    code = _code(question)
+    if not (name or code or several) or _same_building(ws, name, code, several):
+        return ws
+    out = {k: v for k, v in ws.items() if k not in ("entities", "work_orders", "last_mentioned", "buildings")}
+    out.update(building_name=name, building_id=bid, building_code=code)
+    if several:
+        out["buildings"] = several
+    return out
 
 
 def _code(text: str | None) -> str | None:
@@ -317,6 +372,55 @@ def _same_building(ws: dict[str, Any], name: str | None, code: str | None, sever
     return not verdicts or any(verdicts)
 
 
+#: Where a row names each kind of record: (name keys, code keys, id keys).
+_ENTITY_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
+    "buildings": (("building_name", "building"), ("building_code",), ("building_id",)),
+    "vendors": (("vendor_name", "vendor", "trading_name"), ("vendor_code",), ("vendor_id",)),
+    "assets": (("asset_name", "asset"), ("asset_code", "asset_tag"), ("asset_id",)),
+}
+MAX_ENTITIES = 30
+
+
+def entities(tools: list | None, answer: str) -> dict[str, list[dict[str, str]]]:
+    """The records this answer showed, verified (Workstream A4, 11 Nov 2026): each building, vendor and
+    asset that a tool returned AND the answer names, with its code and id from the row - never a name
+    read off the answer alone. What "those vendors" means on the next turn."""
+    import json as _json
+
+    from .evidence import _rows
+
+    a = (answer or "").lower()
+    out: dict[str, list[dict[str, str]]] = {k: [] for k in _ENTITY_FIELDS}
+    seen: set[tuple[str, str]] = set()
+    for tc in tools or []:
+        if not isinstance(tc, dict):
+            continue
+        output = tc.get("output")
+        if isinstance(output, str) and output.strip().startswith(("{", "[")):
+            try:
+                output = _json.loads(output)
+            except ValueError:
+                continue
+        for row in (_rows(output) or [])[:2000]:
+            for kind, (names, codes, ids) in _ENTITY_FIELDS.items():
+                if len(out[kind]) >= MAX_ENTITIES:
+                    continue
+                name = next((str(row[k]).strip() for k in names if isinstance(row.get(k), str) and row[k].strip()), "")
+                code = next((str(row[k]).strip() for k in codes if row.get(k) not in (None, "")), "")
+                if not (name or code):
+                    continue
+                if not ((code and code.lower() in a) or (len(name) >= 3 and name.lower() in a)):
+                    continue
+                key = (kind, (code or name).lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                ent = {k: v for k, v in (("name", name), ("code", code),
+                                          ("id", next((str(row[k]) for k in ids if row.get(k) not in (None, "")), ""))) if v}
+                out[kind].append(ent)
+    return out
+
+
 def describe(ws: dict[str, Any] | None) -> str:
     if not ws:
         return ""
@@ -331,6 +435,14 @@ def describe(ws: dict[str, Any] | None) -> str:
     if ws.get("work_orders"):
         wos = ws["work_orders"]
         parts.append(f"work orders named so far: {', '.join(wos[:20])}" + (f" and {len(wos) - 20} more" if len(wos) > 20 else ""))
+    ents = ws.get("entities") or {}
+    for kind in ("vendors", "assets"):
+        shown = [e.get("name") or e.get("code") for e in ents.get(kind) or [] if e.get("name") or e.get("code")]
+        if shown:
+            parts.append(f"{kind} the last answer showed: {', '.join(shown[:20])}" + (f" and {len(shown) - 20} more" if len(shown) > 20 else ""))
+    if not b and not ws.get("buildings") and ents.get("buildings"):
+        names = [e.get("name") or e.get("code") for e in ents["buildings"] if e.get("name") or e.get("code")]
+        parts.append("buildings the last answer showed: " + ", ".join(names[:20]))
     return "; ".join(parts)
 
 

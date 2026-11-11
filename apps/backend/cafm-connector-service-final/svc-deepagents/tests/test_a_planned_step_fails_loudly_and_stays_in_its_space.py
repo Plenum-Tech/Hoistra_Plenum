@@ -74,7 +74,13 @@ def test_the_planner_is_told_blocked_vendors_are_list_blocked_vendors():
 
 # ── a bad argument does not sink the step ────────────────────────────────────────────────
 
-def test_a_wrongly_typed_argument_is_coerced_or_dropped(monkeypatch):
+def test_an_argument_is_normalised_before_the_call_but_a_wrong_shape_is_never_retried_without_it(monkeypatch):
+    """Since 11 Nov 2026 (Workstream A2: never retry a validation error, never retry with changed
+    parameters) a value of the wrong shape fails the step; it used to be dropped and the call made
+    again. A single code for a list, and a name the tool does not take, are still put right BEFORE
+    the one call - and the plan's arguments are checked when it is made (planner.validate)."""
+    from pydantic import ValidationError
+
     from src.agents import thread_scope
 
     seen = []
@@ -85,13 +91,16 @@ def test_a_wrongly_typed_argument_is_coerced_or_dropped(monkeypatch):
 
     monkeypatch.setattr(thread_scope.work_order_blockers, "coroutine", fake_body)
     out = asyncio.run(_orch()._run_planned_tool(
-        "work_order_blockers", {"building_name": "Bishopsgate Tower", "work_orders": "WO-1", "status": "open",
-                                "period": {"label": "this month"}}))
+        "work_order_blockers", {"building_name": "Bishopsgate Tower", "work_orders": "WO-1", "status": "open"}))
     assert out == {"ok": True}
     assert seen[-1]["work_orders"] == ["WO-1"], "a single code becomes a one-item list"
-    assert "status" not in seen[-1], "an argument the tool does not take is dropped"
-    assert "period" not in seen[-1], "a value of the wrong shape is dropped, not fatal"
+    assert "status" not in seen[-1], "an argument the tool does not take is not sent"
     assert seen[-1]["building_name"] == "Bishopsgate Tower"
+    calls = len(seen)
+    with pytest.raises(ValidationError):
+        asyncio.run(_orch()._run_planned_tool(
+            "work_order_blockers", {"building_name": "Bishopsgate Tower", "period": {"label": "this month"}}))
+    assert len(seen) == calls, "the call is not made again without the bad argument"
 
 
 def test_a_failed_step_is_logged_with_its_tool_and_error(monkeypatch):
@@ -177,19 +186,18 @@ async def _no_tool(*a):
     raise AssertionError("no tool step")
 
 
-def test_an_engine_step_that_read_no_records_is_asked_again(monkeypatch):
+def test_an_engine_step_that_read_no_records_is_not_asked_again_in_other_words(monkeypatch):
+    """It was asked once more with READ_THE_RECORDS appended - a retry with changed parameters,
+    which Workstream A2 (11 Nov 2026) rules out. It is a failed step the answer names."""
     asks = []
 
     async def run_engine(engine, ask, on_ev):
         asks.append(ask)
-        if len(asks) == 1:
-            return "Plan: identify the live work-order and building fields.", []
-        return "Bishopsgate Tower: 11 overdue.", [{"tool": "work_order_blockers", "output": {"ok": True}}]
+        return "Plan: identify the live work-order and building fields.", []
 
     res = asyncio.run(planner.execute(_engine_plan(), run_engine=run_engine, run_tool=_no_tool))
-    assert len(asks) == 2 and planner.READ_THE_RECORDS in asks[1]
-    assert res["s2"]["ok"] is True and res["s2"]["output"] == "Bishopsgate Tower: 11 overdue."
-    assert res["s2"]["tool_calls"]
+    assert len(asks) == 1
+    assert res["s2"]["ok"] is False and res["s2"]["status"] == "tool_failed"
 
 
 def test_an_engine_step_that_still_read_nothing_is_a_failed_step(monkeypatch):

@@ -83,7 +83,8 @@ def test_the_turn_scope_is_the_threads_on_a_follow_up_and_the_questions_otherwis
     o = O.__new__(O)
 
     async def q_scope(self, question):
-        return {"building_name": "Bishopsgate Tower"}
+        # The building the question itself names, as the buildings register would resolve it.
+        return {"building_name": "Bishopsgate Tower"} if "bishopsgate" in question.lower() else None
 
     o._question_scope = q_scope.__get__(o)
 

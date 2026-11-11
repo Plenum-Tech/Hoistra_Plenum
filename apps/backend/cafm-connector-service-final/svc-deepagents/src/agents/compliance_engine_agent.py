@@ -27,10 +27,10 @@ import re
 import uuid
 from typing import Any
 
-import httpx
 import structlog
 from langchain_core.tools import tool
 
+from .evidence import http_failure
 from ..config import settings
 from ..http_client import request as _request
 from . import name_match
@@ -47,17 +47,9 @@ def _base() -> str:
 
 
 def _err(exc: Exception, op: str) -> dict:
-    if isinstance(exc, httpx.HTTPStatusError):
-        body = exc.response.text or ""
-        log.error(
-            "compliance_engine.http_error",
-            operation=op,
-            status_code=exc.response.status_code,
-            body=body[:2000],
-        )
-        return {"error": body[:2000], "status_code": exc.response.status_code}
-    log.error("compliance_engine.error", operation=op, error=str(exc), exc_info=True)
-    return {"error": str(exc)[:2000]}
+    # Workstream A3 (11 Nov 2026): the service's response body and the exception go to the log;
+    # the model gets a failure record in business words (agents/evidence.py), never the raw text.
+    return http_failure(exc, service="compliance", op=op)
 
 
 # ---------------------------------------------------------------------------------------------

@@ -135,7 +135,10 @@ def test_a_failed_step_is_a_fact_for_the_synthesis_not_the_end_of_the_turn(trace
         return await planner.execute(plan, run_engine=run_engine, run_tool=run_tool), trace.current()
 
     results, t = asyncio.run(run())
-    assert not results["s1"]["ok"] and results["s1"]["error"] == "ops-intel timeout"
+    # The writer gets the failure in business words (Workstream A3, 11 Nov 2026); the trace keeps the cause.
+    assert not results["s1"]["ok"] and results["s1"]["status"] == "tool_failed"
+    assert results["s1"]["error"] == "The lookup took too long and was stopped."
+    assert results["s1"]["cause"] == "ops-intel timeout"
     step = next(s for s in t.spans if s.kind == "step")
     assert not step.ok and step.error == "ops-intel timeout"
 

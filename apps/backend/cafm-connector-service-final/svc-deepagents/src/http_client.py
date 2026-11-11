@@ -102,12 +102,30 @@ def _breaker(service: str) -> _CircuitBreaker:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _is_transient(exc: BaseException) -> bool:
-    """True for errors that are worth retrying: transport failures and 5xx responses."""
+    """True for errors that are worth retrying, with the same request: transport failures (a timeout,
+    a dropped connection), 5xx responses and 429 (rate limited). Never an authorisation (401/403) or a
+    validation error (400/404/409/422): asking again cannot change those answers (Workstream A2)."""
     if isinstance(exc, httpx.TransportError):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
+        return exc.response.status_code >= 500 or exc.response.status_code == 429
     return False
+
+
+def _retry_span(service: str, method: str, path: str, max_attempts: int):
+    """tenacity's before_sleep: the failed attempt as a span on the turn's trace (agents/trace.py)."""
+    def note(state: Any) -> None:
+        try:
+            from .agents import trace as _trace
+
+            exc = state.outcome.exception() if state.outcome is not None else None
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            why = (f"HTTP {code}" if code else type(exc).__name__) if exc is not None else None
+            wait = getattr(getattr(state, "next_action", None), "sleep", None)
+            _trace.on_retry(service, method, path, state.attempt_number, max_attempts, why, wait)
+        except Exception:  # noqa: BLE001 - the trace never costs the call
+            pass
+    return note
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -208,6 +226,10 @@ def catalogue_closed() -> frozenset[str] | None:
 class PageEngineOwnsThisTurn(RuntimeError):
     """Raised in place of a UDR read on a turn the router gave to one or more page engines."""
 
+    #: Guidance for the model, not a failure to say to the user: agents/evidence.py passes the whole
+    #: text on as `guidance` (Workstream A3, 11 Nov 2026).
+    for_model = True
+
     def __init__(self, engines: frozenset[str] | set[str]) -> None:
         self.engines = frozenset(engines)
         names = ", ".join(sorted(self.engines))
@@ -271,6 +293,7 @@ async def request(
         retry=retry_if_exception(_is_transient),
         stop=stop_after_attempt(max_attempts),
         wait=wait_exponential(multiplier=1, min=1, max=8),
+        before_sleep=_retry_span(service, method, path, max_attempts),
         reraise=True,
     ):
         with attempt:

@@ -84,7 +84,11 @@ def env(monkeypatch):
         return None
 
     async def llm(system, user, role):
-        return "Planner text: nine vendors are blocked." if role == "synthesise" else "{}"
+        if role == "synthesise":
+            return "Planner text: nine vendors are blocked."
+        if role.startswith("final_answer"):
+            return "Final: the records show the blocked vendors."
+        return "{}"
 
     async def ok_check(step, result):
         return True, ""
@@ -144,10 +148,13 @@ def test_a_failed_engine_falls_back_to_the_step_by_step_replay(env):
     assert all(a == out["answer"] for a, _ in env["answers"])
 
 
-def test_an_engine_with_no_dashboard_keeps_its_own_answer_and_panel(env):
+def test_an_engine_with_no_dashboard_keeps_its_own_path_and_panel(env):
+    """Since 11 Nov 2026 (Workstream A1) the engine's prose is a draft: with no analyst dashboard the
+    answer is the final answer step's, written from the engine's tool results - still on the
+    engine's own path, never the step-by-step replay."""
     env["state"]["structured"] = None
     out = _run(env, _turn(), [{"span_id": None, "mode": "model", "text": "eeee"}])
-    assert out["ok"] is True and out["answer"] == "Nine vendors are blocked."
+    assert out["ok"] is True and out["answer"] == "Final: the records show the blocked vendors."
     assert not any(c.get("tool") == "planner" for c in out["tool_calls"])
     assert all(a == out["answer"] for a, _ in env["answers"])
     assert _assistant_turns(env["sid"]) == [out["answer"]]

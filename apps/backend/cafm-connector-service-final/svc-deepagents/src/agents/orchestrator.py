@@ -52,6 +52,11 @@ from ..config import (
 from ..llm_factory import create_chat_model, friendly_openai_error
 from ..http_client import turn_catalogue_via_task as _turn_catalogue_via_task
 from ..http_client import turn_page_engines as _turn_page_engines
+from contextvars import ContextVar as _ContextVar
+
+#: The answer this turn follows, when it is a follow-up: the final answer step may quote its figures
+#: (agents/final_answer.py). Set where the conversation step reads it, seen by the engine task.
+_turn_previous: _ContextVar[str | None] = _ContextVar("orchestrator_turn_previous", default=None)
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
 from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
@@ -126,6 +131,9 @@ from .udr_hybrid_tools import (
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
 from ..services import chat_memories, chat_threads
 from . import cert_checks, cert_expiry, planner, spaces, thread_scope, trace
+from . import final_answer as final_step  # the module; `final_answer` is a local name in the loop
+from . import evidence as answer_evidence
+from . import plan_scope
 from .session_workspace import (
     last_working_tool,
     ROUTE_UDR_INGEST,
@@ -998,7 +1006,7 @@ class DeepAgentOrchestrator:
         # A follow-up ("out of those...") carries the thread's working set as a hard filter: told to
         # the model, and set for the tools so one called without a building or period fills them
         # from it instead of reading the whole estate (agents/thread_scope.py).
-        ws = await chat_threads.working_set(session_id) if thread_scope.is_followup(user_message) else None
+        ws = thread_scope.carry(await chat_threads.working_set(session_id), user_message, await self._question_scope(user_message)) if thread_scope.continues(user_message) else None
         # A question that names its own building scopes the tools to it too, so one called without
         # a building reads that building, not the portfolio (2 Nov 2026). Told to the model only
         # as the working set of a follow-up, as before.
@@ -3678,7 +3686,7 @@ class DeepAgentOrchestrator:
         if keep and thread_scope.active_scope.get() is not None:
             return
         try:
-            ws = await chat_threads.working_set(session_id) if thread_scope.is_followup(user_message) else None
+            ws = thread_scope.carry(await chat_threads.working_set(session_id), user_message, await self._question_scope(user_message)) if thread_scope.continues(user_message) else None
             thread_scope.active_scope.set(ws or await self._question_scope(user_message))
         except Exception as exc:  # noqa: BLE001 - no scope, as before, rather than no answer
             log.warning("orchestrator.turn_scope_failed", session_id=session_id, error=str(exc)[:200])
@@ -4498,7 +4506,7 @@ class DeepAgentOrchestrator:
         if domain_chooser.is_general(user_message, extra_context):
             out["kind"] = "choose"
             return out
-        if prev_block and (thread_scope.is_followup(user_message) or domain_chooser.refers_back(user_message)):
+        if prev_block and thread_scope.continues(user_message):
             out.update(kind="followup", context=joined + prev_block, previous_answer=prev_answer[-6000:],
                        router_context=joined + "PREVIOUS QUESTION: " + str((prev or {}).get("question") or "")[:300])
         return out
@@ -6916,14 +6924,27 @@ class DeepAgentOrchestrator:
             tool_calls=list(shortcut.get("tool_calls") or []),
         )
 
-    async def _planner_llm(self, system: str, user: str, role: str) -> str:
+    async def _planner_llm(self, system: str, user: str, role: str, on_delta: Any = None) -> str:
         """One model call for the planner or the synthesis: recorded as an activity exchange and
-        on the cost ledger, so it is a span with prompt, output, tokens and dollars."""
+        on the cost ledger, so it is a span with prompt, output, tokens and dollars.
+
+        on_delta(text), when given, receives the answer as the model writes it (the final answer
+        step streams this way, so the chat paints the checked answer, not a sub-agent's draft)."""
         from langchain_core.messages import HumanMessage as _H, SystemMessage as _S
 
         t0 = time.perf_counter()
         try:
-            msg = await self._llm.ainvoke([_S(content=system), _H(content=user)])
+            if on_delta is None:
+                msg = await self._llm.ainvoke([_S(content=system), _H(content=user)])
+            else:
+                msg = None
+                async for chunk in self._llm.astream([_S(content=system), _H(content=user)]):
+                    msg = chunk if msg is None else msg + chunk
+                    ev = answer_delta_event((chunk, {}), "orchestrator")
+                    if ev is not None:
+                        await on_delta(ev["text"])
+                if msg is None:
+                    raise ValueError("the model returned nothing")
         except asyncio.CancelledError:
             # Abandoned by a timeout (the layout's): the call still ran and was billed, and what
             # it cost is unknown, so the turn's cost says it is incomplete rather than leaving it out.
@@ -6971,6 +6992,16 @@ class DeepAgentOrchestrator:
         here = spaces.current()
         return [(engine, tools) for engine, tools in PHASE2_ENGINE_TOOLS.items() if spaces.allows(here, engine)]
 
+    def _planner_schemas(self) -> dict[str, dict[str, Any]]:
+        """Each plannable tool's argument schema, so a plan's arguments are checked when it is made
+        (agents/planner.py validate; Workstream A2)."""
+        out: dict[str, dict[str, Any]] = {}
+        for _engine, tools in self._space_engine_tools():
+            for t in tools:
+                if t.name not in out:
+                    out[t.name] = dict(getattr(t, "args", None) or {})
+        return out
+
     def _planner_tools(self) -> dict[str, str]:
         """The tools a plan step may name: every engine's read tools in this space, one line each."""
         out: dict[str, str] = {}
@@ -6996,7 +7027,7 @@ class DeepAgentOrchestrator:
         ctx = planner.replan_context(question, plan, findings, results)
         if ws:
             ctx += "WORKING SET (hard filter): " + thread_scope.describe(ws) + "\n"
-        new_plan, why = await planner.make_plan(question, context=ctx, tools=self._planner_tools(), llm=self._planner_llm)
+        new_plan, why = await planner.make_plan(question, context=ctx, tools=self._planner_tools(), llm=self._planner_llm, schemas=self._planner_schemas())
         if new_plan is None:
             log.warning("planner.replan_rejected", reason=why)
         return new_plan
@@ -7017,6 +7048,36 @@ class DeepAgentOrchestrator:
             out.append({"tool": "compliance_response", "input": {}, "output": response})
         return out
 
+    async def _final_answer(self, question: str, draft: str, *sources: list[dict[str, Any]] | None,
+                            on_delta: Any = None) -> tuple[str, dict[str, Any]]:
+        """The answer the user reads, written from what the tools returned with the sub-agent's text
+        as a draft beside it (agents/final_answer.py, Workstream A1). `sources` are the turn's tool
+        calls as each path has them; on_delta(text) streams the first writing to the chat."""
+        results, drafts = final_step.gather(*sources, question=question)
+
+        async def first(system: str, user: str, role: str) -> str:
+            return await self._planner_llm(system, user, role, on_delta=on_delta)
+
+        ws = thread_scope.active_scope.get()
+        return await final_step.write(question, str(draft or ""), results=results, drafts=drafts,
+                                        llm=self._planner_llm, first=first if on_delta is not None else None,
+                                        previous=_turn_previous.get(), scope=thread_scope.describe(ws) if ws else "")
+
+    @staticmethod
+    def _planned_claims(answer: str, question: str, results: dict[str, dict[str, Any]],
+                        plan: dict[str, Any] | None = None) -> list[str]:
+        """What a planned answer gets wrong against its step results: the planner's own checks, plus
+        (Workstream A3) a failed lookup worded as "none found", a refusal not said as one, technical
+        error text, and a conflict between steps given one-sided, and (A4) the form the lookups call
+        for and every step's part of the question answered or named as not answered."""
+        from . import answer_spec, evidence
+
+        steps = {k: v for k, v in results.items() if k not in ("__plan__", "previous_answer")}
+        return [*planner.verify_claims(answer, question, results), *evidence.state_mismatches(answer, steps),
+                *evidence.conflict_mismatches(answer, evidence.conflicts(steps)),
+                *answer_spec.checks(answer, answer_spec.form_for(steps),
+                                    answer_spec.parts_of(question.split("\n\n")[0], plan))]
+
     async def _write_planned_answer(self, question: str, plan: dict[str, Any], results: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         """Synthesise, check the claims against the results (one rewrite when they contradict), then
         check the figures. Returns (answer, figure check)."""
@@ -7024,8 +7085,11 @@ class DeepAgentOrchestrator:
         try:
             answer = await planner.synthesise(question, plan, results, self._planner_llm)
         except Exception as exc:  # noqa: BLE001
-            return "I could not write the answer from the step results: " + str(exc).splitlines()[0][:200], {"ok": True, "unmatched": [], "figures_checked": 0}
-        claims = planner.verify_claims(answer, question, results)
+            # Was "I could not write the answer from the step results: " + the exception's text,
+            # in front of the person (Workstream A3, 11 Nov 2026). The cause goes to the log.
+            log.warning("planner.synthesis_failed", error=str(exc)[:300])
+            return final_step.UNWRITTEN, {"ok": True, "unmatched": [], "figures_checked": 0}
+        claims = self._planned_claims(answer, question, results, plan)
         rid = trace.on_step_open("verify", "verify claims", {"claims_checked": True})
         trace.on_step_close(rid, {"contradictions": claims}, ok=not claims, error="; ".join(claims)[:300] if claims else None)
         if claims:
@@ -7046,7 +7110,7 @@ class DeepAgentOrchestrator:
                     ask += planner.REWRITE_NOTE + "\n".join("- " + c for c in claims)
                 second = await planner.synthesise(ask, plan, results, self._planner_llm)
                 second_check = planner.verify(second, results)
-                worse = len(planner.verify_claims(second, question, results)) > len(planner.verify_claims(answer, question, results))
+                worse = len(self._planned_claims(second, question, results, plan)) > len(self._planned_claims(answer, question, results, plan))
                 if not worse and len(second_check["unmatched"]) <= len(check["unmatched"]):
                     answer, check = second, second_check
             except Exception as exc:  # noqa: BLE001 - the first draft stands
@@ -7095,10 +7159,13 @@ class DeepAgentOrchestrator:
                     try:
                         return await t.ainvoke(clean)
                     except ValidationError as exc:
-                        # A value of the wrong shape: run without it rather than lose the step.
-                        bad = {str(e.get("loc", [""])[0]) for e in exc.errors()}
-                        log.warning("planner.tool_args_dropped", tool=name, dropped=sorted(bad))
-                        return await t.ainvoke({k: v for k, v in clean.items() if k not in bad})
+                        # Until 11 Nov 2026 the call was made again with the bad arguments dropped - a
+                        # retry with changed parameters, which reads something other than what was
+                        # asked. Arguments are now checked when the plan is made (planner.validate);
+                        # one that still fails here fails the step, and the answer says so (A2).
+                        bad = sorted({str(e.get("loc", [""])[0]) for e in exc.errors()})
+                        log.warning("planner.tool_args_refused", tool=name, arguments=bad)
+                        raise
         raise ValueError(f"unknown tool {name} (or not part of this space)")
 
     async def _run_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], *,
@@ -7125,7 +7192,7 @@ class DeepAgentOrchestrator:
         results = await planner.execute(
             plan, run_engine=run_engine, run_tool=self._run_planned_tool,
             scope_hint=thread_scope.describe(ws) if ws else "", given=(previous or "")[-3500:], on_event=emit,
-            question=user_message, replan=self._replan_after_gates, check=self._check_step)
+            question=user_message, replan=self._replan_after_gates, check=self._check_step, scope=plan_scope.build())
         plan = (results.get("__plan__") or {}).get("output") or plan
         tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
         if previous:
@@ -7134,7 +7201,13 @@ class DeepAgentOrchestrator:
             results = {"previous_answer": {"output": previous, "tool_calls": [], "ok": True, "error": None}, **results}
         answer, check = await self._write_planned_answer(user_message, plan, results)
         tool_calls = tool_calls + self._planned_cards(user_message, plan, results, answer)
-        result = {"session_id": sid, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
+        # success / partial / failure, recorded with the turn (Workstream A3, 11 Nov 2026). A turn whose
+        # every step failed is still an answer - it says what failed and what to do - so REST callers
+        # get it as one, not a 500 with a generic message; `outcome` is how they tell.
+        outcome = answer_evidence.outcome({k: v for k, v in results.items() if k not in ("__plan__", "previous_answer")})
+        result = {"session_id": sid, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None,
+                  "interrupted": False, "outcome": outcome,
+                  "answer_source": "planner",
                   "route_metadata": {"intent": "planned", "domain": "orchestrator", "steps": [s["target"] for s in plan["steps"]]}}
         attach_route_to_result(result, sid, intent="planned", domain="orchestrator")
         return result
@@ -7181,7 +7254,7 @@ class DeepAgentOrchestrator:
         rules = "\n".join("- " + " ".join(str(c.get("text") or "").split()) for c in corrections if c.get("text"))
         if replan:
             ctx = "CORRECTIONS (constraints on the plan):\n" + rules + "\n"
-            new_plan, why = await planner.make_plan(question, context=ctx, tools=self._planner_tools(), llm=self._planner_llm)
+            new_plan, why = await planner.make_plan(question, context=ctx, tools=self._planner_tools(), llm=self._planner_llm, schemas=self._planner_schemas())
             if new_plan is not None:
                 plan = new_plan
                 plan["source"] = "rerun"
@@ -7270,7 +7343,7 @@ class DeepAgentOrchestrator:
             if engine_out is None and loop_out is None:
                 results = await planner.execute(plan, run_engine=run_engine, run_tool=self._run_planned_tool,
                                                 scope_hint=thread_scope.describe(ws) if ws else "",
-                                                question=question, replan=self._replan_after_gates, check=self._check_step)
+                                                question=question, replan=self._replan_after_gates, check=self._check_step, scope=plan_scope.build())
         finally:
             _oq.pinned_filters.reset(_tok)
         if loop_out is not None:
@@ -7292,7 +7365,10 @@ class DeepAgentOrchestrator:
             tool_calls = tool_calls + self._planned_cards(question, plan, results, answer)
             domain = "orchestrator"
         new_turn_id = activity_log.current_turn()
+        source = ((loop_out or {}).get("answer_source") if loop_out is not None
+                  else (engine_out or {}).get("answer_source") if engine_out is not None else "planner")
         result = {"session_id": session_id, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
+                  "answer_source": source,
                   "route_metadata": {"intent": "rerun", "domain": domain, "rerun_of": turn.get("turn_id"), "steps": [s["target"] for s in plan["steps"]]}}
         attach_route_to_result(result, session_id, intent="rerun", domain=domain)
         # attach_route_to_result can add the cards built from the engine's data tools (a wo_engine
@@ -7320,6 +7396,7 @@ class DeepAgentOrchestrator:
         energy answer with no run on the Hoist Traces page)."""
         answer = str((result or {}).get("answer") or "")
         tool_calls = list((result or {}).get("tool_calls") or [])
+        final_step.audit(answer, tool_calls, (result or {}).get("answer_source"), where="stream close")
         activity_log.fire(
             agent="orchestrator", stage="turn", direction="output", summary=answer[:300],
             payload={"answer": answer, "tool_calls": tool_calls, "mode": "stream",
@@ -7711,6 +7788,9 @@ class DeepAgentOrchestrator:
             tools=tool_names,
         )
         inner_tool_calls: list[dict[str, Any]] = []
+        # Who wrote the answer that leaves here (agents/final_answer.py): set by the analyst or template
+        # that wrote it, else by the final answer step.
+        answer_source: str | None = None
 
         async def _live(event: dict[str, Any]) -> None:
             if on_zone is None:
@@ -7720,6 +7800,10 @@ class DeepAgentOrchestrator:
             # different answers on screen in one turn. Every other engine's sub-agent text IS
             # the answer (or the draft the vendor composer works from), so it streams.
             if engine == "compliance" and event.get("type") == "answer_delta":
+                return
+            # Since 11 Nov 2026 no engine's prose is the answer (Workstream A1): it is the draft the
+            # final answer step writes from, so it is not painted as the answer either.
+            if event.get("type") == "answer_delta":
                 return
             await on_zone(self._EVENT_ZONE, event)
 
@@ -7745,12 +7829,16 @@ class DeepAgentOrchestrator:
                 error=err,
                 exc_info=True,
             )
+            # The user reads what happened and what to do; the exception's text is in the log above
+            # (Workstream A3, 11 Nov 2026). The answer was "" and the error this text.
+            said = answer_evidence.user_message(exc)
             failed = {
                 "session_id": session_id,
-                "answer": "",
+                "answer": said,
+                "answer_source": "engine_error",
                 "tool_calls": [],
                 "success": False,
-                "error": err,
+                "error": said,
                 "interrupted": False,
                 "interrupt_payload": None,
             }
@@ -7863,6 +7951,7 @@ class DeepAgentOrchestrator:
                 on_zone=on_zone,
             )
             if structured is not None:
+                answer_source = "compliance_analyst"
                 answer = (
                     self._compliance_plain_text(structured)
                     or str(structured.get("narrative") or "").strip()
@@ -7903,6 +7992,7 @@ class DeepAgentOrchestrator:
             fallback = build_deterministic_compliance_answer(user_message, inner_tool_calls)
             if fallback:
                 answer = fallback
+                answer_source = "deterministic"
             log.warning(
                 "orchestrator.compliance.fell_back_to_template",
                 session_id=session_id,
@@ -7990,9 +8080,10 @@ class DeepAgentOrchestrator:
         # prose answer stands. A worse answer beats no answer, and half a card set beats
         # neither.
         if engine == "contract_performance":
+            prose = str(answer or "")
             answer, inner_tool_calls, _meta = await contract_answer.compose(
                 question=user_message,
-                answer=str(answer or ""),
+                answer=prose,
                 tool_calls=inner_tool_calls,
                 api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(),
                 model=self._contract_analyst_model(),
@@ -8000,6 +8091,36 @@ class DeepAgentOrchestrator:
                 cost=(llm_cost.current().log_summary(user_message)
                       if llm_cost.current() else None),
             )
+            if str(answer or "") != prose:
+                answer_source = "contract_analyst"  # rewritten from the rows and grounded against them
+
+        # Workstream A1 (11 Nov 2026): the engine's prose is a draft. Unless one of the
+        # orchestrator's own analysts wrote the answer from the rows above, the final answer step
+        # writes it from what the engine's tools returned.
+        #
+        # An engine that failed inside run_verbose answers with a bare JSON error. Writing an answer
+        # over it would hide the failure from every caller that checks for it (a re-run falls back
+        # to the step-by-step replay on it), so it is left as it is and named for what it is.
+        from .rerun import is_engine_error as _is_engine_error
+
+        engine_failed: str | None = None
+        if answer_source is None and str(answer or "").strip().startswith("{") and _is_engine_error(answer):
+            answer_source = "engine_error"
+            # Shown as what happened and what to do, never the JSON (Workstream A3, 11 Nov 2026).
+            log.warning("orchestrator.phase2_engine.answered_error", engine=engine, answer=str(answer)[:300])
+            env = answer_evidence.classify(engine, answer)
+            engine_failed = answer = f"{env['message']} {env['next_step']}"
+        if answer_source is None:
+            if on_zone is not None:
+                await on_zone(self._EVENT_ZONE, {
+                    "type": "reasoning", "label": "Answer", "domain": "orchestrator",
+                    "text": "Writing the answer from what the tools returned, then checking every figure against them."})
+            async def _delta(text: str) -> None:
+                await on_zone(self._EVENT_ZONE, {"type": "answer_delta", "text": text, "domain": engine})
+
+            answer, _report = await self._final_answer(user_message, str(answer or ""), inner_tool_calls,
+                                                       on_delta=_delta if on_zone is not None else None)
+            answer_source = _report["source"]
 
         # Parse synthetic tool record so FE route_metadata shows the engine
         out = {
@@ -8019,10 +8140,11 @@ class DeepAgentOrchestrator:
                     "output": {"bound_tools": tool_names, "tool_count": len(tool_names)},
                 },
             ],
-            "success": True,
-            "error": None,
+            "success": engine_failed is None,
+            "error": engine_failed,
             "interrupted": False,
             "interrupt_payload": None,
+            "answer_source": answer_source,
         }
         log.info(
             "orchestrator.phase2_engine.done",
@@ -8087,7 +8209,7 @@ class DeepAgentOrchestrator:
                 "answer": "",
                 "tool_calls": [],
                 "success": False,
-                "error": err,
+                "error": answer_evidence.user_message(exc),
                 "interrupted": False,
                 "interrupt_payload": None,
             }
@@ -8110,10 +8232,12 @@ class DeepAgentOrchestrator:
         # the contract sub-agent through `task` whenever the keyword table missed. Composing
         # here as well is what stops the same question answering in cards or in prose depending
         # on which words it happened to contain. No vendor rows in the turn: nothing happens.
+        answer_source: str | None = None
         if interrupt_payload is None:
+            prose = str(answer or "")
             answer, tool_calls, _ = await contract_answer.compose(
                 question=_latest_user_message(input_),
-                answer=str(answer or ""),
+                answer=prose,
                 tool_calls=tool_calls,
                 api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(),
                 model=self._contract_analyst_model(),
@@ -8121,6 +8245,18 @@ class DeepAgentOrchestrator:
                 cost=(llm_cost.current().log_summary(_latest_user_message(input_))
                       if llm_cost.current() else None),
             )
+            if str(answer or "") != prose:
+                answer_source = "contract_analyst"
+            elif final_step.has_evidence(tool_calls):
+                # Workstream A1 (11 Nov 2026): the loop's last message is a draft once it has read
+                # records; the answer is written from the tool results (see stream()).
+                answer, _report = await self._final_answer(_latest_user_message(input_), prose, tool_calls,
+                                                           trace.tool_outputs())
+                answer_source = _report["source"]
+                openui = None
+            else:
+                answer_source = "orchestrator_direct"
+            final_step.audit(str(answer or ""), tool_calls, answer_source, where="invoke")
         if has_udr_tool_calls(tool_calls) and interrupt_payload is None:
             answer, _ = await evaluate_udr_response(
                 user_message=_latest_user_message(input_),
@@ -8143,6 +8279,7 @@ class DeepAgentOrchestrator:
             "error": None,
             "interrupted": interrupt_payload is not None,
             "interrupt_payload": interrupt_payload,
+            "answer_source": answer_source,
         }
         domain = "meta"
         tool_name = ""
@@ -8393,7 +8530,7 @@ class DeepAgentOrchestrator:
             if not support and planner.is_multi_part(user_message):
                 plan, why = await planner.make_plan(
                     user_message, context=self._plan_context(step, extra_context),
-                    tools=self._planner_tools(), llm=self._planner_llm)
+                    tools=self._planner_tools(), llm=self._planner_llm, schemas=self._planner_schemas())
                 if plan is not None:
                     trace.on_plan(plan, source="planner")
                     return await self._run_planned_turn(
@@ -8838,6 +8975,9 @@ class DeepAgentOrchestrator:
                 tc.get("tool") == "compliance_response"
                 for tc in (shortcut.get("tool_calls") or [])
             )
+            # The compliance shortcut is the orchestrator's own analyst over the register; every
+            # other shortcut is text built in code from records (agents/final_answer.py).
+            shortcut.setdefault("answer_source", "compliance_analyst" if has_analysis else "deterministic")
             if has_analysis:
                 if shortcut.get("plan_reason") and self._PLAN_ZONE not in streamed_zones:
                     yield {
@@ -8875,6 +9015,7 @@ class DeepAgentOrchestrator:
         _turn_page_engines.set(frozenset())
         _turn_catalogue_via_task.set(False)
         chat_memories.turn_recall.set("")
+        _turn_previous.set(None)
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the
@@ -8884,6 +9025,7 @@ class DeepAgentOrchestrator:
             llm_cost.begin_turn(sid)
             step = await self._conversation_step(sid, user_message, extra_context, session_state)
             user_message, extra_context = step["message"], step["context"]
+            _turn_previous.set(step.get("previous_answer") or None)
             msg_l = " ".join((user_message or "").strip().lower().split())
             if step["kind"] == "rewritten":
                 yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
@@ -8949,7 +9091,7 @@ class DeepAgentOrchestrator:
             # the one-step plan, so every run says why it went where it went.
             if not support and planner.is_multi_part(user_message):
                 plan_ctx = self._plan_context(step, extra_context)
-                plan, why = await planner.make_plan(user_message, context=plan_ctx, tools=self._planner_tools(), llm=self._planner_llm)
+                plan, why = await planner.make_plan(user_message, context=plan_ctx, tools=self._planner_tools(), llm=self._planner_llm, schemas=self._planner_schemas())
                 if plan is not None:
                     trace.on_plan(plan, source="planner")
                     async for ev in self._stream_planned_turn(sid, user_message, plan, _stream_t0,
@@ -9137,7 +9279,9 @@ class DeepAgentOrchestrator:
                     # run: a sub-agent a `task` call spawned inherits this run as its parent
                     # and its model runs surface here too, nested deeper — its drafts are not
                     # this answer. The interface shows deltas as a draft the final replaces.
-                    if len(event.get("parent_ids") or []) <= 2:
+                    # Once the loop has read records, what it writes is the draft the final
+                    # answer step works from (Workstream A1, 11 Nov 2026), so it stops painting.
+                    if len(event.get("parent_ids") or []) <= 2 and not final_step.has_evidence(streamed_tool_calls):
                         delta = answer_delta_event(
                             event.get("data", {}).get("chunk"), last_domain or "orchestrator"
                         )
@@ -9171,12 +9315,39 @@ class DeepAgentOrchestrator:
                 ok=False, error=err, payload={"tool_calls": streamed_tool_calls},
                 latency_ms=(time.perf_counter() - _stream_t0) * 1000,
             )
-            yield {"type": "error", "error": err, "session_id": sid}
+            # What happened and what to do; the exception's text is logged above (Workstream A3).
+            yield {"type": "error", "error": answer_evidence.user_message(exc), "session_id": sid}
             return
 
         # The loop writes its answer as OpenUI (the chat drew it live from the deltas). From here
         # on `answer` is its Markdown rendition, and the program rides the tool calls as a card.
         final_answer, openui = openui_view.split_answer(final_answer)
+        # Workstream A1 (11 Nov 2026): when the loop read records - itself or through a sub-agent's
+        # `task` - its last message is a draft; the final answer step writes what the user reads from
+        # the tool results. The loop's own layout goes with its draft: the presenter lays out the
+        # written answer instead.
+        if final_step.has_evidence(streamed_tool_calls):
+            yield {"type": "reasoning", "label": "Answer", "domain": "orchestrator", "session_id": sid,
+                   "text": "Writing the answer from what the tools returned, then checking every figure against them."}
+            deltas: asyncio.Queue[str] = asyncio.Queue()
+
+            async def _delta(text: str) -> None:
+                await deltas.put(text)
+
+            writing = asyncio.create_task(self._final_answer(
+                user_message, final_answer, streamed_tool_calls, trace.tool_outputs(), on_delta=_delta))
+            while not writing.done() or not deltas.empty():
+                getter = asyncio.create_task(deltas.get())
+                done, _ = await asyncio.wait({writing, getter}, return_when=asyncio.FIRST_COMPLETED)
+                if getter in done:
+                    yield {"type": "answer_delta", "text": getter.result(), "domain": last_domain or "orchestrator"}
+                else:
+                    getter.cancel()
+            final_answer, _report = await writing
+            answer_source = _report["source"]
+            openui = None
+        else:
+            answer_source = "orchestrator_direct"
         if has_udr_tool_calls(streamed_tool_calls):
             final_answer, _ = await evaluate_udr_response(
                 user_message=user_message,
@@ -9184,6 +9355,7 @@ class DeepAgentOrchestrator:
                 tool_calls=streamed_tool_calls,
                 llm=self._llm,
             )
+        final_step.audit(final_answer, streamed_tool_calls, answer_source, where="stream loop")
         log.info("orchestrator.stream.done", session_id=sid)
         activity_log.fire(
             agent="orchestrator", stage="turn", direction="output",

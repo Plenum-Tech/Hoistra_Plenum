@@ -10,11 +10,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 import structlog
 from langchain_core.tools import tool
 from sqlalchemy import text
 
+from .evidence import http_failure
 from .. import database
 from ..config import settings
 from ..http_client import PageEngineOwnsThisTurn, catalogue_closed, request as _request
@@ -285,11 +285,9 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
 
 
 def _err(exc: Exception, op: str) -> dict:
-    if isinstance(exc, httpx.HTTPStatusError):
-        log.error(f"udr.{op}.http_error", status=exc.response.status_code, body=exc.response.text[:300])
-        return {"error": exc.response.text[:300], "status_code": exc.response.status_code}
-    log.error(f"udr.{op}.error", error=str(exc)[:300])
-    return {"error": str(exc)[:300]}
+    # Workstream A3 (11 Nov 2026): the service's response body and the exception go to the log;
+    # the model gets a failure record in business words (agents/evidence.py), never the raw text.
+    return http_failure(exc, service="udr", op=op)
 
 
 # ── a name, however it is typed (29 Oct 2026) ─────────────────────────────────────────────────

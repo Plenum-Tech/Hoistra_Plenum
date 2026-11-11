@@ -32,6 +32,8 @@ from typing import Any, Awaitable, Callable
 
 import structlog
 
+from . import evidence
+
 log = structlog.get_logger(__name__)
 
 ENGINES: dict[str, str] = {
@@ -122,6 +124,11 @@ Rules:
 - Name the building, period, vendor and work order in EVERY ask that needs them. An engine handed a
   step that does not name them cannot see the question and can only ask back for them.
 - Keep the scope the question (and the working set) gives: never widen to other buildings or periods.
+- A tool's `args` use only the names listed after "Args:" in its catalogue line, with values of the right
+  type (a list where it takes several). A step that is refused for its arguments is not run.
+- To hand a later tool step the values an earlier step found, set its argument to "$<step id>.<field>",
+  e.g. {{"vendor_ids": "$s1.vendor_id"}}: every value of that field in the earlier step's rows is passed,
+  the later step depends on the earlier one, and the trace records where each value came from.
 - Never plan an action that changes data (create, approve, send, delete) - this is a read-only plan.
 - `answer_shape`: one line on how the final answer should be laid out.
 
@@ -209,8 +216,48 @@ def _catalogue_text(tools: dict[str, str]) -> tuple[str, str]:
     return eng, tl
 
 
-def validate(plan: Any, tools: dict[str, str]) -> tuple[dict[str, Any] | None, str | None]:
-    """The plan as the executor will run it, or why it was refused."""
+_REF = re.compile(r"^\$([A-Za-z]\w*)\.([A-Za-z_]\w*)$")
+_PY_TYPES: dict[str, tuple[type, ...]] = {"string": (str,), "integer": (int,), "number": (int, float),
+                                          "boolean": (bool,), "array": (list, tuple), "object": (dict,)}
+
+
+def _types_of(spec: Any) -> set[str]:
+    if not isinstance(spec, dict):
+        return set()
+    out = {spec["type"]} if isinstance(spec.get("type"), str) else set(spec.get("type") or [])
+    for alt in spec.get("anyOf") or spec.get("oneOf") or []:
+        out |= _types_of(alt)
+    return out
+
+
+def arg_problems(args: dict[str, Any], schema: dict[str, Any] | None) -> list[str]:
+    """What is wrong with a step's arguments for a tool whose argument schema is `schema` (a
+    LangChain tool's `.args`): a name it does not take, a value of the wrong type, a value outside
+    its choices. A "$sN.field" value is taken from an earlier step and checked when it is bound."""
+    if not schema:
+        return []
+    out = []
+    unknown = [k for k in args if k not in schema]
+    if unknown:
+        out.append(f"takes no argument {', '.join(unknown)} (it takes {', '.join(schema) or 'none'})")
+    for k, v in args.items():
+        spec = schema.get(k)
+        if spec is None or (isinstance(v, str) and _REF.match(v)) or v is None:
+            continue
+        types = _types_of(spec) - {"null"}
+        if types and not any(isinstance(v, _PY_TYPES.get(t, ())) and not (t in ("integer", "number") and isinstance(v, bool))
+                             for t in types):
+            if not ("array" in types and isinstance(v, (str, int, float))):  # one value for a list is made a list
+                out.append(f"argument {k} must be {' or '.join(sorted(types))}, not {type(v).__name__}")
+        enum = spec.get("enum") if isinstance(spec, dict) else None
+        if enum and isinstance(v, str) and v not in enum:
+            out.append(f"argument {k} must be one of {', '.join(map(str, enum))}, not {v!r}")
+    return out
+
+
+def validate(plan: Any, tools: dict[str, str], schemas: dict[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    """The plan as the executor will run it, or why it was refused. `schemas` ({tool: its argument
+    schema}) checks each tool step's arguments."""
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         return None, "plan is not an object with steps"
     steps = plan["steps"]
@@ -237,9 +284,22 @@ def validate(plan: Any, tools: dict[str, str]) -> tuple[dict[str, Any] | None, s
         ask = " ".join(str(s.get("ask") or "").split())
         if not ask:
             return None, f"step {sid}: no ask"
+        args = s.get("args") if isinstance(s.get("args"), dict) else None
+        if kind == "tool" and args:
+            # Workstream A2 (11 Nov 2026): a step's arguments are checked against the tool's own schema
+            # when the plan is made, and a value taken from an earlier step names that step. Until now
+            # a wrong argument was found when the tool refused it, and the step was retried without it.
+            for k, v in args.items():
+                m = _REF.match(v) if isinstance(v, str) else None
+                if m and m.group(1) not in ids:
+                    return None, f"step {sid}: argument {k} takes {v}, but {m.group(1)} is not an earlier step"
+                if m and m.group(1) not in deps:
+                    deps.append(m.group(1))
+            bad = arg_problems(args, (schemas or {}).get(target)) if schemas is not None else []
+            if bad:
+                return None, f"step {sid}: {target} " + "; ".join(bad)
         out.append({"id": sid, "kind": kind, "target": target, "ask": ask[:2000], "depends_on": deps,
-                    "why": " ".join(str(s.get("why") or "").split())[:300],
-                    "args": s.get("args") if isinstance(s.get("args"), dict) else None})
+                    "why": " ".join(str(s.get("why") or "").split())[:300], "args": args})
         ids.add(sid)
     return {"mode": "multi", "source": "planner", "goal": " ".join(str(plan.get("goal") or "").split())[:400],
             "steps": out, "answer_shape": " ".join(str(plan.get("answer_shape") or "").split())[:300]}, None
@@ -255,18 +315,58 @@ def _json_in(text: str) -> Any:
         return None
 
 
+#: The words that put a part of a question in an engine's area (Workstream A2: one read per area).
+AREA_WORDS: dict[str, re.Pattern[str]] = {
+    "compliance": re.compile(r"\b(certificat\w*|complian\w*|accreditat\w*|statutory|lapsed|EICR|LOLER|gas safe\w*|fire risk)\b", re.I),
+    "contract_performance": re.compile(r"\b(vendors?|suppliers?|contractors?|SLAs?|contracts?|invoices?|KPIs?|service credits?)\b", re.I),
+    "energy_intelligence": re.compile(r"\b(energy|kwh|electricity|consumption|meters?|EUI|carbon|utilit(?:y|ies))\b", re.I),
+    "wo_engine": re.compile(r"\b(work orders?|maintenance|PPMs?|repairs?|reactive|backlog|jobs?)\b", re.I),
+}
+
+
+def areas_named(question: str) -> list[str]:
+    """The engines' areas a question touches, by its words, among those this space has."""
+    allowed = planning_engines()
+    return [a for a, rx in AREA_WORDS.items() if a in allowed and rx.search(question or "")]
+
+
 async def make_plan(question: str, *, context: str, tools: dict[str, str],
-                    llm: Callable[[str, str, str], Awaitable[str]]) -> tuple[dict[str, Any] | None, str | None]:
-    """One model call -> a validated plan, or (None, reason). `llm(system, user, role)` returns text."""
+                    llm: Callable[[str, str, str], Awaitable[str]],
+                    schemas: dict[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    """A validated plan, or (None, reason). `llm(system, user, role)` returns text.
+
+    One more planning call (never more) when the first plan was refused - it is told why - or when it
+    has fewer steps than the areas the question covers (Workstream A2, 11 Nov 2026: a question across
+    three areas is three reads). The second plan is kept only when it is valid and no smaller."""
     eng, tl = _catalogue_text(tools)
     prompt = PLAN_PROMPT.format(max_steps=MAX_STEPS, engines=eng, tools=tl, context=(context or "").strip(), question=question)
+    system = "You are the planning step of the Plenum CAFM orchestrator."
     try:
-        raw = await llm("You are the planning step of the Plenum CAFM orchestrator.", prompt, "plan")
+        raw = await llm(system, prompt, "plan")
     except Exception as exc:  # noqa: BLE001 - a failed plan falls back to routing, never to silence
         return None, "planner call failed: " + str(exc).splitlines()[0][:200]
-    plan, why = validate(_json_in(raw), tools)
+    plan, why = validate(_json_in(raw), tools, schemas)
+    areas = areas_named(question)
+    note = None
     if plan is None:
         log.warning("planner.rejected", reason=why, raw=(raw or "")[:300])
+        note = f"YOUR PREVIOUS PLAN WAS REFUSED: {why}. Return a corrected plan."
+    elif len(areas) > len(plan["steps"]):
+        note = (f"THE QUESTION COVERS {len(areas)} AREAS ({', '.join(areas)}) BUT YOUR PLAN HAS {len(plan['steps'])} "
+                "STEP(S). Give each area that needs its own read its own step; return the whole plan again.")
+    if note:
+        try:
+            raw2 = await llm(system, prompt + "\n\n" + note, "plan")
+            plan2, why2 = validate(_json_in(raw2), tools, schemas)
+        except Exception as exc:  # noqa: BLE001 - the first answer stands
+            plan2, why2 = None, "planner call failed: " + str(exc).splitlines()[0][:200]
+        if plan2 is not None and (plan is None or len(plan2["steps"]) >= len(plan["steps"])):
+            plan, why = plan2, None
+        elif plan is None:
+            log.warning("planner.rejected_again", reason=why2)
+            why = why2 or why
+    if plan is not None:
+        plan["areas"] = areas
     return plan, why
 
 
@@ -495,6 +595,42 @@ def _has_dependents(plan: dict[str, Any], sid: str) -> bool:
     return any(sid in (s.get("depends_on") or []) for s in plan.get("steps") or [])
 
 
+def _field_values(output: Any, fieldname: str) -> list[Any]:
+    if isinstance(output, dict) and fieldname in output and not isinstance(output[fieldname], (list, dict)):
+        return [output[fieldname]]
+    vals: list[Any] = []
+    for row in evidence._rows(output) or []:
+        v = row.get(fieldname)
+        if v not in (None, "") and v not in vals:
+            vals.append(v)
+    return vals
+
+
+def bind(args: dict[str, Any], results: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None]:
+    """A step's arguments with each "$sN.field" replaced by the values of that field in step sN's
+    rows (one value as itself, several as a list), the record of where each came from, and - when
+    there is nothing to pass - the step's record instead of a run (Workstream A2, 11 Nov 2026)."""
+    out, bindings = dict(args), []
+    for k, v in args.items():
+        m = _REF.match(v) if isinstance(v, str) else None
+        if not m:
+            continue
+        sid, fieldname = m.groups()
+        r = results.get(sid) or {}
+        if not r.get("ok"):
+            return out, bindings, evidence.record(evidence.FAILED, "depends_on_failed", True,
+                                                  "This part needed an earlier part that could not be read.",
+                                                  "Ask about it again once the earlier part can be read.", argument=k)
+        vals = _field_values(r.get("output"), fieldname)
+        bindings.append({"param": k, "from_step": sid, "field": fieldname, "count": len(vals), "values": vals[:10]})
+        if not vals:
+            return out, bindings, {**evidence.record(evidence.ZERO, "nothing_to_pass", True,
+                                                     f"The earlier part found no {fieldname} to look this up for.",
+                                                     "Widen the earlier part if more were expected."), "ok": True}
+        out[k] = vals[0] if len(vals) == 1 else vals
+    return out, bindings, None
+
+
 async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[tuple[str, list]]],
                   run_tool: Callable[[str, dict], Awaitable[Any]], scope_hint: str = "",
                   given: str = "",
@@ -502,6 +638,7 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
                   question: str = "",
                   replan: Callable[[str, dict[str, Any], dict[str, list[dict[str, str]]], dict[str, dict[str, Any]]], Awaitable[dict[str, Any] | None]] | None = None,
                   check: Callable[[dict[str, Any], dict[str, Any]], Awaitable[tuple[bool, str]]] | None = None,
+                  scope: Any = None,
                   ) -> dict[str, dict[str, Any]]:
     """Run the plan. Returns {step_id: {"output", "tool_calls", "ok", "error", "ms"}}.
 
@@ -526,54 +663,105 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
             # step works on. Without it every step searched afresh and said the list was gone.
             ask = (f"{ask}\n\nThe previous answer in this conversation - the items 'these' / 'each one' "
                    f"refer to; use it as given facts:\n{given}")
-        run_id = trace.on_step_open(step["id"], f"{step['id']}: {step['target']}", {"kind": step["kind"], "target": step["target"],
-                                                                                   "ask": ask, "depends_on": step["depends_on"], "why": step["why"]})
+        bindings: list[dict[str, Any]] = []
+        refused: dict[str, Any] | None = None
+        args: dict[str, Any] = {}
+        if step["kind"] == "tool":
+            args = dict(step.get("args") or {}) or {"question": ask}
+            # Earlier steps' results and the hard filter travel in the question when the tool takes one.
+            if "question" in args and (step["depends_on"] or scope_hint or given):
+                args["question"] = ask
+            # Values taken from earlier steps' rows, each recorded with where it came from (A2).
+            args, bindings, refused = bind(args, results)
+            if refused is None and scope is not None:
+                refused = scope.check(step["target"], args)   # one scope for the plan, every call checked
+        inputs = {"kind": step["kind"], "target": step["target"], "ask": ask, "depends_on": step["depends_on"],
+                  "why": step["why"]}
+        if step["kind"] == "tool":
+            inputs.update(args=args, bindings=bindings)
+        if scope is not None:
+            inputs["scope"] = scope.describe()
+        run_id = trace.on_step_open(step["id"], f"{step['id']}: {step['target']}", inputs)
         if on_event:
             await on_event({"type": "agent_switch", "from_domain": "orchestrator", "to_domain": step["target"]})
         try:
             if step["kind"] == "engine":
                 answer, tool_calls = await run_engine(step["target"], ask, on_event)
                 read_alone = not step["depends_on"] and not given
-                if not tool_calls and read_alone:
-                    # An engine step with nothing given to it answers from records or not at all.
-                    # 3 Nov 2026: the contract_performance step wrote "Plan: identify the live
-                    # work-order fields..." and stopped without a tool call; that plan was taken
-                    # as its answer. Asked once more; still nothing read is a failed step.
-                    answer, tool_calls = await run_engine(step["target"], f"{ask}\n\n{READ_THE_RECORDS}", on_event)
+                # An engine step with nothing given to it answers from records or not at all (3 Nov 2026:
+                # the contract_performance step wrote "Plan: identify the live work-order fields..." and
+                # stopped without a tool call). It used to be asked again with different words; since
+                # 11 Nov 2026 (Workstream A2: no retry with changed parameters) it is a failed step the
+                # answer names.
                 if not tool_calls and read_alone:
                     log.warning("planner.step_read_nothing", step=step["id"], target=step["target"],
                                 answer=str(answer or "")[:300])
-                    results[step["id"]] = {"output": None, "tool_calls": [], "ok": False,
-                                           "error": f"{step['target']} read no records for this step"}
+                    results[step["id"]] = {"output": None, "tool_calls": [], "ok": False, "status": evidence.FAILED,
+                                           "error": "This part could not be answered: no records were read for it.",
+                                           "failure": evidence.record(evidence.FAILED, "read_nothing", True,
+                                                                      "This part could not be answered: no records were read for it.",
+                                                                      "Ask about this part on its own.")}
                 else:
-                    results[step["id"]] = {"output": answer, "tool_calls": tool_calls, "ok": True, "error": None}
+                    # An engine that failed inside its runner answers with a bare JSON error, which
+                    # used to reach the writer as this step's OK result (Workstream A3, 11 Nov 2026).
+                    env = evidence.classify(step["target"], answer) if str(answer or "").strip().startswith("{") else {"status": evidence.OK}
+                    if env["status"] in evidence.ANSWERED:
+                        results[step["id"]] = {"output": answer, "tool_calls": tool_calls, "ok": True, "error": None,
+                                               "status": evidence.OK}
+                    else:
+                        results[step["id"]] = {"output": None, "tool_calls": tool_calls, "ok": False, "status": env["status"],
+                                               "error": env["message"], "failure": env}
+            elif refused is not None:
+                # Outside the plan's scope, or nothing to pass from the step it needs: not run (A2).
+                log.warning("planner.step_not_run", step=step["id"], target=step["target"],
+                            rule=refused.get("scope_rule") or refused.get("category"))
+                answered = refused["status"] in evidence.ANSWERED
+                results[step["id"]] = {"output": [] if answered else None, "tool_calls": [], "ok": answered,
+                                       "status": refused["status"], "error": None if answered else refused["message"],
+                                       "failure": refused}
+                if on_event:
+                    await on_event({"type": "tool_completed", "tool": step["target"], "domain": "orchestrator",
+                                    "output": {k: refused[k] for k in ("status", "message", "next_step")}})
             else:
-                args = dict(step.get("args") or {}) or {"question": ask}
-                # Earlier steps' results and the hard filter travel in the question when the tool takes one.
-                if "question" in args and (step["depends_on"] or scope_hint or given):
-                    args["question"] = ask
                 if on_event:
-                    await on_event({"type": "tool_started", "tool": step["target"], "domain": "orchestrator", "input": args})
+                    await on_event({"type": "tool_started", "tool": step["target"], "domain": "orchestrator", "input": args,
+                                    **({"bindings": bindings} if bindings else {})})
                 out = await run_tool(step["target"], args)
+                # Its state as evidence (agents/evidence.py, Workstream A3): a tool that answers with an
+                # error does not raise, and used to be stored here as an OK result.
+                env = evidence.classify(step["target"], out, question=step.get("ask") or "")
+                answered = env["status"] in evidence.ANSWERED
                 if on_event:
-                    await on_event({"type": "tool_completed", "tool": step["target"], "domain": "orchestrator", "output": out})
-                results[step["id"]] = {"output": out, "tool_calls": [{"tool": step["target"], "input": args, "output": out}],
-                                       "ok": True, "error": None}
+                    # The panel shows a failure as its record, never the service's raw reply.
+                    await on_event({"type": "tool_completed", "tool": step["target"], "domain": "orchestrator",
+                                    "output": out if answered else {k: env[k] for k in ("status", "message", "next_step")}})
+                results[step["id"]] = {"output": out if answered else None,
+                                       "tool_calls": [{"tool": step["target"], "input": args, "output": out}],
+                                       "ok": answered, "status": env["status"],
+                                       "error": None if answered else env["message"],
+                                       **({} if answered and env["status"] == evidence.OK else {"failure": env})}
+                if not answered:
+                    # A tool that answers with an error does not raise; say so where it can be found,
+                    # in its own words (the writer gets the record's).
+                    cause = (out.get("error") or out.get("message")) if isinstance(out, dict) else out
+                    results[step["id"]]["cause"] = str(cause or env["message"])[:300]
+                    log.warning("planner.step_answered_error", step=step["id"], target=step["target"],
+                                error=results[step["id"]]["cause"])
         except Exception as exc:  # noqa: BLE001 - one failed step is a fact for the synthesis, not the end of the turn
             err = (str(exc).splitlines() or [type(exc).__name__])[0][:300]
-            results[step["id"]] = {"output": None, "tool_calls": [], "ok": False, "error": err}
+            env = evidence.from_exception(exc)
+            # The writer gets the record in business words; the exception's text stays in the log below.
+            results[step["id"]] = {"output": None, "tool_calls": [], "ok": False, "status": env["status"],
+                                   "error": env["message"], "failure": env, "cause": err}
             # Logged (3 Nov 2026): a step that raised used to reach the writer as "FAILED: ..." and
             # nowhere else, so "the vendor-blocker check failed" had no cause anyone could read.
             log.warning("planner.step_failed", step=step["id"], kind=step["kind"], target=step["target"],
                         error=f"{type(exc).__name__}: {err}")
-        out_now = results[step["id"]].get("output")
-        if isinstance(out_now, dict) and out_now.get("ok") is False:
-            # A tool that answers with an error does not raise; say so where it can be found.
-            log.warning("planner.step_answered_error", step=step["id"], target=step["target"],
-                        error=str(out_now.get("error") or "")[:300])
         results[step["id"]]["ms"] = int((time.perf_counter() - t0) * 1000)
         r = results[step["id"]]
-        trace.on_step_close(run_id, {"output": r["output"], "tool_calls": len(r["tool_calls"]), "ms": r["ms"]}, ok=r["ok"], error=r["error"])
+        # The trace (admins only) keeps the real cause; the writer and the user get the record's words.
+        trace.on_step_close(run_id, {"output": r["output"], "tool_calls": len(r["tool_calls"]), "ms": r["ms"]}, ok=r["ok"],
+                            error=r.get("cause") or r["error"])
 
     replanned = False
     batches = _batches(plan["steps"])
@@ -641,6 +829,10 @@ Rules:
   to occupants, with the money each finding costs or saves carried on every one, and the total at stake.
   A multi-part question is a judgement question: close with "What to do".
 
+{states}
+
+{forms}
+
 LENS
 {lens}
 
@@ -653,7 +845,7 @@ PLAN
 ANSWER SHAPE
 {shape}
 
-STEP RESULTS
+STEP RESULTS (each with the part of the question it was for)
 {results}"""
 
 
@@ -664,11 +856,20 @@ def _lens_text() -> str:
 
 async def synthesise(question: str, plan: dict[str, Any], results: dict[str, dict[str, Any]],
                      llm: Callable[[str, str, str], Awaitable[str]]) -> str:
-    body = "\n\n".join(
-        f"[{sid}] {('OK' if r['ok'] else 'FAILED: ' + str(r['error']))}\n{_as_text(r['output'], 12000) if r['ok'] else ''}"
-        for sid, r in results.items())
+    # SUCCEEDED and FAILED apart, each failure with the sub-question it was for and its record in
+    # business words, and any conflict between steps named (Workstream A3, 11 Nov 2026). It was one
+    # flat list of "[s2] FAILED: <the exception's first line>".
+    asks = {s["id"]: s.get("ask") or s.get("target") or "" for s in plan.get("steps") or []}
+    body, _found = evidence.render(results, asks=asks, per=12000, total=60000)
+    # The form the lookups call for and the parts to check off - the plan's step asks (Workstream A4).
+    # A rewrite appends its notes to the question after a blank line; the parts come from the question.
+    from . import answer_spec
+
+    steps = {k: v for k, v in results.items() if k not in ("__plan__", "previous_answer")}
+    forms = answer_spec.prompt_block(answer_spec.form_for(steps),
+                                     answer_spec.parts_of(question.split("\n\n")[0], plan))
     prompt = SYNTH_PROMPT.format(question=question, plan=describe(plan), shape=plan.get("answer_shape") or "concise, tables where useful",
-                                 results=body, lens=_lens_text())
+                                 results=body, lens=_lens_text(), states=evidence.STATE_RULES, forms=forms)
     return await llm("You are the answer-writing step of the Plenum CAFM orchestrator.", prompt, "synthesise")
 
 

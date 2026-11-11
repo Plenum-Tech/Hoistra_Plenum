@@ -164,6 +164,13 @@ def env(monkeypatch):
     o = O.__new__(O)
     o._has_hitl = False
     o._agent = _Graph()
+
+    async def planner_llm(system, user, role, on_delta=None):
+        # Since 11 Nov 2026 (Workstream A1) the loop's answer is a draft the final answer step writes
+        # from its tool results; this writer writes the grounded answer the loop drafted.
+        return LOOP_ANSWER if role.startswith("final_answer") else "{}"
+
+    o._planner_llm = planner_llm
     sid = "sess-" + uuid.uuid4().hex[:8]
     yield {"o": o, "sid": sid, "writes": writes, "answers": answers, "questions": questions, "executed": executed, "scoped": scoped}
     session_workspace._SESSION_STATE.pop(sid, None)
@@ -197,7 +204,7 @@ def test_a_rerun_of_a_loop_answer_asks_the_loop_the_original_question_with_the_c
     assert "Show me everything that's at risk" in asked
     assert "B-301" in asked and env["scoped"] == [env["sid"]]   # the thread's working set, as a follow-up
     assert config["configurable"]["thread_id"] == env["sid"]    # the same conversation, not a fresh one
-    # the loop's own answer and calls come back to the chat unchanged
+    # the answer written from the loop's calls, and the calls, come back to the chat
     assert out["answer"] == LOOP_ANSWER
     assert any(c.get("tool") == "get_work_order_status_track" and c.get("output") for c in out["tool_calls"])
     assert out["plan"]["steps"][0]["target"] == "orchestrator loop"
@@ -234,5 +241,7 @@ def test_a_correction_that_widens_the_scope_is_not_held_to_the_followups_working
 def test_a_failing_loop_rerun_says_so_and_records_no_answer(env):
     env["o"]._agent = _Graph(raises=True)
     out = _run(env, _loop_turn(), [{"span_id": "m1", "mode": "model", "text": "Read the work orders."}])
-    assert out["ok"] is False and "did not finish" in out["error"] and "model unavailable" in out["error"]
+    assert out["ok"] is False and "did not finish" in out["error"]
+    # Since 11 Nov 2026 (Workstream A3) the reason is said in plain words, the exception's text logged.
+    assert "model unavailable" not in out["error"] and "Ask again" in out["error"]
     assert env["answers"] == [] and not env["executed"]

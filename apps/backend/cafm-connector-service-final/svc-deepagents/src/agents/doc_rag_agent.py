@@ -13,6 +13,7 @@ import httpx
 import structlog
 from langchain_core.tools import tool
 
+from .evidence import http_failure
 from ..config import settings
 from ..http_client import request as _http_request
 
@@ -58,12 +59,9 @@ _SERVICE = "doc_rag"
 
 
 def _err(exc: Exception, op: str) -> dict:
-    if isinstance(exc, httpx.HTTPStatusError):
-        log.error(f"doc_rag.{op}.http_error", status=exc.response.status_code, body=exc.response.text[:300])
-        return {"error": exc.response.text[:300], "status_code": exc.response.status_code}
-    msg = (str(exc) or exc.__class__.__name__)[:300]
-    log.error(f"doc_rag.{op}.error", error=msg)
-    return {"error": msg}
+    # Workstream A3 (11 Nov 2026): the service's response body and the exception go to the log;
+    # the model gets a failure record in business words (agents/evidence.py), never the raw text.
+    return http_failure(exc, service="doc_rag", op=op)
 
 
 def _is_overloaded_error(exc: Exception) -> bool:

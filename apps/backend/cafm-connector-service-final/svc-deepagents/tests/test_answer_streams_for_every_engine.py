@@ -9,6 +9,9 @@ the same channel the tool events use.
 Two things must NOT stream: a chunk that is part of a tool call (the model deciding what to
 fetch, not what to say), and compliance's own sub-agent prose (the analyst rewrites it, and a
 draft that disagrees with the final would put two answers on one screen).
+
+Since 11 Nov 2026 (Workstream A1) the same holds for every engine: the sub-agent's prose is a
+draft, and what streams is the final answer step writing the answer from the tool results.
 """
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
@@ -53,6 +56,10 @@ class TestComplianceKeepsItsOwnStream:
         from src.agents import orchestrator as o
         src = inspect.getsource(o.DeepAgentOrchestrator._invoke_phase2_engine)
         assert 'engine == "compliance" and event.get("type") == "answer_delta"' in src
+        # Since 11 Nov 2026 (Workstream A1) no engine's prose is painted: it is a draft. What
+        # streams is the final answer step's writing (tests/test_every_answer_is_written_from_the_evidence.py).
+        assert 'if event.get("type") == "answer_delta":' in src
+        assert "on_delta=_delta" in src
 
     def test_the_general_loop_streams_only_its_own_model_run(self):
         import inspect

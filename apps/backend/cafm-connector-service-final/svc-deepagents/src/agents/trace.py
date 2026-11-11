@@ -225,6 +225,7 @@ class Turn:
         self.question: str = ""
         self.route: str | None = None
         self.spans: list[Span] = []
+        self.by_id: dict[str, Span] = {}
         self.groups: dict[str, Span] = {}
         self.runs: dict[str, Span] = {}      # model runs by run_id (stream events / callbacks)
         self.tool_runs: dict[str, Span] = {} # tool runs by run_id (callbacks)
@@ -232,6 +233,9 @@ class Turn:
         # The card tools' outputs, whole: spans keep a bounded copy, the answer's cards need the
         # rows (see keep_card_output). A handful per turn at most.
         self.card_outputs: list[dict[str, Any]] = []
+        # Every tool's whole output, in call order: the evidence the final answer is written from
+        # (agents/final_answer.py). The spans keep a bounded copy for the store; this one is not stored.
+        self.tool_outputs: list[dict[str, Any]] = []
         from ..http_client import caller_organization_id
         from ..services.principal import caller_principal
 
@@ -243,7 +247,33 @@ class Turn:
 
     def _add(self, s: Span) -> Span:
         self.spans.append(s)
+        self.by_id[s.id] = s
         return s
+
+    def here(self) -> Span | None:
+        """Where a call starting now belongs: inside the plan step this task runs (its newest open
+        tool, else the step), or, outside any step, the newest open tool or step as before."""
+        sid = _current_step.get()
+        step = self.by_id.get(sid) if sid else None
+        if step is not None and step.open:
+            inner = self.last_open(lambda x: x.kind == "tool" and self.descends(x, step.id))
+            return inner or step
+        return self.last_open(lambda x: x.kind in ("tool", "step"))
+
+    def descends(self, s: Span, ancestor_id: str) -> bool:
+        seen = 0
+        while s is not None and s.parent_id and seen < 64:
+            if s.parent_id == ancestor_id:
+                return True
+            s = self.by_id.get(s.parent_id)
+            seen += 1
+        return False
+
+    def group_key(self, group: str) -> str:
+        """An engine's or sub-agent's span is one per step it runs in, not one per turn."""
+        sid = _current_step.get()
+        step = self.by_id.get(sid) if sid else None
+        return f"{group}@{step.id}" if step is not None and step.open else group
 
     def new(self, **kw: Any) -> Span:
         return self._add(Span(seq=len(self.spans), **kw))
@@ -265,6 +295,11 @@ class Turn:
 
 
 _turn: ContextVar[Turn | None] = ContextVar("hoist_trace_turn", default=None)
+#: The plan step this task is running (Workstream A2, 11 Nov 2026). Steps of one batch run as
+#: parallel tasks; each task carries its own step, so what runs inside a step hangs under THAT step.
+#: Before, every engine and tool call was put under "the newest open step", and two steps running at
+#: once took each other's calls - two wo_engine steps shared one engine span.
+_current_step: ContextVar[str | None] = ContextVar("hoist_trace_step", default=None)
 
 
 def current() -> Turn | None:
@@ -281,6 +316,13 @@ def keep_card_output(t: Turn, name: str, output: Any) -> None:
         return
     if name in CARD_TOOLS and isinstance(output, dict) and len(t.card_outputs) < 20:
         t.card_outputs.append({"tool": name, "output": output})
+
+
+def tool_outputs() -> list[dict[str, Any]]:
+    """Every tool's whole output recorded on the current turn (callbacks: engines and sub-agents),
+    in call order: [{tool, output, error, agent}]. Empty when the turn is not traced."""
+    t = _turn.get()
+    return list(t.tool_outputs) if t is not None else []
 
 
 def card_tool_outputs() -> list[dict[str, Any]]:
@@ -438,7 +480,7 @@ def on_llm_cost(entry: dict[str, Any]) -> None:
         if target is None:
             # A model call no activity row announced: inside the tool running now (the record
             # engine's planner, a sub-agent) it hangs under that tool; otherwise under its role.
-            tool = t.last_open(lambda x: x.kind in ("tool", "step"))
+            tool = t.here()
             parent = tool.id if tool else t.group(role).id
             target = t.new(kind="llm", name=role, agent=(tool.agent if tool else role), parent_id=parent, model=entry.get("model"), role=role)
             target.from_ledger = True
@@ -487,7 +529,7 @@ def on_sql(sql: str, params: Any, rows: list | None, ms: float | None, *, label:
         t = _turn.get()
         if t is None or t.flushed or not sql:
             return
-        parent = t.last_open(lambda x: x.kind in ("tool", "step")) or t.root
+        parent = t.here() or t.root
         name = (label or "").strip() or (sql.strip().split(None, 4)[:4] and " ".join(sql.strip().split()[:4]))
         s = t.new(kind="db", name=str(name)[:120], agent=parent.agent, parent_id=parent.id,
                   input=_bound({"sql": sql, "params": params if isinstance(params, dict) else {}, "label": label or None}))
@@ -510,11 +552,12 @@ def on_model_start(run_id: str, model: str | None, depth: int, messages_summary:
         if t is None or t.flushed or not run_id:
             return
         if group:
-            parent = t.groups.get(group)
+            gk = t.group_key(group)
+            parent = t.groups.get(gk)
             if parent is None:
                 # An engine runs inside the tool or turn that called it.
-                tool = t.last_open(lambda x: x.kind in ("tool", "step"))
-                parent = t.groups[group] = t.new(kind="agent", name=group, agent=group, parent_id=(tool.id if tool else t.root.id))
+                tool = t.here()
+                parent = t.groups[gk] = t.new(kind="agent", name=group, agent=group, parent_id=(tool.id if tool else t.root.id))
         else:
             parent = t.group("orchestrator loop") if depth <= 2 else t.group("sub-agent")
         t.runs[run_id] = t.new(kind="llm", name="model", agent=parent.name, parent_id=parent.id, model=model, role="agent",
@@ -580,6 +623,7 @@ def on_step_open(step_id: str, name: str, inputs: Any) -> str | None:
         s = t.new(kind="step", name=str(name)[:120], agent="orchestrator", parent_id=(plan or t.root).id, input=_bound(inputs))
         rid = "step:" + step_id + ":" + s.id
         t.tool_runs[rid] = s
+        _current_step.set(s.id)
         return rid
     except Exception as exc:  # noqa: BLE001
         log.warning("trace.on_step_open_failed", error=str(exc)[:200])
@@ -598,6 +642,24 @@ def on_step_close(run_id: str | None, output: Any, *, ok: bool = True, error: st
         log.warning("trace.on_step_close_failed", error=str(exc)[:200])
 
 
+def on_retry(service: str, method: str, path: str, attempt: int, of: int, error: str | None,
+             wait_s: float | None) -> None:
+    """A call that failed with a temporary error and is about to be made again, unchanged
+    (http_client.request; Workstream A2, 11 Nov 2026): one span per failed attempt, under the call it
+    belongs to, so a retry is visible on the trace and not only in a log line."""
+    try:
+        t = _turn.get()
+        if t is None or t.flushed:
+            return
+        parent = t.here() or t.root
+        s = t.new(kind="stage", name=f"retry {attempt} of {of}: {service} {method} {path}"[:120], agent=parent.agent,
+                  parent_id=parent.id, input=_bound({"service": service, "method": method, "path": path,
+                                                     "attempt": attempt, "same_request": True}))
+        s.close(output=_bound({"retrying_in_s": wait_s}), ok=False, error=(error or "temporary failure")[:300])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_retry_failed", error=str(exc)[:200])
+
+
 def on_tool_open(run_id: str, name: str, inputs: Any, group: str | None = None) -> None:
     """A tool call announced by the callback handler (engines and sub-agents run outside the
     stream loop, so no activity row says they happened)."""
@@ -605,10 +667,11 @@ def on_tool_open(run_id: str, name: str, inputs: Any, group: str | None = None) 
         t = _turn.get()
         if t is None or t.flushed or not run_id:
             return
-        parent = t.groups.get(group) if group else None
+        gk = t.group_key(group) if group else None
+        parent = t.groups.get(gk) if gk else None
         if parent is None and group:
-            tool = t.last_open(lambda x: x.kind in ("tool", "step"))
-            parent = t.groups[group] = t.new(kind="agent", name=group, agent=group, parent_id=(tool.id if tool else t.root.id))
+            tool = t.here()
+            parent = t.groups[gk] = t.new(kind="agent", name=group, agent=group, parent_id=(tool.id if tool else t.root.id))
         t.tool_runs[run_id] = t.new(kind="tool", name=str(name)[:120], agent=group or "tool", parent_id=(parent or t.root).id,
                                     input=_bound(inputs))
     except Exception as exc:  # noqa: BLE001
@@ -631,6 +694,7 @@ def on_tool_close(run_id: str, output: Any, error: str | None = None) -> None:
                 pass
         if not error:
             keep_card_output(t, s.name, out)
+        t.tool_outputs.append({"tool": s.name, "output": out, "error": error, "agent": s.agent})
         s.close(output=_bound(out), ok=not error, error=error)
     except Exception as exc:  # noqa: BLE001
         log.warning("trace.on_tool_close_failed", error=str(exc)[:200])
