@@ -104,5 +104,38 @@ export const labApi = {
   approveChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/approve'),
   rejectChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/reject'),
   liveChange: (id) => call('POST', '/lab/changes/' + enc(id) + '/live'),
-  exportChanges: () => call('GET', '/lab/changes/export.zip', { raw: true, timeoutMs: 60000 })
+  exportChanges: () => call('GET', '/lab/changes/export.zip', { raw: true, timeoutMs: 60000 }),
+
+  // The eval store (11 Nov 2026, task plan Workstream B), in Langfuse's words: sessions (a scenario asked once), their
+  // traces (one per turn) and each trace's tree of spans and generations; the run tags sessions are filed under; and
+  // the scenarios with the expected outcome each was written with. Sessions are read in from what the chat recorded.
+  evalRunTags: () => call('GET', '/eval/run-tags'),
+  evalNewRunTag: (body) => call('POST', '/eval/run-tags', { body }),
+  evalIngest: (body) => call('POST', '/eval/ingest', { body: body || {}, timeoutMs: 120000 }),
+  evalSessions: (query) => call('GET', '/eval/sessions', { query }),
+  evalSession: (id) => call('GET', '/eval/sessions/' + enc(id)),
+  evalTraceTree: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/tree', { timeoutMs: 60000 }),
+  evalScenarios: (query) => call('GET', '/eval/scenarios', { query }),
+  evalImportScenarios: (file, dryRun) => {
+    const form = new FormData();
+    form.append('file', file);
+    return call('POST', '/eval/scenarios/import', { form, query: dryRun ? { dry_run: 'true' } : {}, timeoutMs: 120000 });
+  },
+  evalExportScenarios: () => call('GET', '/eval/scenarios/export', { raw: true, timeoutMs: 60000 }),
+  evalApproveScenarios: (ids) => call('POST', '/eval/scenarios/approve', { body: { scenario_ids: ids } }),
+  // Pushing this machine's eval store to the development instance's Trace Lab database (DEV_DB_URL on the service).
+  evalSyncStatus: () => call('GET', '/eval/sync'),
+  evalSync: (body) => call('POST', '/eval/sync', { body: body || {}, timeoutMs: 600000 }),
+  // The three levels (logic, ux, domain): one pass of the evaluators over a run tag, a person's score on a trace, and
+  // two run tags compared. The specification, and generating scenarios for every area of it.
+  evalEvaluate: (body) => call('POST', '/eval/evaluate', { body, timeoutMs: 600000 }),
+  evalScoreTrace: (traceId, level, body) => call('PUT', '/eval/traces/' + enc(traceId) + '/scores/' + enc(level), { body }),
+  // Notes and failure-mode labels on a session's trace (11 Nov 2026). Notes are saved with saveLabel / clearLabel above.
+  evalTraceNotes: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/notes'),
+  evalTraceLabels: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/labels'),
+  evalSetTraceLabel: (traceId, mode, value) => call('PUT', '/eval/traces/' + enc(traceId) + '/labels/' + enc(mode), { body: { value } }),
+  evalCompare: (base, head) => call('GET', '/eval/compare', { query: { base, head }, timeoutMs: 60000 }),
+  evalSpec: () => call('GET', '/eval/spec'),
+  evalReloadSpec: () => call('POST', '/eval/spec/reload'),
+  evalGenerateScenarios: (body) => call('POST', '/eval/scenarios/generate', { body, timeoutMs: 120000 })
 };

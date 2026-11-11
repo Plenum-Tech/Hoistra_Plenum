@@ -35,9 +35,9 @@ const ChevronRight = () => <Svg><path d="m9 18 6-6-6-6" /></Svg>;
 const Search = () => <Svg><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></Svg>;
 
 const ICONS = { agent: Bot, generation: Sparkles, tool: Wrench, span: ArrowLeftRight };
-const TYPE_TEXT = { agent: 'Agent', generation: 'Model call', tool: 'Tool', span: 'Step' };
+const TYPE_TEXT = { agent: 'Agent', generation: 'Generation', tool: 'Tool', span: 'Span' };
 const VIEWS = [['tree', 'Tree'], ['timeline', 'Timeline'], ['graph', 'Graph']];
-const PURGED = "Hoist Traces no longer keeps this answer's steps (it keeps them 90 days). The question and answer are below.";
+const PURGED = "The spans of this trace are no longer kept (they are kept 90 days). The question and answer are below.";
 
 function TypeIcon({ type }) {
   const t = ICONS[type] ? type : 'span';
@@ -116,11 +116,11 @@ function TreeView({ nodes, selected, onSelect, count, reveal }) {
     <>
       <label className="lab-tt-search">
         <Search />
-        <input type="search" placeholder="Search steps" aria-label="Search steps" value={query}
+        <input type="search" placeholder="Search spans" aria-label="Search spans" value={query}
           onChange={(e) => setQuery(e.target.value)} />
       </label>
       {rows.length ? (
-        <ul className="lab-tt-tree" role="tree" aria-label="Steps" ref={list}>
+        <ul className="lab-tt-tree" role="tree" aria-label="Spans" ref={list}>
           {rows.map((r) => {
             const n = r.node;
             const id = String(n.id);
@@ -150,7 +150,7 @@ function TreeView({ nodes, selected, onSelect, count, reveal }) {
             );
           })}
         </ul>
-      ) : <p className="lab-small">{'No step matches.'}</p>}
+      ) : <p className="lab-small">{'No span matches.'}</p>}
     </>
   );
 }
@@ -184,7 +184,7 @@ function TimelineView({ nodes, turn, selected, onSelect, count }) {
               </span>
             ))}
           </div>
-          <ol className="lab-tt-timeline" aria-label="Steps on a time axis">
+          <ol className="lab-tt-timeline" aria-label="Spans on a time axis">
             {timelineBars(nodes, turn).map((b) => {
               const n = byId.get(b.id);
               const on = b.id === selected;
@@ -231,7 +231,7 @@ const GZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 function GraphView({ nodes, selected, onSelect }) {
   const [z, setZ] = React.useState(2);
   const f = flowOf(nodes);
-  if (!f.steps.length) return <p className="lab-small">{'This answer has no recorded steps to draw.'}</p>;
+  if (!f.steps.length) return <p className="lab-small">{'This trace has no spans to draw.'}</p>;
   const items = [{ name: '__start__', start: true, ids: [] }].concat(f.steps);
   const label = (st) => {
     if (st.start || st.ids.length < 2) return '';
@@ -258,7 +258,7 @@ function GraphView({ nodes, selected, onSelect }) {
         <button type="button" className="lab-tt-tool" aria-label="Fit" onClick={() => setZ(2)}><Fit /></button>
       </div>
       <svg className="lab-tt-graph" width={width * scale} height={height * scale} viewBox={'0 0 ' + width + ' ' + height} role="group"
-        aria-label="The steps of this answer in the order they ran">
+        aria-label="The spans of this trace in the order they ran">
         <defs>
           <marker id="lab-tt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M0,0 L8,4 L0,8 z" className="lab-tt-arrowhead" />
@@ -310,8 +310,8 @@ function Meta({ node, turn }) {
     ['Input tokens', node.input_tokens], ['Output tokens', node.output_tokens], ['Cache read tokens', node.cache_read_tokens],
     ['Input from', f.input_from], ['Output from', f.output_from],
     ['Cut', node.truncated ? 'Hoist Traces keeps 16,000 characters of a value' : null],
-    ['Step id', node.id], ['Parent step', node.parent_id], ['Sequence', node.seq],
-    ['Turn id', turn.turn_id], ['Langfuse trace id', turn.langfuse_trace_id], ['Session', turn.session_id],
+    ['Span id', node.id], ['Parent span', node.parent_id], ['Sequence', node.seq],
+    ['Trace id', turn.turn_id], ['Langfuse trace id', turn.langfuse_trace_id], ['Session', turn.session_id],
   ].filter(([, v]) => v !== null && v !== undefined && v !== '');
   return (
     <dl className="lab-tt-meta">
@@ -325,7 +325,7 @@ function Meta({ node, turn }) {
 function Detail({ node, turn, pane, setPane, mode, setMode, annotate }) {
   const f = node.filled || {};
   return (
-    <section className="lab-tt-detail" aria-label={'Step ' + node.name}>
+    <section className="lab-tt-detail" aria-label={'Span ' + node.name}>
       <header className="lab-tt-dhead">
         <TypeIcon type={node.type} />
         <strong className="lab-tt-dname">{node.name}</strong>
@@ -340,7 +340,7 @@ function Detail({ node, turn, pane, setPane, mode, setMode, annotate }) {
       </div>
       {node.error ? <div role="alert" className="lab-error">{node.error}</div> : null}
       <div className="lab-tt-dbar">
-        <Switch label="Step detail" items={[['preview', 'Preview'], ['metadata', 'Metadata']]} value={pane} onChange={setPane} />
+        <Switch label="Span detail" items={[['preview', 'Preview'], ['metadata', 'Metadata']]} value={pane} onChange={setPane} />
         {pane === 'preview'
           ? <Switch label="How values show" className="lab-tt-mode" items={[['formatted', 'Formatted'], ['raw', 'Raw']]} value={mode} onChange={setMode} />
           : null}
@@ -348,7 +348,7 @@ function Detail({ node, turn, pane, setPane, mode, setMode, annotate }) {
       {pane === 'metadata' ? <Meta node={node} turn={turn} /> : (
         <>
           <Side node={node} side="in" title="Input" mode={mode} annotate={annotate}
-            filled={f.input_from ? 'Filled from ' + f.input_from + ' (this step recorded no input of its own).' : ''} />
+            filled={f.input_from ? 'Filled from ' + f.input_from + ' (this span recorded no input of its own).' : ''} />
           <Side node={node} side="out" title="Output" mode={mode} annotate={annotate}
             filled={f.output_from ? 'Filled from ' + f.output_from + '.' : ''} />
           {annotate && node.parent_id == null && annotate.other ? annotate.other() : null}
@@ -401,7 +401,7 @@ export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', m
   return (
     <section className="lab-tt" aria-label="Trace">
       <header className="lab-tt-head">
-        <code className="lab-tt-tid" title="Hoist Traces turn id">{t.turn_id || '—'}</code>
+        <code className="lab-tt-tid" title="Trace id">{t.turn_id || '—'}</code>
         <div className="lab-tt-stats">
           {t.latency_ms != null ? <span className="lab-tt-stat">{fmtTime(t.latency_ms)}</span> : null}
           {t.cost_usd != null ? (
@@ -432,7 +432,7 @@ export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', m
         </div>
         <div className="lab-tt-right">
           {node ? <Detail node={node} turn={t} pane={p} setPane={setP} mode={md} setMode={setMd} annotate={annotate} />
-            : <p className="lab-small">{'This answer has no recorded steps.'}</p>}
+            : <p className="lab-small">{'This trace has no spans.'}</p>}
         </div>
       </div>
     </section>

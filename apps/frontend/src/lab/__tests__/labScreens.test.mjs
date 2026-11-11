@@ -45,12 +45,13 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Runs, Synthetic, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
-  const WORK = ['runs', 'synthetic', 'labels', 'progress', 'loop', 'notes', 'learning'];
+test('the menu: Sessions, Runs, Synthetic, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
+  // Sessions first (11 Nov 2026); Runs is back after it for the questions people ask by hand.
+  const WORK = ['sessions', 'runs', 'synthetic', 'labels', 'progress', 'loop', 'notes', 'learning'];
   assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), WORK);
   assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), WORK.concat(['people']));
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Sessions', 'Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -104,7 +105,8 @@ test('the instance is sent with every call', () => {
 test('the lab api names the three scenario routes once', () => {
   const src = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
   for (const path of ['/scenarios/spaces', '/scenarios/generate', '/scenarios/run']) {
-    assert.equal(src.split(path).length - 1, 1, path + ' is named more than once, or not at all');
+    // The whole quoted path: the eval store's /eval/scenarios/generate (11 Nov 2026) is another route, not a second naming.
+    assert.equal(src.split("'" + path + "'").length - 1, 1, path + ' is named more than once, or not at all');
   }
 });
 
@@ -248,7 +250,7 @@ test('Learning is a page of its own, and the lab app renders it', () => {
   assert.ok(app.includes("current === 'learning' ? <Learning"),
     'the menu names a page nothing draws, so opening it shows nothing');
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Sessions', 'Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
 });
 
 test('the draft comes from the service, not from the browser', () => {

@@ -46,7 +46,7 @@ test('header shows time, cost, tokens, session and user', () => {
   for (const want of ['turn-tt', '18.79s', '$0.113', '50k tokens', 'sess-9', 'aasim.shaik@plenum-tech.com',
     'single:maintenance', 'claude-sonnet-5', 'gpt-5.6-terra']) assert.ok(s.includes(want), want);
   assert.match(html(TT.TraceView, { tree: Object.assign({}, TREE, { purged: true, nodes: TREE.nodes.slice(0, 1) }) }),
-    /no longer keeps this answer&#x27;s steps/);
+    /spans of this trace are no longer kept/);
 });
 
 test('tree lists every step with its time and cost, failed step marked', () => {
@@ -56,7 +56,7 @@ test('tree lists every step with its time and cost, failed step marked', () => {
   for (const want of ['2.71s', '$0.00769', '$0.034392', '5.76s', '0.01s']) assert.ok(s.includes(want), want);
   assert.match(s, /class="[^"]*lab-tt-error[^"]*"(?:(?!<\/li>)[\s\S])*list_vendor_accreditations/);
   assert.equal((s.match(/role="treeitem"/g) || []).length, 7);
-  assert.ok(s.includes('aria-label="Search steps"'));
+  assert.ok(s.includes('aria-label="Search spans"'));
 });
 
 test("only the selected step's input and output are rendered", () => {
@@ -111,7 +111,7 @@ test('graph: its step buttons are reachable by screen readers (10 Nov 2026)', ()
   const g = html(TT.TraceView, { tree: TREE, view: 'graph' });
   const svg = g.slice(g.indexOf('<svg class="lab-tt-graph"'), g.indexOf('>', g.indexOf('<svg class="lab-tt-graph"')));
   assert.ok(svg.includes('role="group"') && !svg.includes('role="img"'), svg);
-  assert.ok(g.includes('role="button"') && g.includes('aria-label="Model call router"'));
+  assert.ok(g.includes('role="button"') && g.includes('aria-label="Generation router"'));
   assert.ok(/<g[^>]*class="lab-tt-gstart"[^>]*aria-hidden="true"/.test(g), 'the start marker is decoration');
 });
 

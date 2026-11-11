@@ -1,10 +1,12 @@
 // LabApp — Trace Lab as its own place (20 Oct 2026; runs, 22 Oct). Opening: a stored lab session is refreshed, else
 // Sign in (the Hoistra email and password; an unverified email asks for its code). There is no company level: the
-// platform team and a consultant see every company's runs, everyone else their own company's. The service says who the
-// person is in Trace Lab (/lab/me): company admins, the platform team and a consultant go straight in; anyone else waits
-// until a company admin gives them a Trace Lab role. The workspace: Runs (Runs -> Questions -> one answer's steps),
-// Labels (failure modes per run), Progress, Notes and, for admins, People. A run and question in view are kept in the
-// address (?run=R3&q=R3-12), so a link opens the same place.
+// platform team and a consultant see every company's records, everyone else their own company's. The service says who
+// the person is in Trace Lab (/lab/me): company admins, the platform team and a consultant go straight in; anyone else
+// waits until a company admin gives them a Trace Lab role. The workspace opens on Sessions (11 Nov 2026: scenario
+// conversations, a trace per turn, noted and labelled on each turn), then Runs (Runs -> Questions -> one answer's steps:
+// where the questions people ask by hand land, synced from the chat), Synthetic, Labels (failure modes per run),
+// Progress, Loop, Notes, Learning and, for admins, People. A run and question in view are kept in the address
+// (?run=R3&q=R3-12), so a link opens the same place.
 import React from 'react';
 import { authApi } from '../api/auth.js';
 import { setActingOrg } from '../api/client.js';
@@ -12,6 +14,7 @@ import { createLabAuth } from './authFlow.js';
 import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
 import RunsPage from './Runs.jsx';
+import Sessions from './Sessions.jsx';
 import Synthetic from './Synthetic.jsx';
 import { readInstance, writeInstance } from './Instances.jsx';
 import LabelsView from './LabelsView.jsx';
@@ -25,11 +28,16 @@ const COMPANY_KEY = 'tracelab.company.v1';
 const store = () => { try { return window.localStorage; } catch (e) { return null; } };
 const locks = () => { try { return navigator.locks || null; } catch (e) { return null; } };
 
+// The page a plain /lab/ opens on.
+export const HOME_VIEW = 'sessions';
+
 // The workspace menu. People is for company admins (and the platform team).
 export function navFor(me) {
   // Loop follows Progress (the correction loop, 3 Nov 2026); Learning sits after Notes because that is the order
   // the work happens in: read a run, leave notes on it, then see what the notes add up to.
-  const items = [['runs', 'Runs'], ['synthetic', 'Synthetic'], ['labels', 'Labels'],
+  // Sessions (11 Nov 2026) comes first: the scenario conversations, a trace per turn, noted and labelled. Runs follows
+  // it: the questions people ask by hand, synced from the chat as one run per person per day.
+  const items = [['sessions', 'Sessions'], ['runs', 'Runs'], ['synthetic', 'Synthetic'], ['labels', 'Labels'],
     ['progress', 'Progress'], ['loop', 'Loop'], ['notes', 'Notes'], ['learning', 'Learning']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
@@ -46,13 +54,30 @@ function readPlace() {
     return { run: run || runOf(question), question, view: q.get('view') || null };
   } catch (e) { return { run: null, question: null, view: null }; }
 }
+// The page an address opens on: the one it names; else Runs when it names a run or a question (the links written before
+// Sessions came first, ?run=R3&q=R3-12, open the question as they always did); else Sessions.
+export function startView(place) {
+  const p = place || {};
+  if (p.view) return p.view;
+  return p.run || p.question ? 'runs' : HOME_VIEW;
+}
+
+// The address for a place. The page is named whenever it is not Sessions or a run or question is in it, so the address
+// reads back as the same page (startView).
+export function placeQuery(view, run, question, session) {
+  const q = new URLSearchParams();
+  if (session && view === 'sessions') q.set('session', session);
+  if (view && (view !== HOME_VIEW || run || question)) q.set('view', view);
+  if (run) q.set('run', run);
+  if (question) q.set('q', question);
+  return q.toString();
+}
+
 function keepPlace(view, run, question) {
   try {
-    const q = new URLSearchParams();
-    if (view && view !== 'runs') q.set('view', view);
-    if (run) q.set('run', run);
-    if (question) q.set('q', question);
-    const s = q.toString();
+    // The session open on the Sessions page is that page's own part of the address; keep it while that page is in view.
+    const session = new URLSearchParams(window.location.search).get('session');
+    const s = placeQuery(view, run, question, session);
     window.history.replaceState(null, '', window.location.pathname + (s ? '?' + s : ''));
   } catch (e) { /* the address is a convenience */ }
 }
@@ -207,7 +232,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const wide = !!(me && me.all_companies);
   const company = wide ? 'All companies' : ((user && user.organization_name) || 'Your company');
   const items = navFor(me);
-  const current = items.some(([k]) => k === view) ? view : 'runs';
+  const current = items.some(([k]) => k === view) ? view : HOME_VIEW;
   const start = React.useRef(readPlace());
   const [run, setRun] = React.useState(start.current.run);
   const [question, setQuestion] = React.useState(start.current.question);
@@ -292,6 +317,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
         </nav>
       </div>
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
+        {current === 'sessions' ? <Sessions me={me} onOpenLoop={() => onView('loop')} /> : null}
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion}
           focus={focus && focus.code === question ? focus : null}
           onOpenLoop={() => onView('loop')} /> : null}
@@ -314,8 +340,8 @@ export default function LabApp() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [email, setEmail] = React.useState('');
-  // A shared link (?view=labels&run=R3) opens on that screen; a plain /lab/ opens on Runs.
-  const [view, setView] = React.useState(() => readPlace().view || 'runs');
+  // A shared link (?view=labels&run=R3) opens on that screen; a plain /lab/ opens on HOME_VIEW (Sessions).
+  const [view, setView] = React.useState(() => startView(readPlace()));
   const [me, setMe] = React.useState(null);
   const [meError, setMeError] = React.useState('');
   const authRef = React.useRef(null);
