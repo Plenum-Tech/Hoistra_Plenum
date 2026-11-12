@@ -32,6 +32,11 @@ You need:
 - That account needs a **Trace Lab curator role** (company admin, platform team or consultant) to import scenarios,
   file sessions and evaluate. The user-experience and domain judges need the platform team or consultant role.
 - Trace Lab deployed with migrations 0014 and 0015 (sessions, scenarios, labels). If `/eval/spec` returns 404, it is not.
+- `HOISTRA_ORGANIZATION_ID` when the account is a platform (superadmin) account: the id of the company the
+  questions are about. A superadmin who names no company asks about their own, which usually holds no records,
+  so every answer is "nothing on record". (The runs of 12 Nov 2026 were asked that way: work orders were read
+  from every company and certificates from none. Since then one turn reads one company.) An ordinary account
+  always asks about its own company and does not need this.
 
 Asking writes to that environment's database: every turn is recorded as a chat turn with its spans and usage, and the
 model calls are billed. Ask only what you were asked to ask.
@@ -94,7 +99,7 @@ All under `HOISTRA_URL`. `LAB = /backend/trace-lab/api/trace-lab`. Every call af
 | Sign in | `POST /backend/ops-intelligence/api/auth/login` `{"email", "password"}` | Token is at `tokens.access_token`. HTTP 202 = the account must enter an emailed code first (sign in once in the browser). 401 = wrong email or password; repeated 401s lock the account, so stop and ask. |
 | Read the specification | `POST LAB/eval/spec/reload` | Then `GET LAB/eval/spec` lists the section ids. |
 | Import scenarios | `POST LAB/eval/scenarios/import` (multipart, field `file`; `?dry_run=true` checks without storing) | A bad line refuses the whole file and names every bad line (422). |
-| Ask one turn | `POST /backend/deep-agents/api/workflow/run-stateful` `{"message": "<turn text>", "session_id": "scn__..."}` | Reply: `answer`, `success`, `error`, `tool_calls`, `route_metadata`. |
+| Ask one turn | `POST /backend/deep-agents/api/workflow/run-stateful` `{"message": "<turn text>", "session_id": "scn__...", "organization_id": "<company id, superadmin only>"}` | Reply: `answer`, `success`, `error`, `tool_calls`, `route_metadata`. |
 | File the sessions | `POST LAB/eval/ingest` `{"run_tag": "<tag>", "sessions": {"<session id>": "<scenario id>", ...}}` | Files exactly those conversations (up to 500). Reply counts: `sessions`, `traces`, `waiting` (scenario not imported), `other_company`, `failed`. |
 | Score | `POST LAB/eval/evaluate` `{"run_tag": "<tag>", "levels": ["logic"], "skip": []}` | Repeat until `remaining - left_for_later` is 0. Add each reply's `failed_traces` to `skip`. `levels` may add `"ux"`, `"domain"` (model judges; budget per run tag; platform team / consultant only). |
 | Read results | `GET LAB/eval/sessions?run_tag=<tag>&limit=200`, `GET LAB/eval/sessions/<session id>` | Each trace carries its scores and the scenario's expected outcome. |
@@ -110,6 +115,7 @@ import json, os, sys, time, urllib.error, urllib.request, uuid
 BASE = os.environ["HOISTRA_URL"].rstrip("/")
 LAB = BASE + "/backend/trace-lab/api/trace-lab"
 FILE, RUN_TAG = sys.argv[1], sys.argv[2]
+ORG = os.environ.get("HOISTRA_ORGANIZATION_ID", "").strip()   # the company asked about (superadmin accounts)
 ATTEMPT = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 
 
@@ -160,7 +166,8 @@ for s in scenarios:
     for n, turn in enumerate(s["turns"], start=1):
         t0 = time.time()
         st, out = http("POST", BASE + "/backend/deep-agents/api/workflow/run-stateful", token,
-                       body={"message": turn["message"], "session_id": sid})
+                       body={"message": turn["message"], "session_id": sid,
+                             **({"organization_id": ORG} if ORG else {})})
         replies.append({"scenario_id": s["scenario_id"], "turn": n, "session_id": sid, "question": turn["message"],
                         "http": st, "seconds": round(time.time() - t0, 1), "success": out.get("success"),
                         "answer": out.get("answer"), "error": out.get("error") or (out if st >= 400 else None)})

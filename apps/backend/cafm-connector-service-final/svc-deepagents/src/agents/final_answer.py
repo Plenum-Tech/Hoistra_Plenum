@@ -43,6 +43,10 @@ Llm = Callable[[str, str, str], Awaitable[str]]
 NOT_EVIDENCE = frozenset({
     "compliance_response", "compliance_pipeline", "openui_view", "planner",
     "write_todos", "ls", "write_file", "edit_file",
+    # The loop choosing where to send the question, and trimming its own context (12 Nov 2026).
+    # select_skill's reply - which agent, which trigger words matched - was counted as the one piece
+    # of evidence on turn-0742ad34d0b74817, so a turn that read no record was written as if it had.
+    "select_skill", "compact_context",
 })
 #: A sub-agent handed a question by the loop: what comes back is its prose, a draft.
 DRAFT_TOOLS = frozenset({"task"})
@@ -75,6 +79,11 @@ Rules:
   the question, no filler, no offers to help further.
 - A part of the question that no tool result answers: say so plainly for that part - the records hold
   nothing for it, or the lookup for it failed - and never fill it from general knowledge.
+- Say a lookup failed or could not be read ONLY for a result listed under FAILED, in that result's own
+  words. Never tell the user to "ask again" for any other reason. When no tool read anything for a part
+  and the previous answer already settles it (it found none of the things the question is about, or it
+  already gave the figure), answer from the previous answer and say that is where it comes from;
+  when nothing settles it, say that part was not looked up.
 - Keep the scope the tools used (company, building, period, vendor, records); do not generalise beyond it.
 - Where a tool result carries `answer_rules`, follow them for that part.
 - What the user can do next in Hoistra (approve, upload, choose, open a page) may be kept from the draft.
@@ -159,7 +168,8 @@ def _results_text(results: dict[str, dict[str, Any]]) -> str:
     """SUCCEEDED / FAILED / CONFLICTS (agents/evidence.render), or that no tool returned anything."""
     if not any(k != "previous_answer" for k in results):
         prev = results.get("previous_answer")
-        return "(no tool returned anything)" + ("\n\n" + ev.render({"previous_answer": prev})[0] if prev else "")
+        return ("(no lookup was run for this question - nothing failed; nothing was read)"
+                + ("\n\n" + ev.render({"previous_answer": prev})[0] if prev else ""))
     return ev.render(results, per=PER_RESULT, total=TOTAL)[0]
 
 

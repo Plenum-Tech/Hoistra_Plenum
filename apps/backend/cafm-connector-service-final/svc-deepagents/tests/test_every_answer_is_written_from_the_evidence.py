@@ -254,8 +254,9 @@ def test_only_the_final_answer_is_painted_never_the_engines_draft(engine_env):
 
 
 def test_an_engine_that_read_nothing_still_goes_through_the_final_step(engine_env):
-    """Nothing read means nothing to quote: the writer is told no tool returned anything."""
+    """Nothing read means nothing to quote: the writer is told no lookup ran - and, since 12 Nov 2026,
+    that nothing failed either (it had answered "the records could not be read" on such a turn)."""
     engine_env["state"]["calls"] = []
     out = _engine(engine_env)
     assert out["answer_source"] == "synthesis"
-    assert "(no tool returned anything)" in engine_env["prompts"][0][1]
+    assert "(no lookup was run for this question - nothing failed; nothing was read)" in engine_env["prompts"][0][1]

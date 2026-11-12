@@ -4503,10 +4503,17 @@ class DeepAgentOrchestrator:
                 and not domain_chooser.is_general(user_message, extra_context)):
             out.update(kind="continue", context=joined + prev_block)
             return out
-        if domain_chooser.is_general(user_message, extra_context):
+        # A follow-up is read before "is this a general question?" (12 Nov 2026). "Which of those at
+        # Bishopsgate Tower are overdue?" after a list of open work orders names no area - "overdue"
+        # alone reads as general - and was answered with the six-area cards, twice (turn-f2eea58174d449c3,
+        # turn-3af1b52df7bb4cd3); the next turn then followed the cards, not the list. "Those" already
+        # says which area: the one just answered. Not straight after the cards themselves (`pending`):
+        # a reply to them that picks no area is a new question.
+        followup = bool(prev_block) and not pending and thread_scope.continues(user_message)
+        if not followup and domain_chooser.is_general(user_message, extra_context):
             out["kind"] = "choose"
             return out
-        if prev_block and thread_scope.continues(user_message):
+        if followup or (prev_block and thread_scope.continues(user_message)):
             out.update(kind="followup", context=joined + prev_block, previous_answer=prev_answer[-6000:],
                        router_context=joined + "PREVIOUS QUESTION: " + str((prev or {}).get("question") or "")[:300])
         return out
@@ -7957,6 +7964,15 @@ class DeepAgentOrchestrator:
                     or str(structured.get("narrative") or "").strip()
                     or answer
                 )
+                # The analyst is trusted to leave without the final step because it writes from the
+                # rows. One that talks about the machinery has not: "the only tool that surfaces
+                # contract-renewal risk does so through open work orders" (turn-491d961e900b4400,
+                # 12 Nov 2026). That text is a draft like any other, and the final step writes the
+                # answer from what the tools returned.
+                if answer_evidence.speaks_of_tools(answer):
+                    log.warning("orchestrator.compliance.analyst_spoke_of_tools", session_id=session_id,
+                                answer=str(answer)[:200])
+                    answer_source = None
                 inner_tool_calls = [
                     *inner_tool_calls,
                     {
@@ -9219,7 +9235,8 @@ class DeepAgentOrchestrator:
 
                     activity_log.fire(
                         agent=f"tool:{domain}", stage="tool", direction="input",
-                        summary=tool_name, payload={"tool": tool_name, "input": tool_input},
+                        summary=tool_name, payload={"tool": tool_name, "input": tool_input,
+                                                    "run_id": str(event.get("run_id") or "")},
                     )
                     yield {
                         "type": "tool_started",
@@ -9247,7 +9264,8 @@ class DeepAgentOrchestrator:
                     )
                     activity_log.fire(
                         agent=f"tool:{domain}", stage="tool", direction="output",
-                        summary=tool_name, payload={"tool": tool_name, "output": output},
+                        summary=tool_name, payload={"tool": tool_name, "output": output,
+                                                    "run_id": str(event.get("run_id") or "")},
                     )
                     yield {
                         "type": "tool_completed",

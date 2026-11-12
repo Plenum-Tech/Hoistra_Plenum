@@ -458,7 +458,9 @@ class _TaskRunner:
             ),
             "contract_performance": _sub(
                 "contract_performance",
-                tools=[*CONTRACT_PERFORMANCE_TOOLS],
+                # answer_from_records: the contract register's own dates (start, end, renewal notice).
+                # None of this agent's tools returned them, so a renewal question had nothing to read.
+                tools=[*CONTRACT_PERFORMANCE_TOOLS, answer_from_records],
                 prompt=live_prompt(lambda: agent_system_prompt(
                     "contract_performance", extra=contract_subagent_prompt()
                 )),
@@ -727,7 +729,14 @@ async def task(agent: str, prompt: str) -> str:
             "error": "Task runner not initialised. Call init_meta_tools() at startup."
         })
     log.info("meta.task", agent=agent, prompt_len=len(prompt))
-    answer = await _task_runner.run(agent, prompt)
+    # What this sub-agent runs is traced under THIS call, not under whichever `task` opened last.
+    from . import trace as _trace
+
+    _call = _trace.in_call("task", {"agent": agent, "prompt": prompt})
+    try:
+        answer = await _task_runner.run(agent, prompt)
+    finally:
+        _trace.out_call(_call)
     # Never None, and never blank. The signature says str and the caller is a model: a null
     # in the evidence is indistinguishable to it from a tool that was never called, so a
     # sub-agent that produced nothing said nothing about having failed. This says it.

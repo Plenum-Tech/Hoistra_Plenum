@@ -326,14 +326,26 @@ def _resolve_acting_org(named_org: str | None, principal: Principal) -> str | No
     naming your own company is a no-op, a normal caller naming any other company is a 403,
     and a superadmin naming one is honoured. Returns the org to scope this turn's
     operations-intelligence tool calls to (None = no override, i.e. today's behaviour —
-    every tool call resolves org from the caller's own token, same as always)."""
+    every tool call resolves org from the caller's own token, same as always).
+
+    A superadmin who names no company asks about their own (12 Nov 2026). Until now that turn had
+    no one scope: the record readers treated it as "every company" while the services read the
+    superadmin's own company from the token. On the scenario runs of 12 Nov (46 turns, asked over
+    REST with no company) one answer listed 23 open work orders across two different customers'
+    buildings, and the next said the certificate register was empty - 274 certificates were on
+    file, none of them in the asker's own (empty) company. Every reader now gets the same
+    company; to ask about a customer, a superadmin names it (the app's "view as company" does)."""
     is_super = principal.role == "superadmin"
     named = (named_org or "").strip() or None
     if named and not is_super and named != str(principal.organization_id):
         raise HTTPException(status_code=403, detail={
             "ok": False, "error": "You can only ask about your own company.",
             "reason": "wrong_organization"})
-    return named if (named and is_super) else None
+    if named and is_super:
+        return named
+    if is_super and principal.organization_id:
+        return str(principal.organization_id)
+    return None
 
 
 # ---------------------------------------------------------------------------

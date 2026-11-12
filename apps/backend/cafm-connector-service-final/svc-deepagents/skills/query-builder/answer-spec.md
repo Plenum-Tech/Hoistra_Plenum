@@ -22,12 +22,21 @@ itself failed) or **DENIED** (no access, or the sign-in expired). A failure carr
 business words: what happened, whether the user can act, and the next step. Where two sources
 disagree about the same record, the answer says which says what.
 
+An answer says a lookup failed or could not be read only when one did, and never speaks about the
+tools themselves ("the only tool that ...", a tool's name): it speaks about the records. When no
+lookup ran for a part and the previous answer already settles it - it found none of the things the
+question is about - the answer comes from the previous answer and says so (12 Nov 2026).
+
 ## A4 · A conversation, and a complete answer
 
 - **Continuity.** After every answer the thread keeps the records the answer showed - buildings,
   vendors, assets, work orders - taken from the tool results, never from the answer's wording, and
   the period. A follow-up ("those", "what about the vendors", "for each of them") reads inside that
-  set without asking again (agents/thread_scope.py).
+  set without asking again (agents/thread_scope.py) - and is never asked which area it means, even
+  when it names none ("which of those are overdue?"): the area is the one just answered.
+- **One company.** Every lookup of a turn reads the same company: the asker's own, or the one a
+  platform administrator named. No turn mixes companies or reads some lookups from one and some
+  from another.
 - **Completeness.** Every part of the question is answered, or said plainly to be unanswered and why.
   The writer is given the parts; an answer that leaves one out is rewritten once.
 - **Form.** One of the four forms below, chosen from what the lookups did.

@@ -1228,6 +1228,34 @@ PERIODS = {
     "year_to_date": (_Y, "(CURRENT_DATE + INTERVAL '1 day')"),
 }
 
+#: A rolling window of any length: next_60_days, last_14_days, next_2_weeks (12 Nov 2026). Only
+#: last_7/30/90_days were named, and nothing looked forward further than next_month, so "statutory
+#: inspections due in the next 60 days" could not be planned at all - three attempts, then "within
+#: needs a period" as the tool's answer (turn-4381e9d1938446d5). next_N counts today and the N days
+#: after it; last_N the N days before today and today, as last_30_days always has.
+_ROLLING = re.compile(r"^(next|last|past|previous|coming)_(\d{1,4})_(day|week|month)s?$")
+_ROLLING_DAYS = {"day": 1, "week": 7, "month": 30}
+MAX_ROLLING_DAYS = 3660
+ROLLING_HELP = "next_<N>_days, last_<N>_days (any N, e.g. next_60_days)"
+
+
+def _rolling(name: str):
+    """(start, end) SQL for a rolling period name, or None. The number is an int we parsed, never text."""
+    m = _ROLLING.match(name or "")
+    if not m:
+        return None
+    days = int(m.group(2)) * _ROLLING_DAYS[m.group(3)]
+    if not 1 <= days <= MAX_ROLLING_DAYS:
+        return None
+    if m.group(1) in ("next", "coming"):
+        return ("CURRENT_DATE", "(CURRENT_DATE + INTERVAL '" + str(days + 1) + " day')")
+    return ("(CURRENT_DATE - INTERVAL '" + str(days) + " day')", "(CURRENT_DATE + INTERVAL '1 day')")
+
+
+def period_bounds(name: str):
+    """(start, end) SQL, end exclusive, for a period `period_of` accepted."""
+    return PERIODS.get(name) or _rolling(name)
+
 
 def period_of(value):
     """'last_month', 'Last month', 'last-month', 'start_of_last_month', 'last_month_end' -> (name, edge).
@@ -1242,13 +1270,13 @@ def period_of(value):
     for suf, e in (("_start", "start"), ("_begin", "start"), ("_end", "end")):
         if v.endswith(suf):
             v, edge = v[: -len(suf)], e
-    return (v, edge) if v in PERIODS else None
+    return (v, edge) if (v in PERIODS or _rolling(v)) else None
 
 
 def date_expr(value):
     per = period_of(value)
     if per:
-        start, end = PERIODS[per[0]]
+        start, end = period_bounds(per[0])
         # An inclusive end (lte, BETWEEN) stops just before the next period begins.
         return start if per[1] != "end" else "(" + end + " - INTERVAL '1 microsecond')"
     m = RELATIVE_DATE_RE.match(str(value).strip())
@@ -1339,9 +1367,9 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
     if op == "within":
         per = period_of(v)
         if not per:
-            raise OntologyError("within needs a period: " + ", ".join(PERIODS))
+            raise OntologyError("within needs a period: " + ", ".join(PERIODS) + ", " + ROLLING_HELP)
         _needs_date_column(col, ctype, v)
-        start, end = PERIODS[per[0]]
+        start, end = period_bounds(per[0])
         return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
     if op == "between":
         if not isinstance(v, list) or len(v) != 2:
@@ -1349,7 +1377,7 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
         a, b = period_of(v[0]), period_of(v[1])
         if a and b and a[0] == b[0] and not a[1] and not b[1]:      # ["last_month", "last_month"]
             _needs_date_column(col, ctype, v)
-            start, end = PERIODS[a[0]]
+            start, end = period_bounds(a[0])
             return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
         return e + " BETWEEN " + value_expr(v[0], p, ctype) + " AND " + value_expr(v[1], p, ctype)
     if op == "contains":
@@ -1459,7 +1487,9 @@ PLAN_GUIDE = """How to plan:
   "Bishopsgate". Never correct the spelling. A name goes in "match", never in a filter on name.
 - Dates in filters may be "today", "today+30d", "today-7d" or YYYY-MM-DD.
 - For a calendar period use op "within" with a period name - never invent a date word:
-  {"attribute": "raised_at", "op": "within", "value": "last_month"}. Periods: today, yesterday, this_week, last_week, this_month, last_month, next_month, this_quarter, last_quarter, this_year, last_year, last_7_days, last_30_days, last_90_days, year_to_date.
+  {"attribute": "raised_at", "op": "within", "value": "last_month"}. Periods: today, yesterday, this_week, last_week, this_month, last_month, next_month, this_quarter, last_quarter, this_year, last_year, last_7_days, last_30_days, last_90_days, year_to_date;
+  and a rolling window of any length, counted from today: next_<N>_days or last_<N>_days
+  ("due in the next 60 days" = within next_60_days; "raised in the last 14 days" = within last_14_days).
   "How many raised last month and how many are closed" = the work orders raised within last_month, counted by status.
 - Use only concept, attribute, state and relation names that exist in the ontology.
 

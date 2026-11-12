@@ -65,6 +65,11 @@ _PROMPT = (
     "mentioning a contractor is about contract performance only if it asks about that "
     "contractor's work, SLAs, invoices or scorecard; if it asks what a contractor must HOLD "
     "to do regulated work, it is a statutory compliance question. Decide from meaning.\n\n"
+    # 12 Nov 2026: "Which contracts come up for renewal in the next 90 days?" went to compliance
+    # ("renewal"), which holds no contract and answered that the system has no contract register.
+    "What is being renewed decides it: a CONTRACT that ends, expires or comes up for renewal is a "
+    "contract question (its dates are on the contract), never a compliance one; compliance renews "
+    "certificates and accreditations.\n\n"
     "Choose exactly one agent from the catalogue. List a second agent under also ONLY when "
     "the question cannot be answered in full without that agent's own data — two registers "
     "the answer must join. A question one agent answers completely has an empty also, even "

@@ -51,6 +51,7 @@ unfiltered set — there is no other way to know.
 | A named vendor's performance | resolve id (above) → `list_vendor_scorecards(vendor_id=…)` |
 | Ranking / comparing vendors | `list_vendor_scorecards()` **unfiltered**, then rank yourself |
 | What a contract commits to | `list_contract_parameters()`, match the row yourself |
+| When contracts start, end or renew, their notice period or annual value ("which contracts come up for renewal in the next 90 days") | `answer_from_records(question=…)` — it reads the contract register itself; the commercial terms above carry no dates |
 | An invoice, by company or number | `list_invoices(vendor_name=…)` or `(invoice_ref=…)` |
 | How scores are weighted | `get_score_weights()` |
 | What is waiting on the PM | `list_contract_approvals(status="pending")` |

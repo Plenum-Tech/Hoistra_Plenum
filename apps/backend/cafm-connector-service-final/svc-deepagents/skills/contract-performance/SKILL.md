@@ -1,7 +1,7 @@
 ---
 name: contract-performance
 agent: contract_performance
-description: Vendor and contractor performance — SLA response and completion, first-fix and recall rates, monthly scorecards, PPM completion against contract obligations, asset criticality, contract parameter extraction, and invoice verification against contracted rates. Answers "how is this vendor performing", "who is worst", "which vendors are below 80", "did they overcharge us", "what does their contract commit them to", "what is waiting on me to decide". Use for "vendor performance", "SLA", "scorecard", "KPI", "first fix", "recall", "invoice", "overcharge", "contract breach", "day rate", "hourly rate", "capped", "adversary", "PPM compliance", "cost variance".
+description: Vendor and contractor performance — SLA response and completion, first-fix and recall rates, monthly scorecards, PPM completion against contract obligations, asset criticality, contract parameter extraction, invoice verification against contracted rates, and the contract register itself — which contracts are in force, when each starts and ends, which come up for renewal and their notice periods and annual values. Answers "how is this vendor performing", "who is worst", "which vendors are below 80", "did they overcharge us", "what does their contract commit them to", "what is waiting on me to decide". Use for "vendor performance", "SLA", "scorecard", "KPI", "first fix", "recall", "invoice", "overcharge", "contract breach", "contract renewal", "contract end date", "contracts ending", "notice period", "day rate", "hourly rate", "capped", "adversary", "PPM compliance", "cost variance".
 triggers:
   - vendor performance
   - contractor performance

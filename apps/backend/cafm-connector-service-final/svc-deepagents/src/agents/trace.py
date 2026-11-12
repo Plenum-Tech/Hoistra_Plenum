@@ -229,6 +229,8 @@ class Turn:
         self.groups: dict[str, Span] = {}
         self.runs: dict[str, Span] = {}      # model runs by run_id (stream events / callbacks)
         self.tool_runs: dict[str, Span] = {} # tool runs by run_id (callbacks)
+        self.loop_tools: dict[str, Span] = {} # the loop's own tool calls by run_id (stream events)
+        self.claimed: set[str] = set()        # loop tool spans a running call has taken as its own
         self.flushed = False
         # The card tools' outputs, whole: spans keep a bounded copy, the answer's cards need the
         # rows (see keep_card_output). A handful per turn at most.
@@ -258,7 +260,31 @@ class Turn:
         if step is not None and step.open:
             inner = self.last_open(lambda x: x.kind == "tool" and self.descends(x, step.id))
             return inner or step
+        call = self.call_span()
+        if call is not None:
+            inner = self.last_open(lambda x: x.kind == "tool" and self.descends(x, call.id))
+            return inner or call
         return self.last_open(lambda x: x.kind in ("tool", "step"))
+
+    def call_span(self) -> Span | None:
+        """The loop's tool call this task is running (see `in_call`), found the first time something
+        inside it asks: the oldest open span of that tool with the same input that no other running
+        call has taken. None outside a call, or once it has closed."""
+        c = _current_call.get()
+        if not c:
+            return None
+        s = self.by_id.get(c.get("span_id") or "")
+        if s is None:
+            for x in self.spans:
+                if (x.kind == "tool" and x.open and x.name == c["name"] and x.id not in self.claimed
+                        and _same_input(x.input, c["inputs"])):
+                    s = x
+                    break
+            if s is None:
+                return None
+            c["span_id"] = s.id
+            self.claimed.add(s.id)
+        return s if s.open else None
 
     def descends(self, s: Span, ancestor_id: str) -> bool:
         seen = 0
@@ -273,7 +299,10 @@ class Turn:
         """An engine's or sub-agent's span is one per step it runs in, not one per turn."""
         sid = _current_step.get()
         step = self.by_id.get(sid) if sid else None
-        return f"{group}@{step.id}" if step is not None and step.open else group
+        if step is not None and step.open:
+            return f"{group}@{step.id}"
+        call = self.call_span()
+        return f"{group}@{call.id}" if call is not None else group
 
     def new(self, **kw: Any) -> Span:
         return self._add(Span(seq=len(self.spans), **kw))
@@ -300,6 +329,41 @@ _turn: ContextVar[Turn | None] = ContextVar("hoist_trace_turn", default=None)
 #: Before, every engine and tool call was put under "the newest open step", and two steps running at
 #: once took each other's calls - two wo_engine steps shared one engine span.
 _current_step: ContextVar[str | None] = ContextVar("hoist_trace_step", default=None)
+#: The loop's tool call this task is running (12 Nov 2026). The loop runs the tool calls of one model
+#: message in parallel, each in its own task. Two `task` sub-agents at once were both hung under the
+#: newest open `task` span, and - the spans being paired by name - the one that finished first closed
+#: the other's span: on turn-4381e9d1938446d5 the compliance sub-agent's span showed the work-order
+#: sub-agent's answer and every tool either of them called.
+_current_call: ContextVar[dict | None] = ContextVar("hoist_trace_call", default=None)
+
+
+def _same_input(span_input: Any, inputs: dict[str, Any]) -> bool:
+    """Whether a span's stored (bounded) input is this call's: every argument equal, long text by its start."""
+    if not isinstance(span_input, dict):
+        return False
+    for k, v in inputs.items():
+        a = span_input.get(k)
+        if isinstance(v, str) and isinstance(a, str):
+            if a[:200] != v[:200]:
+                return False
+        elif a != v:
+            return False
+    return True
+
+
+def in_call(name: str, inputs: dict[str, Any]):
+    """Called by a loop tool that runs other calls inside it (`task`), from inside its own task: what
+    it runs is hung under ITS span, not under whichever call of that name opened last. Returns the
+    token for `out_call`. The span is found later (call_span): the stream event that opens it can
+    arrive after the tool has started."""
+    return _current_call.set({"name": str(name), "inputs": dict(inputs or {}), "span_id": None})
+
+
+def out_call(token) -> None:
+    try:
+        _current_call.reset(token)
+    except Exception:  # noqa: BLE001 - a token from another context: leave the var as it is
+        pass
 
 
 def current() -> Turn | None:
@@ -381,11 +445,18 @@ def on_activity(kw: dict[str, Any]) -> None:
             return
         if stage == "tool":
             name = str(payload.get("tool") or kw.get("summary") or "tool")
+            # The loop's calls carry their run id: two calls of one tool running at once are told apart
+            # by it. A row without one (older callers) pairs by name, newest first, as before.
+            rid = str(payload.get("run_id") or "")
             if direction == "input":
-                t.new(kind="tool", name=name, agent=agent, parent_id=t.group("orchestrator").id if agent.startswith("tool:") else t.group(agent).id,
-                      input=_bound(payload.get("input")))
+                s = t.new(kind="tool", name=name, agent=agent, parent_id=t.group("orchestrator").id if agent.startswith("tool:") else t.group(agent).id,
+                          input=_bound(payload.get("input")))
+                if rid:
+                    t.loop_tools[rid] = s
             else:
-                s = t.last_open(lambda x: x.kind == "tool" and x.name == name)
+                s = t.loop_tools.pop(rid, None) if rid else None
+                if s is None or not s.open:
+                    s = t.last_open(lambda x: x.kind == "tool" and x.name == name)
                 if s is None:
                     s = t.new(kind="tool", name=name, agent=agent, parent_id=t.root.id)
                 if kw.get("ok", True) and not kw.get("error"):

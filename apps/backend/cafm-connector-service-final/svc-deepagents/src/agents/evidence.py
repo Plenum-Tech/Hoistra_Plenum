@@ -336,6 +336,30 @@ STATE_RULES = """How to speak about each result's state:
 _SAYS_NONE = re.compile(r"\b(no|none|zero|nothing)\b[^.\n]{0,60}\b(found|records?|recorded|results?|returned|work orders?|"
                         r"certificates?|vendors?|assets?|buildings?|invoices?|meters?)\b|\bthere (?:are|were|is) no\b", re.I)
 _SAYS_ACCESS = re.compile(r"\b(access|permission|allowed|sign(?:ed)? ?in|administrator|admin)\b", re.I)
+#: The answer says the system failed to read something.
+_SAYS_FAILED = re.compile(r"\b(could ?n[o']t be (?:read|checked|retrieved|loaded|reached)|lookup (?:has )?failed|"
+                          r"failed to (?:read|load|retrieve|respond)|(?:ask|try) again (?:in a moment|later|shortly))\b", re.I)
+#: The answer talks about the machinery instead of the records: a tool's name, "the only tool that ...".
+_TOOL_TALK = re.compile(r"`[a-z][a-z0-9]*(?:_[a-z0-9]+)+`|\b(?:only|no|an?|the|this|that) (?:[\w-]+ ){0,2}tools? "
+                        r"(?:that|which|surfaces?|exposes?|returns?|lists?)\b|"
+                        r"\btools? (?:that|which) (?:surfaces?|exposes?|returns?|lists?)\b|\bno exposed\b", re.I)
+
+
+def speaks_of_tools(answer: str | None) -> bool:
+    """Whether an answer names a tool or talks about what "the tool" does (never the user's business)."""
+    return bool(_TOOL_TALK.search(answer or ""))
+
+
+def _inner_failed(r: dict[str, Any]) -> bool:
+    """Whether a call made inside an engine step failed, though the step itself came back with prose."""
+    for tc in r.get("tool_calls") or []:
+        if isinstance(tc, dict) and tc.get("tool"):
+            try:
+                if classify(str(tc["tool"]), tc.get("output"), tc.get("error"))["status"] not in ANSWERED:
+                    return True
+            except Exception:  # noqa: BLE001 - an output this cannot read is not a failure it can name
+                continue
+    return False
 # Case-sensitive: "an exception was raised on the inspection" is plain English; "ReadTimeout" is not.
 _TECHNICAL = re.compile(r"\b(Traceback|status_code|[A-Z][A-Za-z]*(?:Error|Exception)\b|[A-Z][a-z]+Timeout\b|"
                         r"[45]\d\d (?:Internal Server Error|Forbidden|Unauthorized|Bad Request|Not Found|Service Unavailable)|"
@@ -356,6 +380,15 @@ def state_mismatches(answer: str, results: dict[str, dict[str, Any]]) -> list[st
         out.append("A lookup was refused for lack of access: say so in plain words and give the next step.")
     if _TECHNICAL.search(a):
         out.append("Remove the technical error text (codes, exception names, status numbers); say what happened in plain words.")
+    # 12 Nov 2026 (turn-0742ad34d0b74817): no lookup had failed - none had run - and the answer was
+    # "the work-order records could not be read. Next step: ask again in a moment."
+    if not failed and not any(_inner_failed(r) for r in rs) and _SAYS_FAILED.search(a):
+        out.append("The answer says a lookup failed or could not be read, but no lookup failed. Remove that and the "
+                   "advice to ask again: answer from the results (and the previous answer, where it settles the "
+                   "question), or say that part was not looked up.")
+    if speaks_of_tools(a):
+        out.append("Remove every mention of tools, tool names and what \"the tool\" or \"the system\" exposes; "
+                   "speak about the records and the business only.")
     return out
 
 
