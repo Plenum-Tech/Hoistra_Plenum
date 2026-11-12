@@ -4,6 +4,7 @@
 // Trace, Score), a tab per turn with the first one selected, and honest empty states.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { bundle, cleanBundles } from '../../tracelab/__tests__/esbuild-helper.mjs';
 import { LEVELS, evaluateLevels, evaluateStep, evaluateText, ingestText, planLines, scoreSummary, sessionQuery, sessionRow,
   sessionTitle, turnTabs, verdictText } from '../logic/sessions.js';
@@ -101,6 +102,7 @@ test('the list: one row per session with its run tag, type, turns and status, in
   assert.ok(out.includes('2 turns') && out.includes('1 turn'));
   assert.ok(out.includes('Failed') && out.includes('OK'));
   assert.equal((out.match(/<button/g) || []).length, 2, 'each session opens from its own button');
+  assert.ok(!/<th[^>]*>(Logic|User experience|Domain)<\/th>/.test(out), 'the score columns are hidden until scores come from annotations');
 });
 
 test('the list says so when there is nothing, and names the run tag asked for', () => {
@@ -276,7 +278,7 @@ test('the other scores leave out the current one by its id, even when an automat
 });
 
 test('the filters also take a level with its verdict, and the three switches', () => {
-  const out = html(S.Filters, { tags: [], value: { runTag: '', type: '', status: '', level: 'ux', verdict: 'fail', needsSme: true, stale: false, allAttempts: false }, onChange() {} });
+  const out = html(S.Filters, { scores: true, tags: [], value: { runTag: '', type: '', status: '', level: 'ux', verdict: 'fail', needsSme: true, stale: false, allAttempts: false }, onChange() {} });
   assert.match(out, /<label[^>]*><span>Level<\/span><select/);
   assert.match(out, /<label[^>]*><span>Verdict<\/span><select/);
   assert.match(out, /<input type="checkbox"[^>]*checked=""[^>]*\/>\s*<span>Waiting for a domain expert<\/span>|<input type="checkbox"[^>]*checked=""[^>]*\/><span>Waiting for a domain expert<\/span>/);
@@ -418,4 +420,17 @@ test('a level\'s compare line also counts the moves that are neither a fix nor a
   const out = { ...COMPARE, summary: { ...COMPARE.summary, ux: { fixed: 0, regressed: 0, same: 18, changed: 2, new: 0, missing: 0 } } };
   assert.equal(compareView(out).summary[1], 'User experience: 0 fixed, 0 regressed, 18 the same, 2 changed in another way');
   assert.equal(compareView(COMPARE).summary[0], 'Logic: 12 fixed, 1 regressed, 230 the same');
+});
+
+test('while scores are hidden (until they come from annotations): no score filters and no Evaluate button', () => {
+  assert.equal(S.SHOW_SCORES, false);
+  const out = html(S.Filters, { tags: [], value: {}, onChange() {} });
+  assert.ok(!out.includes('<span>Level</span>') && !out.includes('<span>Verdict</span>') && !out.includes('Waiting for a domain expert'));
+  assert.ok(out.includes('Expected outcome out of date') && out.includes('Show every attempt'), 'the other switches stay');
+  const src = readFileSync(new URL('../Sessions.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('{curator && SHOW_SCORES ? <EvaluateBar'), 'the Evaluate button waits for the same switch');
+});
+
+test('while scores are hidden the Compare view is hidden too: Sessions and Scenarios only', () => {
+  assert.deepEqual(S.VIEWS.map(([key]) => key), ['sessions', 'scenarios']);
 });

@@ -24,11 +24,16 @@ import './runs.css';
 import './sessions.css';
 
 const PAGE = 50;
-const VIEWS = [['sessions', 'Sessions'], ['compare', 'Compare'], ['scenarios', 'Scenarios']];
 const LEVEL_OPTIONS = [['', 'Any level']].concat(LEVELS.map((k) => [k, LEVEL_TEXT[k]]));
 const VERDICT_OPTIONS = [['', 'Any verdict'], ['pass', 'Pass'], ['fail', 'Fail'], ['not_evaluated', 'Not evaluated']];
 const EMPTY = { runTag: '', type: '', status: '', level: '', verdict: '', needsSme: false, stale: false, allAttempts: false };
 const PASSES_MAX = 400;
+// Scores are hidden on this page for now (Hussain, 12 Nov 2026): the list's Logic / User experience / Domain columns,
+// the Level, Verdict and "Waiting for a domain expert" filters, the Evaluate button and the Compare view. A session's verdict is to come
+// from what people annotate on its turns. Set to true to show the automatic scores again.
+export const SHOW_SCORES = false;
+// The page's views. Compare (two run tags' verdicts side by side) is hidden with the scores.
+export const VIEWS = [['sessions', 'Sessions']].concat(SHOW_SCORES ? [['compare', 'Compare']] : [], [['scenarios', 'Scenarios']]);
 
 function readSession() {
   try { return new URLSearchParams(window.location.search).get('session') || null; } catch (e) { return null; }
@@ -62,7 +67,7 @@ function Check({ label, checked, onChange }) {
 
 // The plan's filters (B4.2): run tag, scenario type, failure status and score (a level with its verdict), and three
 // switches: sessions waiting for a domain expert, sessions whose expected outcome is out of date, every attempt.
-export function Filters({ tags, value, onChange }) {
+export function Filters({ tags, value, onChange, scores = SHOW_SCORES }) {
   const v = value || {};
   const set = (key) => (x) => onChange({ ...v, [key]: x });
   const tagOptions = [['', 'All run tags']].concat((tags || []).map((t) => [t.tag, t.tag + ' (' + (Number(t.sessions) || 0) + ')']));
@@ -72,15 +77,15 @@ export function Filters({ tags, value, onChange }) {
         <Select label="Run tag" value={v.runTag} options={tagOptions} onChange={set('runTag')} />
         <Select label="Scenario type" value={v.type} options={TYPE_OPTIONS} onChange={set('type')} />
         <Select label="Status" value={v.status} options={STATUS_OPTIONS} onChange={set('status')} />
-        <Select label="Level" value={v.level} options={LEVEL_OPTIONS} onChange={set('level')} />
-        <Select label="Verdict" value={v.verdict} options={VERDICT_OPTIONS} onChange={set('verdict')} />
+        {scores ? <Select label="Level" value={v.level} options={LEVEL_OPTIONS} onChange={set('level')} /> : null}
+        {scores ? <Select label="Verdict" value={v.verdict} options={VERDICT_OPTIONS} onChange={set('verdict')} /> : null}
       </div>
       <div className="lab-row">
-        <Check label="Waiting for a domain expert" checked={v.needsSme} onChange={set('needsSme')} />
+        {scores ? <Check label="Waiting for a domain expert" checked={v.needsSme} onChange={set('needsSme')} /> : null}
         <Check label="Expected outcome out of date" checked={v.stale} onChange={set('stale')} />
         <Check label="Show every attempt" checked={v.allAttempts} onChange={set('allAttempts')} />
       </div>
-      {(v.level && !v.verdict) || (!v.level && v.verdict)
+      {scores && ((v.level && !v.verdict) || (!v.level && v.verdict))
         ? <p className="lab-small">{'Choose a level and a verdict together to filter by score.'}</p> : null}
     </div>
   );
@@ -154,7 +159,8 @@ export function SessionsTable({ rows, runTag, onOpen }) {
       <table className="lab-table">
         <thead>
           <tr><th scope="col">{'Session'}</th><th scope="col">{'Run tag'}</th><th scope="col">{'Type'}</th><th scope="col">{'Turns'}</th>
-            <th scope="col">{'Status'}</th><th scope="col">{'Logic'}</th><th scope="col">{'User experience'}</th><th scope="col">{'Domain'}</th>
+            <th scope="col">{'Status'}</th>
+            {SHOW_SCORES ? <><th scope="col">{'Logic'}</th><th scope="col">{'User experience'}</th><th scope="col">{'Domain'}</th></> : null}
             <th scope="col">{'Started'}</th></tr>
         </thead>
         <tbody>
@@ -172,7 +178,7 @@ export function SessionsTable({ rows, runTag, onOpen }) {
                 <td>{r.type}</td>
                 <td>{r.turns}</td>
                 <td><span className={'lab-chip' + (r.failed ? ' lab-ses-bad' : ' lab-chip-ok')}>{r.status}</span></td>
-                {r.levels.map((l) => (
+                {SHOW_SCORES && r.levels.map((l) => (
                   <td key={l.key}><span className={'lab-chip' + (l.verdict === 'pass' ? ' lab-chip-ok' : l.verdict === 'fail' ? ' lab-ses-bad' : '')}
                     title={l.source === 'ANNOTATION' ? 'Scored by a person' : l.source === 'EVAL' ? 'Scored automatically' : 'Not scored yet'}>{l.text}</span></td>
                 ))}
@@ -284,7 +290,7 @@ function SessionsList({ me, tags, reloadTags, onOpen }) {
       {pusher ? <SyncBar status={sync.status} busy={sync.busy} said={sync.said} error={sync.error}
         onPush={pushTo(false)} onCheck={pushTo(true)} /> : null}
       <Filters tags={tags} value={filters} onChange={setFilters} />
-      {curator ? <EvaluateBar runTag={filters.runTag} levels={levels} busy={evaluating.busy} said={evaluating.said} error={evaluating.error} onRun={evaluate} /> : null}
+      {curator && SHOW_SCORES ? <EvaluateBar runTag={filters.runTag} levels={levels} busy={evaluating.busy} said={evaluating.said} error={evaluating.error} onRun={evaluate} /> : null}
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
       <SessionsTable rows={rows} runTag={filters.runTag} onOpen={onOpen} />
       {next && rows && rows.length ? (
@@ -320,7 +326,7 @@ export default function Sessions({ me, onOpenLoop }) {
         </div>
       </div>
       {view === 'sessions' ? <SessionsList me={me} tags={tags} reloadTags={loadTags} onOpen={setOpen} /> : null}
-      {view === 'compare' ? <Compare me={me} tags={tags} /> : null}
+      {view === 'compare' && SHOW_SCORES ? <Compare me={me} tags={tags} /> : null}
       {view === 'scenarios' ? <Scenarios me={me} /> : null}
     </div>
   );
