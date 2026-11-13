@@ -226,9 +226,12 @@ function SessionsList({ me, tags, reloadTags, onOpen }) {
     labApi.evalSyncStatus().then((out) => setSync((old) => ({ ...old, status: out || null })), () => {});
   }, [pusher]);
 
-  const readIn = () => {
+  // "Read new sessions" reads the scenario runs. The conversations people typed in the chat arrive by themselves
+  // every couple of minutes, filed under the run tag "chat" (the service's own sync, as Runs has always had);
+  // "Read chat questions" reads the last week of them now, without waiting.
+  const readIn = (chat) => () => {
     setReading({ busy: true, said: '', error: '' });
-    labApi.evalIngest({})
+    labApi.evalIngest(chat ? { chat: true } : {})
       .then((out) => {
         setReading({ busy: false, error: '', said: ingestText(out) });
         reloadTags();
@@ -277,11 +280,14 @@ function SessionsList({ me, tags, reloadTags, onOpen }) {
   return (
     <div className="lab-ses-list">
       <div className="lab-head-row">
-        <p className="lab-small">{'Each session is one scenario asked once, with a trace per turn. Filter by run tag to read one batch.'}</p>
+        <p className="lab-small">{'Each session is one scenario asked once, or one conversation from the chat (run tag "chat", read in by itself), with a trace per turn. Filter by run tag to read one batch.'}</p>
         {curator ? (
           <div className="lab-row">
-            <button type="button" className="lab-btn lab-btn-quiet" disabled={reading.busy} onClick={readIn}>
+            <button type="button" className="lab-btn lab-btn-quiet" disabled={reading.busy} onClick={readIn(false)}>
               {reading.busy ? 'Reading…' : 'Read new sessions'}</button>
+            <button type="button" className="lab-btn lab-btn-quiet" disabled={reading.busy} onClick={readIn(true)}
+              title="Also read the questions asked in the chat over the last 7 days, under the run tag 'chat'">
+              {reading.busy ? 'Reading…' : 'Read chat questions'}</button>
           </div>
         ) : null}
       </div>

@@ -184,7 +184,16 @@ async def question_tree(m: labelling.Member, code: str, *, turn_id: str | None =
     mm = labelling.for_org(m, pick["organization_id"] or row.get("organization_id") or run.get("organization_id"))
     got = await _raw(labelling.company_view(mm.principal, mm.org), mm.org, pick["turn_id"])
     if got is None:
-        return {"turn_id": pick["turn_id"], "missing": True, "tree": None}
+        # A turn of a session copied from another Trace Lab (13 Nov 2026): the chat here never recorded it, and
+        # the eval store holds its tree already in this shape.
+        from . import eval_store
+        from .review_errors import NotFound
+
+        try:
+            return {"turn_id": pick["turn_id"], "missing": False, "stored": True,
+                    "tree": await eval_store.trace_tree_of(mm, pick["turn_id"])}
+        except NotFound:
+            return {"turn_id": pick["turn_id"], "missing": True, "tree": None}
     return {"turn_id": pick["turn_id"], "missing": False, "tree": build_tree(*got)}
 
 

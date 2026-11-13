@@ -434,3 +434,20 @@ test('while scores are hidden (until they come from annotations): no score filte
 test('while scores are hidden the Compare view is hidden too: Sessions and Scenarios only', () => {
   assert.deepEqual(S.VIEWS.map(([key]) => key), ['sessions', 'scenarios']);
 });
+
+// 13 Nov 2026: a question typed in the chat was recorded as a trace but never listed in Sessions, which reads
+// scenario runs only. A curator can now read the chat's own conversations in as well - asked for, never by default.
+test('a curator can read the chat questions in, and the ordinary read does not ask for them', () => {
+  const src = readFileSync(new URL('../Sessions.jsx', import.meta.url), 'utf-8');
+  assert.ok(src.includes('labApi.evalIngest(chat ? { chat: true } : {})'));
+  assert.ok(src.includes('onClick={readIn(false)}') && src.includes('onClick={readIn(true)}'));
+  assert.ok(src.includes("'Read new sessions'") && src.includes("'Read chat questions'"));
+});
+
+test('a chat conversation with no scenario is still a row a person can read', () => {
+  const row = sessionRow({ id: '2db72d10-e565-46b4-b0b6-5ff51304c586', run_tag: 'chat', scenario_id: null,
+    scenario_version: null, attempt: 1, source: 'chat', turns: 1, started_at: '2026-11-12T20:30:11.000Z',
+    scores: { logic: null, ux: null, domain: null } });
+  assert.ok(row && typeof row === 'object');
+  assert.equal(sessionTitle({ id: '2db72d10-e565-46b4-b0b6-5ff51304c586', scenario_id: null }), '2db72d10-e565-46b4-b0b6-5ff51304c586');
+});

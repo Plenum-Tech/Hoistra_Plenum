@@ -647,6 +647,14 @@ export function QuestionView(props) {
 
       <BrowserEvents events={d.browser} />
 
+      {active && active.stored ? (
+        <p className="lab-small" role="note">
+          {'This answer was asked on ' + (active.stored.origin || 'another machine') + ' and copied into Trace Lab, so the chat here has no record of it: the steps below are its stored trace. '}
+          <a href={'?view=sessions&session=' + encodeURIComponent(active.stored.session_id)}>{'Open its session'}</a>
+          {' to see the whole conversation' + (active.stored.run_tag ? ' (run tag ' + active.stored.run_tag + ')' : '') + '.'}
+        </p>
+      ) : null}
+
       {hasAnswer ? (
         <ScenarioBox onSave={on.saveScenario}>
           <NoteList items={notes.scenario} editor={editor} busy={busy} confirming={confirmIn(notes.scenario)} on={on} />

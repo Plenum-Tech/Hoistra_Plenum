@@ -48,6 +48,15 @@ TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 SCENARIO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 PREFIX = "scn"
 SEP = "__"
+#: An ordinary chat conversation: the app gives each chat a UUID as its session id. Read in only when
+#: asked for (ingest_from_main(chat=True), 13 Nov 2026) and filed under CHAT_TAG with no scenario: a
+#: question typed in the chat was recorded as a trace but never reached Sessions, which reads
+#: scenario sessions only - so the person who asked it could not find it in the lab.
+CHAT_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+CHAT_TAG = "chat"
+#: How far back the chat's conversations are looked for, by the automatic sync and by "Read chat
+#: questions" when no date is given: every chat of a company is a conversation, so a week of them.
+CHAT_SYNC_DAYS = 7
 ATTEMPT_MAX = 99
 SESSION_ID_MAX = 120
 RUN_TAG_KINDS = ("baseline", "post_fix", "adhoc")
@@ -101,6 +110,18 @@ def parse_session_id(session_id: Any) -> tuple[str, str, int] | None:
     if not attempt.isdigit() or attempt != str(int(attempt)) or not 1 <= int(attempt) <= ATTEMPT_MAX:
         return None
     return tag, scenario, int(attempt)
+
+
+def filed_as(session_id: Any, *, chat: bool = False) -> tuple[str, str | None, int] | None:
+    """(run tag, scenario id or None, attempt) a conversation is filed under, or None when it is not read.
+    A scenario session says all three in its id. An ordinary chat conversation is read only when `chat`
+    is asked for, under CHAT_TAG, linked to no scenario."""
+    parsed = parse_session_id(session_id)
+    if parsed is not None:
+        return parsed
+    if chat and isinstance(session_id, str) and CHAT_ID_RE.match(session_id):
+        return CHAT_TAG, None, 1
+    return None
 
 
 @dataclass(frozen=True)
@@ -327,7 +348,8 @@ async def _scenario_link(conn: Any, scenario_id: str | None, org: str) -> tuple[
 
 async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
                            sessions: Mapping[str, str | None] | None = None, org: str | None = None,
-                           by: labelling.Member | None = None) -> dict[str, int]:
+                           by: labelling.Member | None = None, chat: bool = False,
+                           scenarios: bool = True) -> dict[str, int]:
     """File the conversations the chat recorded as sessions, and say what happened:
 
         sessions, traces, observations   rows that were new
@@ -339,7 +361,10 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
     Without `sessions`: every conversation with a turn since `since` whose session id is a scenario session id; its
     run tag, scenario and attempt come from the id. With `sessions` ({chat session id: scenario id or None}) and
     `run_tag`: exactly those conversations, filed under that tag (None files one linked to no scenario). `org`
-    narrows either to one company.
+    narrows either to one company. With `chat` (and no `sessions`): the ordinary chat conversations since
+    `since` as well - a session id the app made (a UUID) - filed under the run tag "chat", linked to no scenario.
+    `scenarios=False` leaves the scenario sessions out: the automatic sync reads chat conversations only, because a
+    scenario still being asked must not be filed until a person reads it in (a session row means it is finished).
 
     Every conversation is read, INGEST_PAGE at a time, and only those with turns the store does not have. The
     application database is only read. A run tag that is not there yet is made (baseline_v0 as a baseline)."""
@@ -361,9 +386,12 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
         if named:
             which, wp = "tt.session_id = ANY(CAST(:ids AS text[]))", {"ids": list(named)}
         else:
-            which = (f"tt.session_id IN (SELECT x.session_id FROM {TURNS} x WHERE x.session_id LIKE 'scn\\_\\_%'"
-                     " AND x.started_at >= :since)")
-            wp = {"since": since}
+            kinds = (["x.session_id LIKE 'scn\\_\\_%'"] if scenarios else []) + (["x.session_id ~ :chat_id"] if chat else [])
+            if not kinds:
+                return out
+            ids = " OR ".join(kinds)
+            which = f"tt.session_id IN (SELECT x.session_id FROM {TURNS} x WHERE ({ids}) AND x.started_at >= :since)"
+            wp = {"since": since, **({"chat_id": CHAT_ID_RE.pattern} if chat else {})}
         found = [dict(r) for r in (await conn.execute(text(
             f"SELECT tt.session_id, tt.organization_id::text AS org, count(*) AS turns FROM {TURNS} tt"
             f" WHERE {which}{company} GROUP BY tt.session_id, tt.organization_id"
@@ -386,7 +414,7 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
         if named:
             tag, scenario, attempt = str(run_tag), named.get(sid), 1
         else:
-            parsed = parse_session_id(sid)
+            parsed = filed_as(sid, chat=chat)
             if parsed is None:
                 out["skipped"] += 1
                 continue

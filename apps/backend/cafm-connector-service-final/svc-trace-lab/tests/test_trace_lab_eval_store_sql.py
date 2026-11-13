@@ -386,3 +386,37 @@ async def test_a_trace_whose_chat_record_is_gone_still_shows_its_notes_place_as_
     await _write(lab_scratch, _meta(), [sample_turn("turn-x", SID)])
     got = await eval_store.trace_notes(member(), "turn-x")
     assert got["record"] is None and got["labels"] == []
+
+
+async def test_chat_questions_are_read_in_only_when_asked_for(lab_scratch, main_scratch):
+    """13 Nov 2026: a question typed in the chat was a trace but never a session. Asked for, it is filed
+    under the run tag "chat", linked to no scenario; a scheduled report's conversation still is not."""
+    chat_sid = "2db72d10-e565-46b4-b0b6-5ff51304c586"
+    await _main_turn(main_scratch, *sample_turn("turn-chat-1", chat_sid, at=T0))
+    await _main_turn(main_scratch, *sample_turn("turn-report", "report-7f3a", at=T0))
+    assert (await eval_store.ingest_from_main(since=EPOCH))["sessions"] == 0          # the ordinary read
+    out = await eval_store.ingest_from_main(since=EPOCH, chat=True)
+    assert (out["sessions"], out["traces"]) == (1, 1)
+    async with lab_scratch.connect() as c:
+        s = (await c.execute(text("SELECT id, run_tag, scenario_id, source FROM tracelab.sessions"))).mappings().one()
+        kind = (await c.execute(text("SELECT kind FROM tracelab.run_tags WHERE tag = 'chat'"))).scalar_one()
+    assert dict(s) == {"id": chat_sid, "run_tag": "chat", "scenario_id": None, "source": "chat"} and kind == "adhoc"
+    assert (await eval_store.ingest_from_main(since=EPOCH, chat=True))["sessions"] == 0   # read once
+
+
+async def test_the_automatic_read_files_chat_conversations_and_leaves_scenarios_alone(lab_scratch, main_scratch):
+    """autosync: chat=True, scenarios=False. A scenario session waits for the person who reads it in."""
+    await _scenario(lab_scratch)
+    chat_sid = "109b0e57-b77a-4296-8bf4-fff315dcc45b"
+    await _main_turn(main_scratch, *sample_turn("turn-scn", SID, at=T0))
+    await _main_turn(main_scratch, *sample_turn("turn-chat-a", chat_sid, at=T0))
+    out = await eval_store.ingest_from_main(since=EPOCH, chat=True, scenarios=False)
+    assert (out["sessions"], out["traces"]) == (1, 1)
+    await _main_turn(main_scratch, *sample_turn("turn-chat-b", chat_sid, at=T0 + timedelta(minutes=3)))
+    more = await eval_store.ingest_from_main(since=EPOCH, chat=True, scenarios=False)
+    assert (more["sessions"], more["traces"]) == (0, 1)                     # the next turn of the same conversation
+    async with lab_scratch.connect() as c:
+        ids = [r[0] for r in (await c.execute(text("SELECT id FROM tracelab.sessions"))).all()]
+        turns = [r[0] for r in (await c.execute(text("SELECT id FROM tracelab.traces ORDER BY turn_index"))).all()]
+    assert ids == [chat_sid] and turns == ["turn-chat-a", "turn-chat-b"]
+    assert (await eval_store.ingest_from_main(since=EPOCH))["sessions"] == 1   # the button still reads the scenario

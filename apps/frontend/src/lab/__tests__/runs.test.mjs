@@ -164,3 +164,17 @@ test('linking an answer: recorded answers to pick from, the same question marked
   assert.ok(html(Q.AnswerPicks, { picks: [] }).includes('Ask the question in the chat first'));
   assert.ok(html(Q.AnswerPicks, { picks: null }).includes('Reading the recorded answers'));
 });
+
+// 13 Nov 2026: a session copied from another Trace Lab was listed in Sessions and not in Runs, because Runs is built
+// from the chat here and the chat here never recorded it. Its turns are questions now; the answer is its stored trace.
+test('a question whose answer was asked on another machine shows its stored trace and links to its session', () => {
+  const stored = { session_id: 'scn__frontend_nov13__frontend-pilot-001__1', turn_index: 1, run_tag: 'frontend_nov13', origin: 'ubuntu-4gb-hel1-2' };
+  const data = Object.assign({}, DATA, { active: { turn_id: 'turn-p1', organization_id: 'o-1', conversation_key: null, trace: null, stored } });
+  const out = html(Q.QuestionView, { data, tree: Object.assign({}, TREE_OK, { stored: true }) });
+  assert.ok(out.includes('asked on ubuntu-4gb-hel1-2'));
+  assert.ok(out.includes('?view=sessions&amp;session=scn__frontend_nov13__frontend-pilot-001__1'));
+  assert.ok(out.includes('run tag frontend_nov13'));
+  assert.ok(!out.includes('This answer can no longer be read'));
+  // an answer the chat here recorded says nothing of the kind
+  assert.ok(!html(Q.QuestionView, { data: DATA2, tree: TREE_OK }).includes('copied into Trace Lab'));
+});

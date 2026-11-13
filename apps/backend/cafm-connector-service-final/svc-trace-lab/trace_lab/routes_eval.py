@@ -44,6 +44,8 @@ from .routes_runs import _wide
 router = APIRouter(tags=["Trace Lab eval"])
 
 INGEST_DAYS = 90
+#: How far back "Read chat questions" goes when no date is given (eval_store.CHAT_SYNC_DAYS), not ninety days.
+CHAT_INGEST_DAYS = eval_store.CHAT_SYNC_DAYS
 
 
 class RunTagIn(BaseModel):
@@ -59,6 +61,9 @@ class IngestIn(BaseModel):
     run_tag: str | None = Field(None, max_length=40)
     #: {chat session id: scenario id or null}. Without it, scenario sessions are found by their session id.
     sessions: dict[str, str | None] | None = Field(None, max_length=eval_store.INGEST_SESSIONS)
+    #: Also read the ordinary chat conversations (a week back unless `since` says otherwise), filed
+    #: under the run tag "chat". Scenario sessions are read either way.
+    chat: bool = False
 
 
 class GenerateIn(BaseModel):
@@ -121,9 +126,9 @@ async def eval_new_run_tag(body: RunTagIn, m: labelling.Member = Depends(_wide))
 
 async def _ingest(m: labelling.Member, body: IngestIn) -> dict[str, int]:
     runs.require_curator(m)
-    since = body.since or (datetime.now(timezone.utc) - timedelta(days=INGEST_DAYS))
+    since = body.since or (datetime.now(timezone.utc) - timedelta(days=CHAT_INGEST_DAYS if body.chat else INGEST_DAYS))
     return await eval_store.ingest_from_main(since=since, run_tag=body.run_tag, sessions=body.sessions,
-                                             org=_company(m), by=m)
+                                             org=_company(m), by=m, **({"chat": True} if body.chat else {}))
 
 
 @router.post("/eval/ingest")

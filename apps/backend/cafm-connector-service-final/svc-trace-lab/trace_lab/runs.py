@@ -364,6 +364,104 @@ async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str
 
 # ── questions ──────────────────────────────────────────────────────────────────────────────────
 
+# ── sessions the chat here never recorded ───────────────────────────────────────────────
+
+#: The title of the run a session's turns are listed under when this environment's chat has no record of them.
+SESSION_RUN_TITLE = "Sessions · {tag}"
+NO_TAG = "(no run tag)"
+#: A turn the chat here recorded within this long is left to sync_live, which reads the chat an hour back.
+LIVE_GRACE = timedelta(hours=1)
+
+
+async def sync_sessions(org: str | None = None, *, now: datetime | None = None) -> dict[str, Any]:
+    """Make questions of the session turns that are in no run yet (13 Nov 2026).
+
+    Runs are built from this environment's chat (sync_live). A session copied here from another Trace Lab
+    (sync_push) was asked on another machine: the chat here never recorded its turns, so Sessions listed it and
+    Runs could not - the thirty sessions of frontend_nov13_202718, asked on ubuntu-4gb-hel1-2, were in one tab
+    and not the other. Each such turn becomes a question in a run named after its run tag, one run per run tag
+    per company, in the order the sessions were asked; its answer is read from the stored trace (get_question,
+    trace_tree.question_tree). A turn the chat here did record is sync_live's, and is left to it while it is
+    still within sync_live's own look-back. Same lock and the same synced-turn index as sync_live, so a turn is
+    never a question twice."""
+    now = now or datetime.now(timezone.utc)
+    where = ["NOT EXISTS (SELECT 1 FROM tracelab.lab_question_traces l WHERE l.turn_id = t.id AND l.source = 'sync')"]
+    p: dict[str, Any] = {"lim": SYNC_BATCH}
+    if org is not None:
+        where.append("t.organization_id = CAST(:org AS uuid)")
+        p["org"] = org
+    async with db.lab_engine().connect() as conn:
+        rows = [dict(r) for r in (await conn.execute(text(
+            "SELECT t.id AS turn_id, t.organization_id::text AS org, t.input AS q, t.turn_index, "
+            "coalesce(t.started_at, s.started_at) AS at, s.run_tag, s.scenario_id, s.role "
+            "FROM tracelab.traces t JOIN tracelab.sessions s ON s.id = t.session_id "
+            f"WHERE {' AND '.join(where)} ORDER BY s.started_at, s.id, t.turn_index LIMIT :lim"), p)).mappings().all()]
+    if not rows:
+        return {"new_questions": 0, "new_runs": 0, "more": False}
+    async with conversations._read() as conn:
+        here = {r[0]: r[1] for r in (await conn.execute(text(
+            f"SELECT tt.turn_id, tt.started_at FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"),
+            {"ids": [r["turn_id"] for r in rows]})).all()}
+    todo = [r for r in rows if not (r["turn_id"] in here and here[r["turn_id"]] is not None
+                                    and here[r["turn_id"]] >= now - LIVE_GRACE)]
+    new_q = new_r = 0
+    if todo:
+        async with db.lab_engine().begin() as conn:
+            await _limits(conn)
+            await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SYNC_LOCK})
+            seen = {r[0] for r in (await conn.execute(text(
+                "SELECT turn_id FROM tracelab.lab_question_traces WHERE source = 'sync' AND turn_id = ANY(:ids)"),
+                {"ids": [r["turn_id"] for r in todo]})).all()}
+            runs: dict[tuple[str, str], tuple[str, int]] = {}
+            for r in todo:
+                if r["turn_id"] in seen:
+                    continue
+                title = SESSION_RUN_TITLE.format(tag=r["run_tag"] or NO_TAG)[:TITLE_MAX]
+                key = (title, r["org"] or NONE_ORG)
+                if key not in runs:
+                    row = (await conn.execute(text(
+                        "SELECT r.id::text AS id, (SELECT coalesce(max(seq_no), 0) FROM tracelab.lab_questions q "
+                        "WHERE q.run_id = r.id) AS top FROM tracelab.lab_runs r WHERE r.kind = 'synthetic' "
+                        "AND r.source = 'sync' AND r.title = :title AND coalesce(r.organization_id, CAST(:none AS uuid)) = "
+                        "CAST(:org AS uuid) ORDER BY r.run_no LIMIT 1"),
+                        {"title": title, "org": key[1], "none": NONE_ORG})).mappings().first()
+                    if row is None:
+                        made = await _insert_run(conn, None, kind="synthetic", title=title, org=r["org"], source="sync")
+                        runs[key] = (made["id"], 0)
+                        new_r += 1
+                    else:
+                        runs[key] = (row["id"], int(row["top"]))
+                run_id, top = runs[key]
+                qtext = (r["q"] or "").strip() or "(no question recorded)"
+                qid = await _insert_question(
+                    conn, None, run_id=run_id, seq=top + 1,
+                    row={"question": qtext[:QUESTION_MAX], "scenario_ref": (r["scenario_id"] or None),
+                         "role": ((r["role"] or "").strip()[:200] or None)},
+                    org=r["org"], source="sync", asked_at=r["at"])
+                await conn.execute(text(
+                    "INSERT INTO tracelab.lab_question_traces (question_id, turn_id, organization_id, source) "
+                    "VALUES (CAST(:qid AS uuid), :tid, CAST(:org AS uuid), 'sync')"),
+                    {"qid": qid, "tid": r["turn_id"], "org": r["org"]})
+                runs[key] = (run_id, top + 1)
+                new_q += 1
+    return {"new_questions": new_q, "new_runs": new_r, "more": len(rows) >= SYNC_BATCH and new_q > 0}
+
+
+async def stored_answer(org: str | None, turn_id: str) -> dict[str, Any] | None:
+    """Where a turn the chat here does not have is kept in the eval store: the session it is a turn of, or None.
+    The answer of such a question is drawn from that stored trace."""
+    async with conversations._lab_read() as conn:
+        row = (await conn.execute(text(
+            "SELECT t.session_id, t.turn_index, t.organization_id::text AS org, s.run_tag, s.origin "
+            "FROM tracelab.traces t JOIN tracelab.sessions s ON s.id = t.session_id WHERE t.id = :tid"
+            + ("" if org is None else " AND t.organization_id = CAST(:org AS uuid)")),
+            {"tid": turn_id, **({} if org is None else {"org": org})})).mappings().first()
+    if row is None:
+        return None
+    return {"session_id": row["session_id"], "turn_index": int(row["turn_index"]), "run_tag": row["run_tag"],
+            "origin": row["origin"]}
+
+
 _Q_COLS = ("q.id::text AS id, q.seq_no, q.question, q.followups, q.role, q.intent, q.scenario_ref, "
            "q.organization_id::text AS organization_id, q.asked_at, q.source, q.created_at")
 
@@ -474,7 +572,14 @@ async def get_question(m: labelling.Member, code: str, *, turn_id: str | None = 
     mm = labelling.for_org(m, pick["organization_id"] or row.get("organization_id") or run.get("organization_id"))
     got = await conversations.get_turn(labelling.company_view(mm.principal, mm.org), mm.org, pick["turn_id"])
     if got is None:
-        out["active"] = {"turn_id": pick["turn_id"], "missing": True}
+        # Not in the chat here: a turn of a session copied from another Trace Lab is read from its stored trace.
+        stored = await stored_answer(mm.org, pick["turn_id"])
+        if stored is None:
+            out["active"] = {"turn_id": pick["turn_id"], "missing": True}
+            return out
+        out["active"] = {"turn_id": pick["turn_id"], "organization_id": mm.org, "conversation_key": None,
+                         "trace": None, "stored": stored}
+        out["labels"] = await labelling.labels_for_turn(mm, pick["turn_id"])
         return out
     out["active"] = {"turn_id": pick["turn_id"], "organization_id": mm.org, "conversation_key": got["conversation_key"],
                      "trace": got["trace"]}

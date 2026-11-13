@@ -84,3 +84,28 @@ def test_other_session_ids_are_not_scenario_sessions(sid):
 def test_a_session_id_that_would_not_read_back_is_refused(tag, scenario, attempt):
     with pytest.raises(ValueError):
         eval_store.session_id_for(tag, scenario, attempt)
+
+
+# ── an ordinary chat conversation is read only when asked for (13 Nov 2026) ─────────────────────────
+
+CHAT_SID = "2db72d10-e565-46b4-b0b6-5ff51304c586"          # the shape of the app's own chat session ids
+
+
+def test_a_chat_conversation_is_not_read_unless_asked_for():
+    """Sessions reads scenario runs. A question typed in the chat is a trace, not a scenario session."""
+    assert eval_store.filed_as(CHAT_SID) is None
+    assert eval_store.filed_as("scn__baseline_v0__MT-014__1") == ("baseline_v0", "MT-014", 1)
+
+
+def test_asked_for_a_chat_conversation_is_filed_under_the_chat_tag_with_no_scenario():
+    assert eval_store.filed_as(CHAT_SID, chat=True) == ("chat", None, 1)
+    assert eval_store.ok_part(eval_store.TAG_RE, eval_store.CHAT_TAG)
+    # a scenario session keeps what its id says, asked for or not
+    assert eval_store.filed_as("scn__baseline_v0__MT-014__1", chat=True) == ("baseline_v0", "MT-014", 1)
+
+
+@pytest.mark.parametrize("sid", ["report-7f3a", "golden-0123456789ab-K-r1", "an-ordinary-chat-session", "",
+                                 None, "2DB72D10-E565-46B4-B0B6-5FF51304C586", CHAT_SID + "x"])
+def test_only_the_apps_own_chat_ids_count_as_chat_conversations(sid):
+    """A scheduled report, a golden run and anything else that is not the chat's own id stay out."""
+    assert eval_store.filed_as(sid, chat=True) is None

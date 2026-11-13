@@ -370,3 +370,20 @@ def test_two_run_tags_are_compared(client, who, monkeypatch):
     assert r.status_code == 200 and r.json()["head"] == "postfix_v1"
     assert calls[0][0] == (who, "baseline_v0", "postfix_v1")
     assert client.get(f"{B}/eval/compare", params={"base": "baseline_v0"}).status_code == 422
+
+
+def test_reading_chat_questions_is_asked_for_and_goes_back_a_week(client, who, monkeypatch):
+    """13 Nov 2026: a question typed in the chat never reached Sessions, which reads scenario runs only."""
+    calls = _record(monkeypatch, eval_store, "ingest_from_main", {"sessions": 2, "traces": 2})
+    r = client.post(f"{B}/eval/ingest", json={"chat": True})
+    assert r.status_code == 200 and r.json()["sessions"] == 2
+    kw = calls[0][1]
+    assert kw["chat"] is True and kw["org"] == ORG and kw["by"] is who
+    age = datetime.now(timezone.utc) - kw["since"]
+    assert timedelta(days=6, hours=23) < age < timedelta(days=7, hours=1)
+
+
+def test_the_ordinary_read_does_not_ask_for_chat_questions(client, monkeypatch):
+    calls = _record(monkeypatch, eval_store, "ingest_from_main", {"sessions": 0})
+    assert client.post(f"{B}/eval/ingest", json={}).status_code == 200
+    assert "chat" not in calls[0][1]
