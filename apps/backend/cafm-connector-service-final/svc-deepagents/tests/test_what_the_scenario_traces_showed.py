@@ -401,3 +401,62 @@ def test_a_rolling_window_compiles_to_a_date_range_on_the_column():
     with pytest.raises(ontology_qa.OntologyError) as exc:
         compile_condition(_Onto(), _Concept(), "f", {"attribute": "contract_end", "within": "soonish"}, Params())
     assert "next_<N>_days" in str(exc.value)
+
+
+# -- a link the plan names that is empty on every record -------------------------------------------
+
+def _two_vendor_links():
+    """Work orders reach vendors by two columns, the empty one listed first - as on hoistra_test."""
+    return ontology_qa.Ontology({
+        "schema": "plenum_scoped",
+        "concepts": {
+            "Vendor": {"table": "vendors", "key": "id", "label": "vendor_name",
+                       "attributes": {"id": "id", "vendor_name": "vendor_name"}},
+            "WorkOrder": {"table": "work_orders", "key": "id", "label": "title", "identifiers": ["wo_code"],
+                          "attributes": {"id": "id", "title": "title", "status": "status"},
+                          "states": {"open": {"attribute": "status", "not_in": ["Completed", "Closed"]}}},
+        },
+        "relations": {
+            "WORK_ORDER_ASSIGNED_VENDOR": {"from": "WorkOrder", "to": "Vendor", "cardinality": "many_to_one",
+                                           "join": ["from.assigned_vendor = to.id"], "fill": 0.0},
+            "WORK_ORDER_VENDOR": {"from": "WorkOrder", "to": "Vendor", "cardinality": "many_to_one",
+                                  "join": ["from.vendor_id = to.id"], "fill": 1.0},
+        },
+        "derived": {},
+    })
+
+
+def _blocked_vendors_plan(via):
+    """The plan of turn-65d8787aac9741aa (13:40 UTC, 12 Nov 2026): blocked vendors, with their open work
+    orders read "via WORK_ORDER_ASSIGNED_VENDOR"."""
+    return ontology_qa.normalise_plan({
+        "question_type": "list", "focus": {"concept": "Vendor"},
+        "include": [{"name": "open_work_orders", "concept": "WorkOrder", "via": list(via), "states": ["open"]}]})
+
+
+def test_a_named_link_that_is_empty_is_read_through_its_filled_twin():
+    """It answered "none has linked open work orders"; by vendor_id Apex Mechanical had three."""
+    onto = _two_vendor_links()
+    plan = _blocked_vendors_plan(["WORK_ORDER_ASSIGNED_VENDOR"])
+    notes = ontology_qa.swap_empty_links(onto, plan)
+    assert plan["include"][0]["via"] == ["WORK_ORDER_VENDOR"]
+    assert notes and "WORK_ORDER_ASSIGNED_VENDOR" in notes[0] and "empty on every record" in notes[0]
+    assert ontology_qa.validate_plan(onto, plan) == []
+
+
+def test_a_filled_link_and_an_only_link_are_left_as_planned():
+    onto = _two_vendor_links()
+    plan = _blocked_vendors_plan(["WORK_ORDER_VENDOR"])
+    assert ontology_qa.swap_empty_links(onto, plan) == [] and plan["include"][0]["via"] == ["WORK_ORDER_VENDOR"]
+    onto.relations["WORK_ORDER_VENDOR"].fill = 0.0            # both empty: nothing better to read through
+    plan = _blocked_vendors_plan(["WORK_ORDER_ASSIGNED_VENDOR"])
+    assert ontology_qa.swap_empty_links(onto, plan) == []
+    assert plan["include"][0]["via"] == ["WORK_ORDER_ASSIGNED_VENDOR"]
+    assert ontology_qa.fuller_link(onto, "NOT_A_RELATION") is None
+
+
+def test_the_record_engine_swaps_the_link_before_it_reads():
+    import inspect
+
+    body = inspect.getsource(ontology_qa.answer_question)
+    assert body.index("swap_empty_links(onto, plan)") < body.index("resolve_plan(")

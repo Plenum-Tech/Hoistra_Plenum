@@ -84,8 +84,10 @@ def test_neither_carries_its_own_keyword_table():
 # -- the planner ---------------------------------------------------------------------------
 
 def test_both_plan_a_question_that_needs_decomposition():
+    # Since 13 Nov 2026 the test both ask is needs_plan: a question in more than one part, or one the
+    # router gave to more than one area (it was is_multi_part alone, which the router's answer never reached).
     for name, body in BOTH:
-        assert "planner.is_multi_part(user_message)" in body, (
+        assert "planner.needs_plan(user_message, routing)" in body, (
             "%s answers a multi-part question without planning it, so it gives a different "
             "answer from the other entry point for the same question" % name)
         assert "planner.make_plan(" in body, name

@@ -5099,6 +5099,35 @@ class DeepAgentOrchestrator:
     #: the first draft of turn-aff1e9826ca44ec1, 75 s for its revision); the answer schema does
     #: not need it, and the counts it got wrong there are now handed to it as facts.
     _ANALYST_MAX_TOKENS = 6000
+
+    #: Said to the analyst before the data (12 Nov 2026). The orchestrator now writes the answer's
+    #: text from the analyst's cards (_answer_over_analyst), so the analyst's prose is a draft: a
+    #: long one costs time and is thrown away. And the commonest thing the reviewer sent back was
+    #: scope - "Which certificates have lapsed at Bishopsgate Tower?" answered with a vendor
+    #: block-state dashboard - which cost a 27 s review and a 24 s rewrite to undo
+    #: (turn-6aee3e0dcf8a4b27: 89 of 99 s). Said up front, it need not be undone.
+    _CARDS_BRIEF = (
+        "HOW YOUR OUTPUT IS USED: the orchestrator writes the final wording from your cards and the "
+        "rows; your prose is only its draft.\n"
+        "- Build ONLY what the question asks for. A question that lists or counts (which / list / show / "
+        "how many) gets the count, the matching certificates, and the actions for THOSE certificates. Do "
+        "not add vendor block-state analysis, accreditation reviews, PPM schedules or a wider risk "
+        "dashboard unless the question asks about them.\n"
+        "- Keep `narrative` to one or two sentences and each section's narrative to one sentence. Leave "
+        "`groups` empty.\n\n"
+    )
+
+    @staticmethod
+    def _model_review_needed(code_findings: list[str] | None, taxonomy: bool) -> bool:
+        """Whether a second model reads the analyst's answer before it goes on (12 Nov 2026).
+
+        It did for every compliance answer: 27 s, and 24 s more when it sent the answer back. Its
+        two jobs were to disbelieve the prose and to catch what code cannot. The prose is now a
+        draft: the orchestrator's final step writes the text from the rows and traces every figure,
+        and the cards are checked against the rows in code (_validate_compliance_response). So the
+        reader is kept for what still needs one - a figure the code checks dispute, and a question
+        about what the law requires, where a missing duty is something only a reader notices."""
+        return bool(code_findings) or bool(taxonomy)
     #: Lapsed ids listed in the facts block before the rest are counted.
     _FACTS_MAX_IDS = 80
 
@@ -5269,6 +5298,8 @@ class DeepAgentOrchestrator:
         api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
         if not api_key:
             return None
+        if not query_notes.startswith(self._CARDS_BRIEF):
+            query_notes = self._CARDS_BRIEF + query_notes
         model = (
             getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL
         ).strip()
@@ -5580,6 +5611,14 @@ class DeepAgentOrchestrator:
         # Filters that had to be widened because nothing matched all of them at once.
         relaxed_notes: list[dict[str, Any]] = []
 
+        # The orchestrator's own plan for the turn, recorded before anything runs (12 Nov 2026).
+        # This path answers before the router is asked, so 13 of the first 54 traced turns showed
+        # the compliance pipeline with nothing saying who sent the question there.
+        # Not when the router already planned this turn and sent it here.
+        if not trace.has_plan():
+            trace.on_plan(planner.one_step_plan(
+                "compliance", "a certificate or accreditation question: read from the whole compliance register",
+                source="keyword"), source="keyword")
         # PLANNING STEP — decide what this question needs before any tool runs, so the answer
         # can include what is relevant rather than only what was literally asked.
         plan = await self._plan_compliance_query(user_message)
@@ -6036,9 +6075,10 @@ class DeepAgentOrchestrator:
             # classified as taxonomy at all.
             if pack_facts or is_taxonomy:
                 code_findings = self._taxonomy_findings(analysis, pack_facts)
-                review = await self._review_compliance_answer(
+                reviewed = self._model_review_needed(code_findings, is_taxonomy)
+                review = (await self._review_compliance_answer(
                     user_message, analysis, pack_facts, code_findings, fetched_rows
-                )
+                )) if reviewed else None
                 # The model decides; code looks the decision up. Matching on the words the
                 # model happened to use would put the judgement back in Python — an id it
                 # picked from a list we supplied is a lookup, and an id we do not recognise
@@ -6092,7 +6132,10 @@ class DeepAgentOrchestrator:
                         "stage": "review",
                         "label": "Reviewed the answer before showing it",
                         "detail": (
-                            "Review unavailable; answer shown as written"
+                            "Figures checked against the rows in code: nothing to correct. "
+                            "The orchestrator writes and checks the wording."
+                            if not reviewed
+                            else "Review unavailable; answer shown as written"
                             if review is None and not code_findings
                             else (
                                 "Nothing to correct"
@@ -6184,6 +6227,12 @@ class DeepAgentOrchestrator:
                     "output": analysis,
                 }
             )
+            # Back to the orchestrator: the analyst's text is the draft, the answer is written here.
+            answer, _written = await self._answer_over_analyst(
+                user_message, answer, tool_calls, facts=self._compliance_facts(fetched_rows),
+                on_zone=on_zone, analyst="compliance", carries_previous=False)
+            if _written:
+                answer_source = _written
         if not answer:
             answer_source = "llm_summary"
             answer = await self._llm_summarize_compliance(user_message, tool_calls)
@@ -6234,6 +6283,9 @@ class DeepAgentOrchestrator:
             # How the answer was produced, for the chat to show alongside it. The streaming
             # path has already sent these one at a time; this is what the REST path uses.
             "pipeline": pipeline,
+            # Who wrote the answer the user reads: the orchestrator's final step ("synthesis") when
+            # the analyst's text came back to it; otherwise the callers name it (analyst / template).
+            **({"answer_source": "synthesis"} if answer_source == "synthesis" else {}),
         }
 
     async def _maybe_short_reply_wo_action(
@@ -7056,7 +7108,7 @@ class DeepAgentOrchestrator:
         return out
 
     async def _final_answer(self, question: str, draft: str, *sources: list[dict[str, Any]] | None,
-                            on_delta: Any = None) -> tuple[str, dict[str, Any]]:
+                            on_delta: Any = None, shown: str = "") -> tuple[str, dict[str, Any]]:
         """The answer the user reads, written from what the tools returned with the sub-agent's text
         as a draft beside it (agents/final_answer.py, Workstream A1). `sources` are the turn's tool
         calls as each path has them; on_delta(text) streams the first writing to the chat."""
@@ -7068,7 +7120,94 @@ class DeepAgentOrchestrator:
         ws = thread_scope.active_scope.get()
         return await final_step.write(question, str(draft or ""), results=results, drafts=drafts,
                                         llm=self._planner_llm, first=first if on_delta is not None else None,
-                                        previous=_turn_previous.get(), scope=thread_scope.describe(ws) if ws else "")
+                                        previous=_turn_previous.get(), scope=thread_scope.describe(ws) if ws else "",
+                                        shown=shown)
+
+    #: The prose zones of an analyst's card. Once the orchestrator has written the answer they are
+    #: its draft, not what the user reads; the data zones (KPIs, certificates, actions) stay.
+    _ANALYST_PROSE_ZONES = ("groups", "sections")
+    #: What each data zone of the card puts on the screen, as the final writer is told it.
+    _CARD_SHOWS = (
+        ("kpis", "the headline counts as tiles"),
+        ("overdue", "a bar chart of the days each item is overdue"),
+        ("certificates", "a table of every certificate in scope: its name and reference, who holds it, its scope, "
+                         "its status, and a note with its expiry date and days overdue"),
+        ("expiry_events", "the upcoming expiry dates"),
+        ("pending", "the items waiting on a decision"),
+        ("actions", "the recommended actions as cards"),
+        ("insights", "the wider observations as cards"),
+    )
+
+    @classmethod
+    def _card_shows(cls, card: dict[str, Any] | None) -> str:
+        """What the chat draws under the answer from this card, one line per zone that has something."""
+        return "\n".join("- " + said for zone, said in cls._CARD_SHOWS if (card or {}).get(zone))
+
+    async def _answer_over_analyst(self, question: str, draft: str, tool_calls: list[dict[str, Any]] | None, *,
+                                   facts: str = "", on_zone: Any = None, analyst: str = "",
+                                   carries_previous: bool = True) -> tuple[str, str | None]:
+        """A compliance or contract analyst's answer comes back to the orchestrator (12 Nov 2026).
+
+        The rule is one flow for every question: the orchestrator plans, the sub-agent reads and
+        drafts, and the orchestrator writes the short answer the question asked for. The two
+        analysts were exempt from the final step (they write from the rows and are checked against
+        them in code), so their text went to the user as it stood: 26 of the 54 turns asked since
+        Workstream A went live, all compliance, longer and in another voice than every other answer.
+
+        Their text is now the draft. The final step (agents/final_answer.py) writes the answer from
+        what the tools returned, with the figures counted in code (`facts`) and the rows the analyst
+        cited - both already checked against the register - at the head of the evidence. The
+        analyst's card keeps its data zones; its narrative becomes the answer's lead and its prose
+        zones are emptied, so the chat shows one text, the orchestrator's.
+
+        Where the chat draws the card (a streaming turn: `on_zone` is given) the writer is told
+        what the card shows, so the text is the answer and what the cards do not say - not the same
+        rows a third time. A caller with no cards (REST: a scheduled question, an emailed answer)
+        gets the whole answer in the text.
+
+        Returns (answer, "synthesis"), or (draft, None) when the final step did not write: the
+        analyst's own grounded answer then stands, which is what the user got before.
+
+        `carries_previous=False` for the path that answers before the turn is routed: the previous
+        answer has not been set for this turn there, and one left over from an earlier turn of the
+        same connection must not be read as a fact of this one."""
+        draft = str(draft or "").strip()
+        if not draft:
+            return draft, None
+        card = next((tc.get("output") for tc in reversed(tool_calls or []) if isinstance(tc, dict)
+                     and tc.get("tool") == "compliance_response" and isinstance(tc.get("output"), dict)), None)
+        head: list[dict[str, Any]] = []
+        if facts:
+            head.append({"tool": "counted_facts", "input": {}, "output": facts})
+        cited = [c for c in ((card or {}).get("certificates") or []) if isinstance(c, dict)][:80]
+        if cited:
+            head.append({"tool": "certificates_cited", "input": {}, "output": {"certificates": cited}})
+        _prev = None if carries_previous else _turn_previous.set(None)
+        try:
+            answer, report = await self._final_answer(
+                question, draft, head, list(tool_calls or []),
+                shown=self._card_shows(card) if on_zone is not None else "")
+        except Exception as exc:  # noqa: BLE001 - the analyst's answer stands
+            log.warning("orchestrator.analyst.final_step_failed", analyst=analyst, error=str(exc)[:200])
+            return draft, None
+        finally:
+            if _prev is not None:
+                _turn_previous.reset(_prev)
+        if report.get("source") != "synthesis" or not str(answer or "").strip():
+            log.warning("orchestrator.analyst.kept", analyst=analyst, source=report.get("source"))
+            return draft, None
+        if card is not None:
+            card["narrative"] = planner._lead(answer)
+            for z in self._ANALYST_PROSE_ZONES:
+                if card.get(z):
+                    card[z] = []
+            if on_zone is not None:
+                for z in ("narrative", *self._ANALYST_PROSE_ZONES):
+                    if z in card:
+                        await on_zone(z, card[z])
+        log.info("orchestrator.analyst.answer_written", analyst=analyst, draft_chars=len(draft),
+                 answer_chars=len(answer), rewrites=report.get("rewrites"))
+        return answer, "synthesis"
 
     @staticmethod
     def _planned_claims(answer: str, question: str, results: dict[str, dict[str, Any]],
@@ -7461,7 +7600,15 @@ class DeepAgentOrchestrator:
             # Bounded (2 Nov 2026): the first question after a restart waited 15 minutes here while
             # the ontology was built. The read is shielded, so it carries on and the ontology it
             # builds is there for the next question; this answer goes on without what it adds.
-            read = asyncio.ensure_future(linked_for_certificates(ids, budget=25000))
+            async def _read():
+                # One line in the run trace for the whole read, not one per query (trace.sql_rollup_open).
+                box = trace.sql_rollup_open("linked records")
+                try:
+                    return await linked_for_certificates(ids, budget=25000)
+                finally:
+                    trace.sql_rollup_close(box)
+
+            read = asyncio.ensure_future(_read())
             read.add_done_callback(lambda t: t.cancelled() or t.exception())
             reach = await asyncio.wait_for(
                 asyncio.shield(read), timeout=CERTIFICATE_REACH_TIMEOUT_S
@@ -7605,9 +7752,10 @@ class DeepAgentOrchestrator:
             }
         )
         code_findings = self._taxonomy_findings(analysis, pack_facts) if pack_facts else []
-        review = await self._review_compliance_answer(
+        reviewed = self._model_review_needed(code_findings, is_taxonomy)
+        review = (await self._review_compliance_answer(
             user_message, analysis, pack_facts, code_findings, rows, tool_results=data_calls
-        )
+        )) if reviewed else None
         raw_missing = list((review or {}).get("missing_type_codes") or [])
         if review is not None:
             review["missing_type_codes"] = self._verified_missing_codes(
@@ -7657,7 +7805,10 @@ class DeepAgentOrchestrator:
                 "label": "Reviewed the answer before showing it",
                 **self._step_cost("reviewer"),
                 "detail": (
-                    "Review unavailable; answer shown as written"
+                    "Figures checked against the rows in code: nothing to correct. "
+                    "The orchestrator writes and checks the wording."
+                    if not reviewed
+                    else "Review unavailable; answer shown as written"
                     if review is None and not code_findings
                     else "Nothing to correct"
                     if not needs_revision
@@ -7964,12 +8115,22 @@ class DeepAgentOrchestrator:
                     or str(structured.get("narrative") or "").strip()
                     or answer
                 )
-                # The analyst is trusted to leave without the final step because it writes from the
-                # rows. One that talks about the machinery has not: "the only tool that surfaces
-                # contract-renewal risk does so through open work orders" (turn-491d961e900b4400,
-                # 12 Nov 2026). That text is a draft like any other, and the final step writes the
-                # answer from what the tools returned.
-                if answer_evidence.speaks_of_tools(answer):
+                # Back to the orchestrator (12 Nov 2026): the analyst's text is the draft and the
+                # final step writes the answer (_answer_over_analyst). When that step does not
+                # write, the analyst's answer stands - unless it talks about the machinery ("the
+                # only tool that surfaces contract-renewal risk ...", turn-491d961e900b4400), which
+                # is then left to the general final step below.
+                _rows = [r for tc in inner_tool_calls if isinstance(tc, dict)
+                         and tc.get("tool") in ("list_building_certificates", "list_vendor_accreditations")
+                         and isinstance(tc.get("output"), dict)
+                         for r in (tc["output"].get("certificates") or []) if isinstance(r, dict)]
+                answer, _written = await self._answer_over_analyst(
+                    user_message, answer,
+                    [*inner_tool_calls, {"tool": "compliance_response", "input": {}, "output": structured}],
+                    facts=self._compliance_facts(_rows), on_zone=on_zone, analyst="compliance")
+                if _written:
+                    answer_source = _written
+                elif answer_evidence.speaks_of_tools(answer):
                     log.warning("orchestrator.compliance.analyst_spoke_of_tools", session_id=session_id,
                                 answer=str(answer)[:200])
                     answer_source = None
@@ -8109,6 +8270,11 @@ class DeepAgentOrchestrator:
             )
             if str(answer or "") != prose:
                 answer_source = "contract_analyst"  # rewritten from the rows and grounded against them
+                # ... and back to the orchestrator, which writes the answer (12 Nov 2026).
+                answer, _written = await self._answer_over_analyst(
+                    user_message, str(answer or ""), inner_tool_calls, on_zone=on_zone, analyst="contract")
+                if _written:
+                    answer_source = _written
 
         # Workstream A1 (11 Nov 2026): the engine's prose is a draft. Unless one of the
         # orchestrator's own analysts wrote the answer from the rows above, the final answer step
@@ -8263,6 +8429,10 @@ class DeepAgentOrchestrator:
             )
             if str(answer or "") != prose:
                 answer_source = "contract_analyst"
+                answer, _written = await self._answer_over_analyst(
+                    _latest_user_message(input_), str(answer or ""), tool_calls, analyst="contract")
+                if _written:
+                    answer_source = _written
             elif final_step.has_evidence(tool_calls):
                 # Workstream A1 (11 Nov 2026): the loop's last message is a draft once it has read
                 # records; the answer is written from the tool results (see stream()).
@@ -8496,6 +8666,12 @@ class DeepAgentOrchestrator:
         }
         engine = None if support else preferred_engine
         routing_note: str | None = None
+        if route_intent in core_routes:
+            # Every turn records its plan (12 Nov 2026): a keyword route skips the router and the
+            # planner, and reached the traces with nothing saying why it went where it went.
+            trace.on_plan(planner.one_step_plan(
+                "orchestrator loop", f"a {route_intent} request: handled by the orchestrator's own loop",
+                source="keyword"), source="keyword")
         # A new turn opens the catalogue again before anything decides otherwise: a keyword
         # route or a preferred engine skips select_agent, and a claim from the previous turn
         # on this task must not outlive the turn that made it.
@@ -8543,7 +8719,7 @@ class DeepAgentOrchestrator:
             # different run from the one it is replaying; a scheduled question got no plan at
             # all, so it reached Hoist Traces with nothing saying why it went where it went
             # (30 Oct 2026, item 5).
-            if not support and planner.is_multi_part(user_message):
+            if not support and planner.needs_plan(user_message, routing):
                 plan, why = await planner.make_plan(
                     user_message, context=self._plan_context(step, extra_context),
                     tools=self._planner_tools(), llm=self._planner_llm, schemas=self._planner_schemas())
@@ -9032,6 +9208,11 @@ class DeepAgentOrchestrator:
         _turn_catalogue_via_task.set(False)
         chat_memories.turn_recall.set("")
         _turn_previous.set(None)
+        if route_intent in phase2_core_routes:
+            # Every turn records its plan (see run_stateful).
+            trace.on_plan(planner.one_step_plan(
+                "orchestrator loop", f"a {route_intent} request: handled by the orchestrator's own loop",
+                source="keyword"), source="keyword")
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the
@@ -9105,7 +9286,7 @@ class DeepAgentOrchestrator:
             # A question that needs decomposition is planned, run step by step and verified
             # (agents/planner.py); a single-engine question keeps the direct path but records
             # the one-step plan, so every run says why it went where it went.
-            if not support and planner.is_multi_part(user_message):
+            if not support and planner.needs_plan(user_message, routing):
                 plan_ctx = self._plan_context(step, extra_context)
                 plan, why = await planner.make_plan(user_message, context=plan_ctx, tools=self._planner_tools(), llm=self._planner_llm, schemas=self._planner_schemas())
                 if plan is not None:

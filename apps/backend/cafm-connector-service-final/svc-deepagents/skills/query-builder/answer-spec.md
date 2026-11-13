@@ -13,6 +13,14 @@ A sub-agent's text is a draft. The answer the user reads is written by one final
 tools returned, never from general knowledge, and every figure in it is traced to a tool result
 (agents/final_answer.py; the planner's own synthesis for a planned turn).
 
+Every question takes the same path: it lands on the orchestrator, which records its plan (the
+planner's for a question in several parts, one step from the router or a keyword route otherwise);
+the sub-agent reads the records and drafts; the draft comes back to the orchestrator, which writes
+the short answer the question asked for. That includes the compliance and contract analysts
+(12 Nov 2026): their text is the draft, their card keeps its data - the KPIs, the certificates, the
+actions - and the chat shows one text, the orchestrator's. If the final step cannot write, the
+analyst's own answer, which is checked against the rows in code, stands.
+
 ## A3 · What a result is
 
 Every tool result has one state (agents/evidence.py): **OK**, **ZERO RESULTS** (the lookup worked and

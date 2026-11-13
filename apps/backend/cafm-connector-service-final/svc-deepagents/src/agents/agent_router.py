@@ -265,13 +265,27 @@ async def select_agent(question: str, context_note: str | None = None,
     _sure = agent_for_question(question, agent)
     if _sure and _sure != agent:
         reason = (reason + " | overridden: the question names " + _sure)[:200]
-        agent = _sure
+    agent, also = areas_after_override(agent, also, _sure, known)
     gated = _out_of_module(space, agent, "llm")
     if gated:
         return gated
     also = [a for a in also if spaces.allows(space, a)]
     log.info("agent_router.selected", agent=agent, also=also, reason=reason)
     return {"agent": agent, "also": also, "reason": reason, "source": "llm"}
+
+
+def areas_after_override(agent: str, also: list[str], sure: str | None, known: set[str]) -> tuple[str, list[str]]:
+    """(first area, the others) once the words of the question have had their say.
+
+    When the question plainly names another engine, that engine goes first - and the area the router
+    read stays in the turn as a second one (13 Nov 2026). "Which vendors are blocked at Bishopsgate
+    Tower, and do any of them have open work orders?" was read as compliance and also wo_engine;
+    "work orders" made wo_engine the first, and compliance was dropped: the turn ran on one area and
+    never fetched the block state from where it lives. An area is never listed beside itself."""
+    if sure and sure != agent:
+        also = [a for a in dict.fromkeys([agent, *also]) if a in known]
+        agent = sure
+    return agent, [a for a in dict.fromkeys(also) if a != agent]
 
 
 def as_phase2_engine(agent: str | None) -> Phase2AgentId | None:

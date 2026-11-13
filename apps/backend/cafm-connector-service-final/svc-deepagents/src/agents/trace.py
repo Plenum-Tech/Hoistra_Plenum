@@ -590,6 +590,48 @@ def on_prompt(*, system_prompt: str | None, user_message: str, conversation: str
 SQL_ROWS = 50
 
 
+#: A run of SQL statements kept as ONE span (12 Nov 2026). What a certificate reaches is read by
+#: code, with no model call, in a dozen or more small queries; each was its own row in the run
+#: trace, so "Which certificates have lapsed at Bishopsgate Tower?" - one tool call by the model -
+#: read as thirty steps, nineteen of them these (turn-6aee3e0dcf8a4b27). Every statement is still
+#: kept, inside the one span.
+_sql_rollup: ContextVar[dict | None] = ContextVar("hoist_trace_sql_rollup", default=None)
+#: Statements kept whole inside a roll-up span.
+ROLLUP_STATEMENTS = 60
+
+
+def sql_rollup_open(name: str):
+    """Start keeping this task's SQL as one span named `name`. Returns the token for sql_rollup_close.
+    Call it inside the task that runs the queries: a task takes a copy of the context it starts in."""
+    return _sql_rollup.set({"name": str(name), "queries": []})
+
+
+def sql_rollup_close(token) -> None:
+    """Write the one span: how many statements, how long together, and each with its label, rows and time."""
+    box = _sql_rollup.get()
+    try:
+        _sql_rollup.reset(token)
+    except Exception:  # noqa: BLE001 - a token from another context: clear it instead
+        _sql_rollup.set(None)
+    try:
+        t = _turn.get()
+        qs = (box or {}).get("queries") or []
+        if t is None or t.flushed or not qs:
+            return
+        parent = t.here() or t.root
+        total = sum(float(q.get("ms") or 0) for q in qs)
+        failed = [q for q in qs if q.get("error")]
+        s = t.new(kind="db", name=(f"{box['name']}: {len(qs)} queries")[:120], agent=parent.agent, parent_id=parent.id,
+                  input=_bound({"queries": len(qs),
+                                "statements": [{"label": q["label"], "sql": q["sql"]} for q in qs[:ROLLUP_STATEMENTS]]}))
+        s.close(output=_bound({"queries": len(qs), "ms": round(total, 1),
+                               "rows": sum(int(q.get("rows") or 0) for q in qs),
+                               "by": [{"label": q["label"], "rows": q.get("rows"), "ms": q.get("ms")} for q in qs]}),
+                ok=not failed, error=(str(failed[0]["error"])[:300] if failed else None), latency_ms=total)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.sql_rollup_failed", error=str(exc)[:200])
+
+
 def on_sql(sql: str, params: Any, rows: list | None, ms: float | None, *, label: str = "", error: str | None = None) -> None:
     """One SQL statement a tool ran, as a child of the tool span open right now (or the root).
 
@@ -599,6 +641,12 @@ def on_sql(sql: str, params: Any, rows: list | None, ms: float | None, *, label:
     try:
         t = _turn.get()
         if t is None or t.flushed or not sql:
+            return
+        box = _sql_rollup.get()
+        if box is not None:
+            box["queries"].append({"label": (label or "").strip() or " ".join(sql.strip().split()[:4]),
+                                   "sql": sql, "rows": len(rows) if rows is not None else None,
+                                   "ms": round(float(ms), 1) if ms is not None else None, "error": error})
             return
         parent = t.here() or t.root
         name = (label or "").strip() or (sql.strip().split(None, 4)[:4] and " ".join(sql.strip().split()[:4]))
@@ -681,6 +729,12 @@ def on_plan(plan: dict | None, *, source: str, rejected: str | None = None) -> N
             t.route = (plan.get("mode") or "") + ":" + ",".join(str(x.get("target")) for x in steps)
     except Exception as exc:  # noqa: BLE001
         log.warning("trace.on_plan_failed", error=str(exc)[:200])
+
+
+def has_plan() -> bool:
+    """Whether this turn has recorded its plan yet (a path reached from two places records it once)."""
+    t = _turn.get()
+    return bool(t is not None and not t.flushed and any(s.kind == "plan" for s in t.spans))
 
 
 def on_step_open(step_id: str, name: str, inputs: Any) -> str | None:

@@ -60,7 +60,12 @@ CONTEXT_CHARS = 3500
 
 _MULTI = re.compile(
     r"\b(and then|then|after that|also|as well as|compare|versus|vs\.?|for each|both|respectively|"
-    r"and (?:which|what|how|who|list|show|tell|give|also)|which of (?:those|these|them)|out of (?:those|these))\b", re.I)
+    r"and (?:which|what|how|who|list|show|tell|give|also)|which of (?:those|these|them)|out of (?:those|these)|"
+    # A second question asked with a verb first (13 Nov 2026): "Which vendors are blocked at Bishopsgate
+    # Tower, and do any of them have open work orders?" was read as one part, so no plan was made
+    # and the whole question went to one sub-agent (turn-65d8787aac9741aa).
+    r"and (?:do|does|did|is|are|was|were|has|have|had|can|will|should) "
+    r"(?:any|all|each|either|they|it|we|there|the|those|these|that|this|their|its|our|some|none)\b)", re.I)
 _TWO_QUESTIONS = re.compile(r"\?.*\S.*\?", re.S)
 
 
@@ -77,6 +82,164 @@ def is_multi_part(question: str) -> bool:
     parts = re.split(r",?\s+and\s+", q, flags=re.I)
     asks = sum(1 for p in parts if re.search(r"\b(how many|which|what|who|when|where|list|show|count|cost|save|breach|blocked|overdue)\b", p, re.I))
     return len(parts) >= 2 and asks >= 2
+
+
+def needs_plan(question: str, routing: dict[str, Any] | None = None) -> bool:
+    """Whether the planner writes this turn's plan: a question in more than one part, or one the
+    router gave to more than one area. The second was never asked: a question the router read as
+    "compliance, and also work orders" got a one-step plan unless its wording happened to match
+    is_multi_part, and the loop was left to work the two areas out by itself."""
+    if is_multi_part(question):
+        return True
+    r = routing or {}
+    agent = str(r.get("agent") or "").strip()
+    also = {str(a).strip() for a in (r.get("also") or []) if str(a).strip()} - {agent}
+    return bool(agent and also)
+
+
+# ── the records a plan may read ─────────────────────────────────────────────────────────────────
+# Until 13 Nov 2026 a plan was written in engines and tools only. Which tables a step read, and
+# through which link, was decided two levels below it - inside a fixed tool, or by the record tool's
+# own small planning call - where the plan could neither see nor check it. A step that asked for
+# "the blocked vendors and their open work orders" was sent as written; the record tool joined the
+# two through work_orders.assigned_vendor, null on every row, and the answer was "none".
+#
+# The planner is now given the record kinds this database holds - each with its table, its states and
+# what it is linked to IN THE DATA (a link no row carries is listed as not usable) - and every step
+# says which kinds it reads. Two kinds read in one step must be linked by a link rows carry, or the
+# plan is refused when it is made and planned once more as two steps. The map is the record tool's
+# own model (agents/ontology_qa.py), so the planner and the tool agree by construction.
+
+#: The tool that reads any record kind and joins them itself; its steps are the ones whose links are checked.
+RECORD_TOOL = "answer_from_records"
+#: Record kinds listed for one question, and characters of the whole block.
+MAX_KINDS = 28
+RECORDS_CHARS = 5000
+
+RECORDS_RULES = """- In every step give `records`: the record kinds from RECORDS the step has to read, the kind the step is
+  about first, by their exact names. An engine step lists the kinds its question is about.
+- Two kinds are read together in ONE step only when RECORDS shows the first linked to the second. Kinds
+  it lists under "no rows link it to" are not joined in this data: read each in its own step and hand
+  the values on with "$<step id>.<field>".
+"""
+
+
+def _squash(name: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+class RecordsMap:
+    """What the planner may know about the data: the record kinds, their tables, and which are linked
+    by a link that rows actually carry. A read-only view of the record tool's ontology."""
+
+    def __init__(self, onto: Any) -> None:
+        self.onto = onto
+        self._by: dict[str, str] = {}
+        for c in onto.concepts.values():
+            for n in (c.name, c.table, *list(c.synonyms or [])):
+                k = _squash(n)
+                for key in (k, k[:-1] if k.endswith("s") else k + "s"):
+                    if key:
+                        self._by.setdefault(key, c.name)
+
+    def names(self) -> list[str]:
+        return list(self.onto.concepts)
+
+    def kind(self, name: Any) -> str | None:
+        """The record kind a name means - its own name, its table, a synonym, singular or plural - or None."""
+        return self._by.get(_squash(name))
+
+    def table(self, kind: str) -> str | None:
+        c = self.onto.concepts.get(kind)
+        return c.table if c is not None else None
+
+    @staticmethod
+    def _usable(rel: Any) -> bool:
+        """A link rows carry, or one whose share was never measured (taken on trust, as before)."""
+        return (not getattr(rel, "fill_known", False)) or float(getattr(rel, "fill", 0) or 0) > 0
+
+    def linked(self, a: str, b: str) -> tuple[bool, str]:
+        """Whether kind `a` reaches kind `b` through links rows carry, and how (or why not)."""
+        if a == b:
+            return True, "the same kind"
+        try:
+            hops, _ = self.onto.auto_path(a, b)
+        except Exception:  # noqa: BLE001 - no path is an answer
+            return False, "nothing links them"
+        empty = [rel.name for rel, _fwd in hops if not self._usable(rel)]
+        if empty:
+            return False, "the only link, " + " > ".join(empty) + ", is empty on every record"
+        return True, " > ".join(rel.name for rel, _fwd in hops) or "the same record"
+
+    def neighbours(self, kind: str) -> tuple[list[str], list[str]]:
+        """(kinds linked to `kind` by a link rows carry, kinds whose every direct link to it is empty)."""
+        good: list[str] = []
+        bad: list[str] = []
+        for r in self.onto.relations.values():
+            if kind not in (r.from_, r.to) or r.from_ == r.to:
+                continue
+            other = r.to if r.from_ == kind else r.from_
+            (good if self._usable(r) else bad).append(other)
+        good = list(dict.fromkeys(good))
+        return good, [b for b in dict.fromkeys(bad) if b not in good]
+
+    def describe(self, question: str = "") -> str:
+        """The RECORDS block: one line per kind the question may touch."""
+        onto = self.onto
+        keep = list(onto.concepts)
+        if len(keep) > MAX_KINDS and question:
+            near = onto.relevant_concepts(question)
+            keep = [k for k in keep if k in near][:MAX_KINDS] or keep[:MAX_KINDS]
+        lines = []
+        for k in keep[:MAX_KINDS]:
+            c = onto.concepts[k]
+            good, bad = self.neighbours(k)
+            line = f"- {c.name} (table {c.table})"
+            if c.states:
+                line += ": states " + ", ".join(list(c.states)[:8])
+            line += " | linked to: " + (", ".join(good) if good else "nothing")
+            if bad:
+                line += " | no rows link it to: " + ", ".join(bad)
+            lines.append(line)
+        rest = [k for k in onto.concepts if k not in keep[:MAX_KINDS]]
+        if rest:
+            lines.append("(other kinds, usable by name: " + ", ".join(rest)[:600] + ")")
+        text = "\n".join(lines)
+        return text if len(text) <= RECORDS_CHARS else text[:RECORDS_CHARS] + " …"
+
+
+def records_map() -> RecordsMap | None:
+    """The map for this process, or None before the record tool's model has been built: the planner
+    then plans as it always did, and nothing is refused for its records."""
+    try:
+        from . import ontology_qa
+
+        onto = ontology_qa.built_ontology()
+    except Exception:  # noqa: BLE001 - never the plan's problem
+        return None
+    return RecordsMap(onto) if onto is not None else None
+
+
+def step_records(step: dict[str, Any], kind: str, target: str, data: RecordsMap | None) -> tuple[list[str], list[str], str | None]:
+    """A step's record kinds as the map names them, their tables, and why the step is refused (or None).
+    A name the map does not know is dropped, not refused: the planner's word for a kind is a hint.
+    What IS refused is one read of two kinds that no row links - the read that came back "none"."""
+    raw = step.get("records") if isinstance(step.get("records"), list) else []
+    named = [str(r).strip() for r in raw if str(r).strip()][:8]
+    if data is None:
+        return named, [], None
+    kinds: list[str] = []
+    for r in named:
+        k = data.kind(r)
+        if k and k not in kinds:
+            kinds.append(k)
+    if kind == "tool" and target == RECORD_TOOL:
+        for other in kinds[1:]:
+            ok, how = data.linked(kinds[0], other)
+            if not ok:
+                return kinds, [], (f"{kinds[0]} and {other} cannot be read together ({how}): read them in separate "
+                                   'steps and hand the values on with "$<step id>.<field>"')
+    return kinds, [t for t in (data.table(k) for k in kinds) if t], None
 
 
 def one_step_plan(target: str, reason: str | None, *, source: str = "router") -> dict[str, Any]:
@@ -131,11 +294,11 @@ Rules:
   the later step depends on the earlier one, and the trace records where each value came from.
 - Never plan an action that changes data (create, approve, send, delete) - this is a read-only plan.
 - `answer_shape`: one line on how the final answer should be laid out.
-
+{records_rules}
 Output ONLY JSON:
-{{"goal": "...", "steps": [{{"id": "s1", "kind": "engine|tool", "target": "...", "ask": "...", "args": {{}}, "depends_on": [], "why": "..."}}],
+{{"goal": "...", "steps": [{{"id": "s1", "kind": "engine|tool", "target": "...", "ask": "...", "args": {{}}, "records": [], "depends_on": [], "why": "..."}}],
   "answer_shape": "..."}}
-
+{records}
 CATALOGUE
 Engines:
 {engines}
@@ -255,9 +418,11 @@ def arg_problems(args: dict[str, Any], schema: dict[str, Any] | None) -> list[st
     return out
 
 
-def validate(plan: Any, tools: dict[str, str], schemas: dict[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+def validate(plan: Any, tools: dict[str, str], schemas: dict[str, dict[str, Any]] | None = None,
+             data: RecordsMap | None = None) -> tuple[dict[str, Any] | None, str | None]:
     """The plan as the executor will run it, or why it was refused. `schemas` ({tool: its argument
-    schema}) checks each tool step's arguments."""
+    schema}) checks each tool step's arguments; `data` (the records map) names each step's record
+    kinds and tables and refuses one read of two kinds that no row links."""
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         return None, "plan is not an object with steps"
     steps = plan["steps"]
@@ -298,8 +463,12 @@ def validate(plan: Any, tools: dict[str, str], schemas: dict[str, dict[str, Any]
             bad = arg_problems(args, (schemas or {}).get(target)) if schemas is not None else []
             if bad:
                 return None, f"step {sid}: {target} " + "; ".join(bad)
+        kinds, tables, unlinked = step_records(s, kind, target, data)
+        if unlinked:
+            return None, f"step {sid}: {unlinked}"
         out.append({"id": sid, "kind": kind, "target": target, "ask": ask[:2000], "depends_on": deps,
-                    "why": " ".join(str(s.get("why") or "").split())[:300], "args": args})
+                    "why": " ".join(str(s.get("why") or "").split())[:300], "args": args,
+                    **({"records": kinds, **({"tables": tables} if tables else {})} if kinds else {})})
         ids.add(sid)
     return {"mode": "multi", "source": "planner", "goal": " ".join(str(plan.get("goal") or "").split())[:400],
             "steps": out, "answer_shape": " ".join(str(plan.get("answer_shape") or "").split())[:300]}, None
@@ -332,20 +501,35 @@ def areas_named(question: str) -> list[str]:
 
 async def make_plan(question: str, *, context: str, tools: dict[str, str],
                     llm: Callable[[str, str, str], Awaitable[str]],
-                    schemas: dict[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+                    schemas: dict[str, dict[str, Any]] | None = None,
+                    data: "RecordsMap | None | bool" = True) -> tuple[dict[str, Any] | None, str | None]:
     """A validated plan, or (None, reason). `llm(system, user, role)` returns text.
 
     One more planning call (never more) when the first plan was refused - it is told why - or when it
     has fewer steps than the areas the question covers (Workstream A2, 11 Nov 2026: a question across
-    three areas is three reads). The second plan is kept only when it is valid and no smaller."""
+    three areas is three reads). The second plan is kept only when it is valid and no smaller.
+
+    `data` is the records map (13 Nov 2026): by default this process's own (records_map()), None or
+    False for a plan made without one. With it the planner is shown the record kinds and their links,
+    each step says which kinds it reads, and a read of two unlinked kinds is refused like a wrong
+    argument - told why, planned once more."""
     eng, tl = _catalogue_text(tools)
-    prompt = PLAN_PROMPT.format(max_steps=MAX_STEPS, engines=eng, tools=tl, context=(context or "").strip(), question=question)
+    if data is True:
+        data = records_map()
+    elif data is False:
+        data = None
+    shown = data.describe(question) if data is not None else ""
+    prompt = PLAN_PROMPT.format(
+        max_steps=MAX_STEPS, engines=eng, tools=tl, context=(context or "").strip(), question=question,
+        records_rules=RECORDS_RULES if shown else "",
+        records=("\nRECORDS (the kinds of record held here: its table, its states, and what it is linked to in the data)\n"
+                 + shown + "\n") if shown else "")
     system = "You are the planning step of the Plenum CAFM orchestrator."
     try:
         raw = await llm(system, prompt, "plan")
     except Exception as exc:  # noqa: BLE001 - a failed plan falls back to routing, never to silence
         return None, "planner call failed: " + str(exc).splitlines()[0][:200]
-    plan, why = validate(_json_in(raw), tools, schemas)
+    plan, why = validate(_json_in(raw), tools, schemas, data)
     areas = areas_named(question)
     note = None
     if plan is None:
@@ -357,7 +541,7 @@ async def make_plan(question: str, *, context: str, tools: dict[str, str],
     if note:
         try:
             raw2 = await llm(system, prompt + "\n\n" + note, "plan")
-            plan2, why2 = validate(_json_in(raw2), tools, schemas)
+            plan2, why2 = validate(_json_in(raw2), tools, schemas, data)
         except Exception as exc:  # noqa: BLE001 - the first answer stands
             plan2, why2 = None, "planner call failed: " + str(exc).splitlines()[0][:200]
         if plan2 is not None and (plan is None or len(plan2["steps"]) >= len(plan["steps"])):
@@ -679,6 +863,9 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
                   "why": step["why"]}
         if step["kind"] == "tool":
             inputs.update(args=args, bindings=bindings)
+        if step.get("records"):
+            # What this step reads, as the plan said it: the record kinds and the tables they are.
+            inputs.update(records=step["records"], tables=step.get("tables") or [])
         if scope is not None:
             inputs["scope"] = scope.describe()
         run_id = trace.on_step_open(step["id"], f"{step['id']}: {step['target']}", inputs)

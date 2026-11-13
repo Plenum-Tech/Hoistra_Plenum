@@ -5,6 +5,7 @@ Tracks ingestion, UDR mapping/hierarchy progress, batch IDs, and route metadata.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -861,9 +862,26 @@ _WO_READ_CUES = (
 )
 
 
+#: A yes/no or who/when question about work orders (12 Nov 2026). "For each statutory inspection
+#: due in the next 60 days, is a work order booked for that inspection?", "Do any of them have open
+#: work orders?" and "Is a work order raised for any of them?" carry none of the read cues above, so
+#: each was taken as a request to raise a work order: no router, no plan, straight to the general
+#: loop (turn-4381e9d1938446d5, turn-88bd01335ae44943, turn-0742ad34d0b74817).
+_WO_QUESTION = re.compile(
+    r"(?:^|[,;:]\s*|\b(?:and|then|so)\s+)(?:(?:is|are|was|were|do|does|did|has|have|had)\s+"
+    r"(?:a|an|the|any|each|every|there|it|they|these|those|that|this|we|our|all|some|no|\w+'s)|"
+    r"(?:who|whose|when|where|why)\s+\w+)\b")
+#: ... unless it asks for one to be made: "do we need to raise a work order for the lift?".
+_WO_ASKS_FOR_ONE = re.compile(
+    r"\b(?:raise|create|log|open|book|make|generate|submit|file|issue|need|want)\s+(?:me\s+|us\s+)?"
+    r"(?:a|an|one|another|new)\b")
+
+
 def _asks_about_work_orders(msg_l: str) -> bool:
     """True when the message is asking about work orders, not asking for one."""
-    return any(cue in msg_l for cue in _WO_READ_CUES)
+    if any(cue in msg_l for cue in _WO_READ_CUES):
+        return True
+    return bool(_WO_QUESTION.search(msg_l)) and not _WO_ASKS_FOR_ONE.search(msg_l)
 
 
 def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:

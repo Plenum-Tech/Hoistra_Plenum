@@ -817,6 +817,11 @@ class Relation:
         self.cardinality = d.get("cardinality", "many_to_one")
         self.description = d.get("description", "")
         self.fill = float(d.get("fill") or 0)          # share of rows whose link column is set
+        #: Whether the share was measured. A relation written by hand carries none, and "0" for it means
+        #: "not measured", never "empty": only a measured 0 is a link no row uses.
+        self.fill_known = d.get("fill") is not None
+        #: Other column pairs that reach the same record (see merge_links): the join is on ANY of them.
+        self.also: list[list[tuple[str, str]]] = []
         self.join = []
         for j in d["join"]:
             m = self.JOIN_RE.match(j)
@@ -847,6 +852,10 @@ class Ontology:
         self.concepts = {n: Concept(n, c) for n, c in (d.get("concepts") or {}).items()}
         self.relations = {n: Relation(n, r) for n, r in (d.get("relations") or {}).items()}
         self.derived = {n: Derived(n, r) for n, r in (d.get("derived") or {}).items()}
+        #: Links read through any of several columns (merge_links). Kept apart from `relations`: the
+        #: planner is never shown them and the path search never walks them - only a rule that was
+        #: built on one names it.
+        self.merged: dict[str, Relation] = {}
         self.col_types: dict = {}
         self._check_internal()
 
@@ -932,8 +941,8 @@ class Ontology:
     def expand(self, start, via, allow_derived=True):
         hops, reqs, current = [], [], start
         for name in via:
-            if name in self.relations:
-                hop, current = self._traverse(self.relations[name], current)
+            if name in self.relations or name in self.merged:
+                hop, current = self._traverse(self.relations.get(name) or self.merged[name], current)
                 hops.append(hop)
             elif allow_derived and name in self.derived:
                 dr = self.derived[name]
@@ -947,7 +956,7 @@ class Ontology:
                 if s_start:
                     reqs.append((len(hops), start_concept, list(s_start)))
                 for base in chain:
-                    hop, current = self._traverse(self.relations[base], current)
+                    hop, current = self._traverse(self.relations.get(base) or self.merged[base], current)
                     hops.append(hop)
                 if s_end:
                     reqs.append((len(hops), current, list(s_end)))
@@ -1124,6 +1133,16 @@ class Ontology:
 # ---------------------------------------------------------------------------
 _ONTOLOGY: dict[str, Ontology] = {}
 _BUILD_LOCK = asyncio.Lock()
+
+
+def built_ontology() -> "Ontology | None":
+    """The ontology already built in this process, or None - never a build and never a wait. The
+    orchestrator's planner reads it to know what records exist and how they are linked; a planning
+    call must not queue behind a fifteen-minute build, so before the first build it plans as it
+    always did."""
+    for onto in reversed(list(_ONTOLOGY.values())):
+        return onto
+    return None
 
 
 def _cache_path(fp: str) -> str:
@@ -1401,14 +1420,22 @@ def compile_filter(onto, concept, alias, f, p):
 
 
 def _join_conds(onto, rel, fa, ta):
-    conds = []
     ft, tt = onto.concepts[rel.from_].table, onto.concepts[rel.to].table
-    for fc, tc in rel.join:
-        left, right = qi(fa) + "." + qi(fc), qi(ta) + "." + qi(tc)
-        if onto.col_types.get((ft, fc)) != onto.col_types.get((tt, tc)):
-            left, right = left + "::text", right + "::text"
-        conds.append(left + " = " + right)
-    return conds
+
+    def pairs(join):
+        conds = []
+        for fc, tc in join:
+            left, right = qi(fa) + "." + qi(fc), qi(ta) + "." + qi(tc)
+            if onto.col_types.get((ft, fc)) != onto.col_types.get((tt, tc)):
+                left, right = left + "::text", right + "::text"
+            conds.append(left + " = " + right)
+        return conds
+
+    conds = pairs(rel.join)
+    if not getattr(rel, "also", None):
+        return conds
+    # Any of the link columns reaches the record: one join, not one query per column.
+    return ["(" + " OR ".join("(" + " AND ".join(c) + ")" for c in [conds, *[pairs(j) for j in rel.also]]) + ")"]
 
 
 class QueryBuilder:
@@ -3018,10 +3045,71 @@ CERT_BUNDLE = [
 ]
 
 
+def fuller_link(onto, name: str) -> str | None:
+    """The relation to read through instead of `name`, when `name` joins on a column that is empty on
+    every row and another relation joins the same two concepts on one that is filled. None otherwise."""
+    r = onto.relations.get(name)
+    if r is None or r.fill > 0:
+        return None
+    best = max((x for x in onto.relations.values()
+                if x is not r and {x.from_, x.to} == {r.from_, r.to} and x.fill > 0),
+               key=lambda x: x.fill, default=None)
+    return best.name if best is not None else None
+
+
+def swap_empty_links(onto, plan) -> list[str]:
+    """A link the plan names that is empty on every row is read through its filled twin (12 Nov 2026).
+
+    The path search already takes the fullest link (auto_path, 1 Oct 2026), but a plan that NAMES the
+    link was followed as written. "Which vendors are blocked at Bishopsgate Tower, and do any of them
+    have open work orders?" was planned with the open work orders "via WORK_ORDER_ASSIGNED_VENDOR" -
+    work_orders.assigned_vendor, null on every row - and answered "none has linked open work orders";
+    by vendor_id, Apex Mechanical had three and Pennard Fire Services one (turn-65d8787aac9741aa).
+    Returns a note for each link changed, for the interpretation the answer is written from."""
+    notes: list[str] = []
+    for node in [*(plan.get("constraints") or []), *(plan.get("include") or [])]:
+        via = node.get("via") if isinstance(node, dict) else None
+        if not isinstance(via, list):
+            continue
+        for i, name in enumerate(via):
+            alt = fuller_link(onto, name) if isinstance(name, str) else None
+            if alt:
+                via[i] = alt
+                notes.append("Read through " + alt + ": the link the plan named, " + name
+                             + ", is empty on every record.")
+    if notes:
+        log.info("ontology.empty_link_swapped", notes=notes)
+    return notes
+
+
 def _best_relation(onto, frm: str, to: str):
     """The relation from `frm` to `to` whose link column is most often filled."""
     cands = [r for r in onto.relations.values() if r.from_ == frm and r.to == to and r.cardinality == "many_to_one"]
     return max(cands, key=lambda r: r.fill, default=None)
+
+
+def merge_links(onto, names: list[str], name: str) -> list[str]:
+    """One link that is read through ANY of the given relations' columns, when they all join the same
+    two concepts the same way round; else the names as given (12 Nov 2026).
+
+    A certificate points at its asset by asset_id and by asset_code, and at its building by
+    building_id and by building_code. Each was its own alternative, so everything a certificate
+    reaches was read once per column: "linked_assets [the certificate's own asset]" twice, its work
+    orders twice, its PPMs twice ... 19 queries where 10 say the same (turn-6aee3e0dcf8a4b27). A
+    record reached by either column is the same record; one query with both columns finds it once."""
+    rels = [onto.relations[n] for n in names if n in onto.relations]
+    if len(rels) < 2 or len(rels) != len(names):
+        return names
+    first = rels[0]
+    if any((r.from_, r.to, r.cardinality) != (first.from_, first.to, first.cardinality) for r in rels):
+        return names
+    merged = Relation(name, {"from": first.from_, "to": first.to, "cardinality": first.cardinality,
+                             "join": ["from." + fc + " = to." + tc for fc, tc in first.join],
+                             "fill": max(r.fill for r in rels),
+                             "description": "any of: " + ", ".join(r.name for r in rels)})
+    merged.also = [list(r.join) for r in rels[1:]]
+    onto.merged[name] = merged
+    return [name]
 
 
 def add_certificate_links(onto) -> list[str]:
@@ -3045,6 +3133,10 @@ def add_certificate_links(onto) -> list[str]:
         hops = first_hop.setdefault(target, ([], when))[0]
         if rel.name not in hops:
             hops.append(rel.name)
+    # Two columns that reach the same record are one link (merge_links), so each thing a certificate
+    # reaches is read once, not once per column.
+    for target, (hops, _when) in first_hop.items():
+        hops[:] = merge_links(onto, list(hops), "CERTIFICATE_TO_" + re.sub(r"(?<!^)(?=[A-Z])", "_", target).upper())
     asset_vendor = _best_relation(onto, asset.name, vendor.name) if vendor else None
     added = []
     for rule, (child_table, via_building) in CERT_LINK_RULES.items():
@@ -3414,6 +3506,7 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     onto = await get_ontology()
     plan, attempts = await plan_question(onto, question, llm=llm)
     grouped = ensure_grouping(onto, plan, question)
+    grouped.extend(swap_empty_links(onto, plan))
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     grouped.extend(pin_live_vendors(onto, plan, question))

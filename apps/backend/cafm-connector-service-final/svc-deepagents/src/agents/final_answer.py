@@ -17,7 +17,9 @@ so a turn that skipped this step without a reason is logged - see `audit`):
   * planner      - the planner's synthesis, which is this step for a planned turn;
   * compliance_analyst / contract_analyst - the orchestrator's own analysts, which write from the
     tool rows and are grounded against them in code (compliance validate + review,
-    contract_answer.ground);
+    contract_answer.ground). Since 12 Nov 2026 their text is a draft too and comes back through
+    this step (orchestrator._answer_over_analyst); these names now mark only the turn where this
+    step could not write and the analyst's own answer stood;
   * deterministic - text built in code from records (templates, status tracks, shortcuts);
   * clarify / choice - a question back to the user or option cards: no records were read;
   * orchestrator_direct - the orchestrator answered without calling a tool, so there is no
@@ -99,12 +101,25 @@ LENS
 
 QUESTION
 {question}
-{scope}
+{scope}{shown}
 DRAFT (not evidence)
 {draft}
 
 TOOL RESULTS
 {results}"""
+
+#: When the answer is drawn above cards built from the same records (12 Nov 2026). The first answer
+#: written over the compliance analyst listed the four lapsed certificates as a table - and the chat
+#: drew that table, a bar chart from its "Overdue" column, and then the cards' own bar chart and
+#: certificate table under it: the same four rows four times (turn-548da79bee2642eb).
+SHOWN_NOTE = """
+SHOWN UNDER YOUR ANSWER (cards the chat draws from the same records, so the reader already sees them):
+{shown}
+Do not repeat what the cards show: no table and no list of those rows, and no column of their dates,
+references or day counts. Write the direct answer in one or two sentences - the count, and the items by
+name when there are five or fewer - then only what the cards do not show (a cause, a consequence, what
+to do next). If the cards show everything, the one or two sentences are the whole answer.
+"""
 
 STRICT_NOTE = """
 
@@ -173,7 +188,8 @@ def _results_text(results: dict[str, dict[str, Any]]) -> str:
     return ev.render(results, per=PER_RESULT, total=TOTAL)[0]
 
 
-def _prompt(question: str, draft: str, drafts: list[str], results: dict[str, dict[str, Any]], scope: str = "") -> str:
+def _prompt(question: str, draft: str, drafts: list[str], results: dict[str, dict[str, Any]], scope: str = "",
+            shown: str = "") -> str:
     texts = [d for d in [draft, *drafts] if d and d.strip()]
     joined = "\n\n---\n\n".join(texts)
     if len(joined) > DRAFT_CHARS:
@@ -181,7 +197,8 @@ def _prompt(question: str, draft: str, drafts: list[str], results: dict[str, dic
     return FINAL_PROMPT.format(lens=planner._lens_text(), question=question, draft=joined or "(none)",
                                results=_results_text(results), states=ev.STATE_RULES,
                                forms=answer_spec.prompt_block(answer_spec.form_for(results), answer_spec.parts_of(question)),
-                               scope=(f"\nSCOPE CARRIED FROM THE CONVERSATION (a hard filter): {scope}\n" if scope else ""))
+                               scope=(f"\nSCOPE CARRIED FROM THE CONVERSATION (a hard filter): {scope}\n" if scope else ""),
+                               shown=SHOWN_NOTE.format(shown=shown) if shown else "")
 
 
 def _unwritten(results: dict[str, dict[str, Any]]) -> str:
@@ -209,12 +226,13 @@ def _score(answer: str, question: str, results: dict[str, dict[str, Any]]) -> tu
 
 async def write(question: str, draft: str, *, results: dict[str, dict[str, Any]], drafts: list[str] | None = None,
                 llm: Llm, first: Llm | None = None, previous: str | None = None,
-                scope: str = "") -> tuple[str, dict[str, Any]]:
+                scope: str = "", shown: str = "") -> tuple[str, dict[str, Any]]:
     """The answer the user reads, and a report of how it was written and checked.
 
     `first` writes the first version when given (the caller's streaming model call, so the chat
     paints the answer as it is written); rewrites go through `llm`. A rewrite replaces what was
-    painted when the answer completes.
+    painted when the answer completes. `shown` says what cards the chat draws under the answer from
+    the same records, so the text does not repeat them (SHOWN_NOTE).
 
     report: {source, evidence, failed, drafts, figures_checked, unmatched, contradictions, rewrites,
     draft_chars, answer_chars}. source is "synthesis", or "draft_checked" / "unwritten" when the
@@ -231,7 +249,7 @@ async def write(question: str, draft: str, *, results: dict[str, dict[str, Any]]
                               "form": answer_spec.form_for(results), "parts": answer_spec.parts_of(question)}
     rid = trace.on_step_open("final", "final answer", {"evidence": evidence, "failed": failed, "drafts": len(drafts),
                                                        "outcome": report["outcome"]})
-    prompt = _prompt(question, draft, drafts, results, scope)
+    prompt = _prompt(question, draft, drafts, results, scope, shown)
     try:
         answer = (await (first or llm)(SYSTEM, prompt, "final_answer")).strip()
         if not answer:
