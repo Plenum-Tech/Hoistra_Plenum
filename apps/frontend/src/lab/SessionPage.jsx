@@ -56,6 +56,9 @@ const SHOW_SECTION_TAGS = false;
 // "Failure handling" rows, and the scenario type "Failure" (it reads like a verdict). A turn that failed shows why it
 // failed instead (WhyFailed). Set to true to show them again.
 const SHOW_FAILURE_ROWS = false;
+// The turn's Input / Output boxes are hidden (13 Nov 2026, Hussain): the trace view below shows the question and the
+// answer. Set to true to show them again.
+const SHOW_IO = false;
 const typeText = (type) => (!SHOW_FAILURE_ROWS && type === 'failure' ? null : TYPE_TEXT[type] || type || null);
 
 // Why a turn failed: how it ended and each failed step with its reason. Only the reason, never an expected answer.
@@ -303,10 +306,12 @@ function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel,
           put this line back to show it again.
       <ScoresPanel trace={trace} me={me} saving={saving} error={scoreError} onSave={(level, body) => onScore && onScore(trace.id, level, body)} />
       */}
-      <div className="lab-ses-io">
-        <div><span className="lab-qp-label">{'Input'}</span><p className="lab-qp-said">{trace.input || '—'}</p></div>
-        <div><span className="lab-qp-label">{'Output'}</span><p className="lab-qp-said">{trace.output || '—'}</p></div>
-      </div>
+      {SHOW_IO ? (
+        <div className="lab-ses-io">
+          <div><span className="lab-qp-label">{'Input'}</span><p className="lab-qp-said">{trace.input || '—'}</p></div>
+          <div><span className="lab-qp-label">{'Output'}</span><p className="lab-qp-said">{trace.output || '—'}</p></div>
+        </div>
+      ) : null}
       <WhyFailed trace={trace} nodes={nodes} />
       <ExpectedFlag data={flag && !flag.loading && !flag.error ? flag : null} busy={flagBusy}
         error={(flag && flag.error) || flagError || ''} onSet={onFlag} />

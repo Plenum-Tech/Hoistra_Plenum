@@ -127,8 +127,9 @@ test('a session opens as a tab per turn, the first turn selected', () => {
   const tabs = [...out.matchAll(/role="tab"[^>]*aria-selected="(true|false)"[^>]*>([^<]*)</g)].map((m) => [m[2], m[1]]);
   assert.deepEqual(tabs, [['Turn 1', 'true'], ['Turn 2', 'false']]);
   assert.match(out, /role="tabpanel"/);
-  assert.ok(out.includes('Three are overdue.'), 'the selected turn\'s answer');
-  assert.ok(!out.includes('Apex Mechanical.'), 'not the other turn\'s');
+  // 13 Nov 2026 (Hussain): the Input / Output boxes are gone; the trace view below shows the question and the answer
+  assert.ok(!out.includes('lab-ses-io') && !out.includes('>Input<') && !out.includes('>Output<'), 'no Input / Output boxes');
+  assert.ok(!out.includes('Apex Mechanical.'), 'nothing of the other turn');
 });
 
 test('the session header and the scenario: Langfuse\'s words, the run tag, and the expected outcome of each turn', () => {
