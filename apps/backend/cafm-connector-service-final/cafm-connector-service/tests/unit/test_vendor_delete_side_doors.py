@@ -567,7 +567,8 @@ def test_an_organisation_is_not_deleted_by_anyone_but_a_superadmin(app, role):
     resp = _serve_as(app, session, role).delete(f"/api/v1/plenum/organizations/{other}")
 
     assert resp.status_code == 403
-    assert resp.json()["detail"]["reason"] == "superadmin_required"
+    # 13 Nov 2026: a plain user is stopped one step earlier, at the admin resources' own gate
+    assert resp.json()["detail"]["reason"] == ("admin_required" if role == "user" else "superadmin_required")
     assert session.deleted == [] and session.commits == 0
 
 

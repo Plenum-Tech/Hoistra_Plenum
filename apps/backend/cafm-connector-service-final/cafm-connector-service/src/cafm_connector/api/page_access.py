@@ -12,8 +12,10 @@ master. The rule a row follows:
     pages. Being shown on another page does not add a tag.
 
 Locations are where work happens and where assets stand, so either page reads them. Tags that
-are not a page: ``shared`` (every signed-in caller) and ``admin`` (organisation, users and the
-permission tables, which keep whatever check they already had).
+are not a page: ``shared`` (every signed-in caller) and ``admin`` (organisation, users, the
+permission tables and the audit trail). An ``admin`` resource is an administrator's, whoever
+asks and whatever pages they hold (13 Nov 2026): those routes had no check of their own, so
+any signed-in person could change a user's email, delete a user or read the audit trail.
 
 tests/unit/test_page_gate.py walks the router and fails, naming the resource, for any resource
 with no row here.
@@ -77,6 +79,15 @@ def refusal(page: str | None) -> HTTPException:
     )
 
 
+def admin_only(principal: Principal) -> HTTPException:
+    """The organisation, its users, the permission tables and the audit trail are an administrator's."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"ok": False, "reason": "admin_required", "your_role": principal.role,
+                "error": "Only an administrator can manage the organisation, its users and their permissions."},
+    )
+
+
 async def page_gate(request: Request, principal: Principal = Depends(current_principal)) -> None:
     """Hold the caller to the pages they were given. Attached to the router itself.
 
@@ -84,11 +95,13 @@ async def page_gate(request: Request, principal: Principal = Depends(current_pri
     not looked at, so their path is unchanged. A resource with no row is refused to a
     restricted caller: a forgotten row must fail closed for the people it would expose data to.
     """
+    route = request.scope.get("route")
+    tags = tags_for(getattr(route, "path", None))
+    if tags is not None and ADMIN in tags and not principal.is_admin:
+        raise admin_only(principal)
     pages = principal.pages
     if pages is None:
         return
-    route = request.scope.get("route")
-    tags = tags_for(getattr(route, "path", None))
     if tags is None:
         raise refusal(None)
     owners = [t for t in tags if t in PAGES]

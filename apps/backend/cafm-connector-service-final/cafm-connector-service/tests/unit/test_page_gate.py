@@ -139,3 +139,35 @@ def test_an_unknown_resource_is_refused_to_a_restricted_caller(app, monkeypatch)
     monkeypatch.setattr(A, "RESOURCE_PAGES", trimmed)
     assert refused(as_(app, caller(pages=frozenset(PAGES))).get(PREFIX + "/assets"))
     assert not refused(as_(app, caller()).get(PREFIX + "/assets"))
+
+
+# ── the organisation, its users and the permission tables are an administrator's (13 Nov 2026) ──────────────
+# These routes had no admin check at all: any signed-in person of a company could change another user's email (then
+# ask for a password reset and sign in as them, an admin included), delete a user, and read the audit trail.
+
+def admin_refused(response) -> bool:
+    if response.status_code != 403:
+        return False
+    detail = response.json().get("detail")
+    return isinstance(detail, dict) and detail.get("reason") == "admin_required"
+
+
+def admin_routes(app):
+    return [(m, p) for m, p in served(app) if A.ADMIN in A.tags_for(p)]
+
+
+@pytest.mark.parametrize("pages", [None, frozenset({"assets"}), frozenset(PAGES), frozenset()])
+def test_a_person_who_is_not_an_administrator_is_refused_every_admin_resource(app, pages):
+    client = as_(app, caller(role="user", pages=pages))
+    assert len(admin_routes(app)) >= 25, "users, organizations, roles, permissions, their links and the audit trail"
+    still_open = [(m, p) for m, p in admin_routes(app) if not admin_refused(call(client, m, p))]
+    assert not still_open, "reached without being an administrator"
+    elsewhere = [(m, p) for m, p in served(app) if A.ADMIN not in A.tags_for(p) and admin_refused(call(client, m, p))]
+    assert not elsewhere, "only the admin resources are an administrator's"
+
+
+@pytest.mark.parametrize("role", ["admin", "superadmin"])
+def test_an_administrator_still_reaches_the_admin_resources(app, role):
+    client = as_(app, caller(role=role))
+    assert not [(m, p) for m, p in admin_routes(app) if admin_refused(call(client, m, p))]
+    # deleting an organisation is a superadmin's, as it was before: its own check, its own answer
