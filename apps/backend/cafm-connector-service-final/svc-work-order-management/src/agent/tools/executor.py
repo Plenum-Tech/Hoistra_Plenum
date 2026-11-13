@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .asset_tools import AssetTools
+from .asset_tools import AssetTools, holds, withheld
 from .intelligence_tools import IntelligenceTools
 from .vendor_tools import VendorTools
 from .workflow_tools import WorkflowTools
@@ -18,9 +18,10 @@ _vendors = VendorTools()
 
 
 class ToolExecutor:
-    def __init__(self, session: AsyncSession, session_id: str) -> None:
+    def __init__(self, session: AsyncSession, session_id: str, principal=None) -> None:
         self._session = session
-        self._assets = AssetTools(session)
+        self._principal = principal
+        self._assets = AssetTools(session, principal)
         self._workflow = WorkflowTools(session, session_id)
 
     async def execute(self, name: str, arguments: Dict[str, Any]) -> Any:
@@ -45,6 +46,9 @@ class ToolExecutor:
                 case "detect_compliance_requirements":
                     return await _intel.detect_compliance_requirements(**arguments)
                 case "get_asset_intelligence":
+                    # An asset's failure history is the asset register's.
+                    if not holds(self._principal, "assets"):
+                        return withheld("assets")
                     return await _intel.get_asset_intelligence(**arguments)
                 case "get_scheduling_recommendation":
                     return await _intel.get_scheduling_recommendation(**arguments)

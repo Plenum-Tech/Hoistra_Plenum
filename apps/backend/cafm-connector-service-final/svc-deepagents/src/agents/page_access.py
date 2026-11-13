@@ -132,6 +132,11 @@ _SUBJECT: dict[str, str] = {
 }
 
 
+#: The sub-agents that are a domain engine, by the engine (the Maintenance page's read-only
+#: agent is wo_engine's).
+SUBAGENT_ENGINE: dict[str, str] = {**{e: e for e in ENGINE_PAGE}, "maintenance": "wo_engine"}
+
+
 def allows_engine(engine: str | None) -> bool:
     """Whether the caller's pages allow answering from this engine. An engine that is not a
     domain engine is not decided here: its tools are."""
@@ -211,7 +216,8 @@ _NAME_TAGS: dict[str, tuple[str, ...]] = {
     "extract_contract_from_document": (INGEST,),
     "extract_and_verify_invoice": (INGEST,),
     # in the compliance module
-    "manage_vector_membership": (INGEST,),
+    # lists the compliance certificates on file to choose from: the register is Compliance's
+    "manage_vector_membership": ("compliance",),
     # in the work-order module
     "search_assets": _ASSETS,
     "get_asset_details": _ASSETS,
@@ -350,6 +356,27 @@ def prompt_note() -> str | None:
                  "memory, from earlier in the conversation or from a document, and do not "
                  "suggest another way to get it.")
     return note
+
+
+# ── what a certificate reaches ───────────────────────────────────────────────────
+#: The kinds of record the compliance answer reads beside each certificate (ontology_qa
+#: CERT_BUNDLE), by the page whose register each one is.
+REACH_KIND_PAGE: dict[str, str] = {
+    "linked_assets": "assets",
+    "asset_open_work_orders": "ops",
+    "asset_ppm_not_done": "ops",
+    "asset_maintenance_plans": "ops",
+    "open_energy_anomalies": "energy",
+}
+
+
+def reach_kinds() -> frozenset[str] | None:
+    """The kinds of linked record the caller may be given beside a certificate, or None for every
+    kind (a caller with every page: read exactly as before)."""
+    pages = current()
+    if pages is None:
+        return None
+    return frozenset(k for k, page in REACH_KIND_PAGE.items() if page in pages)
 
 
 # ── documents ─────────────────────────────────────────────────────────────────────────

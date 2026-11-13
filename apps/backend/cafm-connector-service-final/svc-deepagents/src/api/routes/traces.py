@@ -117,6 +117,12 @@ class Feedback(BaseModel):
 async def set_feedback(turn_id: str, body: Feedback, organization_id: str | None = Query(None),
                        principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     org = _act(principal, organization_id)
+    if _cut(principal) is not None:
+        # A turn from before the caller's pages were narrowed is not theirs to see, nor to teach
+        # from. Read only for such a caller: everyone else's feedback is what it was.
+        turn = await trace.get_turn(principal, org, turn_id)
+        if turn is None or _hidden(principal, turn):
+            raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     if not await trace.set_feedback(principal, org, turn_id, body.rating, body.comment):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     # A thumbs-down with a reason teaches by itself (agents/auto_teach.py).
@@ -159,6 +165,9 @@ async def rerun_turn(turn_id: str, body: RerunBody, request: Request, organizati
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     if not body.corrections:
         raise HTTPException(status_code=422, detail={"ok": False, "error": "Say what to correct first."})
+    # The re-run is recorded as a turn of body.session_id: only the caller's own conversation.
+    from .workflow import _ask_guard
+    await _ask_guard(body.session_id, principal)
     corrections = [c.model_dump() for c in body.corrections]
     out = await orchestrator.rerun_turn(turn, corrections, session_id=body.session_id)
     if not out.get("ok"):

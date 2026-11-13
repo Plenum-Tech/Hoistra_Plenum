@@ -163,11 +163,11 @@ def rows():
     return [
         {"work_order": "WO-1", "source": "Maintenance", "state": "Blocked"},
         {"work_order": "WO-2", "source": "Vendors", "state": "Deviation"},     # a blocked order
-        {"work_order": None, "source": "Compliance", "state": "To raise"},
-        {"work_order": None, "source": "Energy", "state": "To raise"},
-        {"work_order": None, "source": "Vendors", "state": "To raise"},        # an approvals item
-        {"work_order": None, "source": "Assets", "state": "To raise"},
-        {"work_order": None, "source": "Something new", "state": "To raise"},
+        {"work_order": None, "queue_item": "q-Compliance", "source": "Compliance", "state": "To raise"},
+        {"work_order": None, "queue_item": "q-Energy", "source": "Energy", "state": "To raise"},
+        {"work_order": None, "queue_item": "q-Vendors", "source": "Vendors", "state": "To raise"},        # an approvals item
+        {"work_order": None, "queue_item": "q-Assets", "source": "Assets", "state": "To raise"},
+        {"work_order": None, "queue_item": "q-Something new", "source": "Something new", "state": "To raise"},
     ]
 
 

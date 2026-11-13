@@ -234,15 +234,41 @@ async def unconverted_recommendations(
 
 # ── 2. anomalies an earlier report already named ─────────────────────────────────────
 
+#: Why a card about another page's records is not answered for a caller without that page.
+OUTSIDE_PAGES = "not part of the pages you have access to"
+
+
+def _lacks(pages: frozenset[str] | None, page: str) -> bool:
+    return pages is not None and page not in pages
+
+
+def held_unconverted(card: dict[str, Any], pages: frozenset[str] | None) -> dict[str, Any]:
+    """The unconverted-recommendations card without the energy figures, for a caller held to
+    pages that do not include energy. Anything else gets the card untouched."""
+    if not _lacks(pages, "energy") or not card.get("answerable"):
+        return card
+    out = {k: v for k, v in card.items() if k != "now_flagged_by_energy"}
+    out["headline"] = f"{card.get('count')} recommendations never converted to orders"
+    out["reports"] = [{k: v for k, v in r.items() if k != "now_flagged_by_energy"}
+                      for r in card.get("reports") or []]
+    return out
+
+
 async def corroborated_anomalies(
     session: AsyncSession, *, building_ids: list[UUID] | None, limit: int = 100,
+    pages: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Open anomalies where a report written *before* detection already named the same thing.
 
     The match is on subject and time, not on a model: same asset, report predates detection,
     and the two share at least two subject words. Every match returns the words it was made
     on, so the reader can see it and disagree.
+
+    Energy anomalies are the energy page's: a caller held to pages without it is not answered,
+    and nothing is read.
     """
+    if _lacks(pages, "energy"):
+        return _unanswerable(OUTSIDE_PAGES)
     sh = await shape(session)
     if "inspections" not in sh or "observations" not in sh.get("inspections", set()):
         return _unanswerable("inspections here records no observations to match against")
@@ -445,14 +471,19 @@ async def poorly_graded(
 
 async def panel(
     session: AsyncSession, *, building_ids: list[UUID] | None,
+    pages: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """The whole inspection-intelligence panel in one call: the header and the four cards."""
+    """The whole inspection-intelligence panel in one call: the header and the four cards.
+
+    ``pages`` holds a caller to their pages: without energy the anomalies card is not answered
+    and the recommendations card carries no energy figures. None is every page."""
     head = await corpus(session, building_ids=building_ids)
+    held = {"pages": pages} if pages is not None else {}
     cards = {
-        "unconverted_recommendations": await unconverted_recommendations(
-            session, building_ids=building_ids, limit=20),
+        "unconverted_recommendations": held_unconverted(await unconverted_recommendations(
+            session, building_ids=building_ids, limit=20), pages),
         "corroborated_anomalies": await corroborated_anomalies(
-            session, building_ids=building_ids, limit=20),
+            session, building_ids=building_ids, limit=20, **held),
         "warranted_findings": await warranted_findings(
             session, building_ids=building_ids, limit=20),
         "poorly_graded": await poorly_graded(

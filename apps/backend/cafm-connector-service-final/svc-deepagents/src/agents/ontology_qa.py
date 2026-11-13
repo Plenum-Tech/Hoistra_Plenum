@@ -3178,14 +3178,17 @@ def add_certificate_links(onto) -> list[str]:
     return added
 
 
-def ensure_compliance_includes(onto, plan) -> list[str]:
-    """Add each certificate's reach when the question is about certificates."""
+def ensure_compliance_includes(onto, plan, kinds=None) -> list[str]:
+    """Add each certificate's reach when the question is about certificates. `kinds`, when given,
+    is the only kinds of linked record read (a caller held to some pages: agents/page_access.py)."""
     focus = onto.concepts.get(plan["focus"]["concept"])
     if not focus or focus.table != "compliance_certificates" or plan.get("aggregate"):
         return []
     have = {tuple(i["via"]) for i in plan["include"] if i["via"]}
     added = []
     for rule, name, states, sort, limit in CERT_BUNDLE:
+        if kinds is not None and name not in kinds:
+            continue
         d = onto.derived.get(rule)
         if not d or (rule,) in have:
             continue
@@ -3201,7 +3204,7 @@ def ensure_compliance_includes(onto, plan) -> list[str]:
 
 
 async def linked_for_certificates(certificate_ids: list[str], principal=None,
-                                  budget: int = MAX_EVIDENCE_CHARS) -> dict:
+                                  budget: int = MAX_EVIDENCE_CHARS, kinds=None) -> dict:
     """What each certificate reaches - assets, their maintenance, energy - read in the caller's
     scope, with no model call. The compliance pipeline calls this with the certificates it has
     already fetched, so the analyst can say what a lapsed certificate puts at risk."""
@@ -3221,7 +3224,7 @@ async def linked_for_certificates(certificate_ids: list[str], principal=None,
         return {"ok": False, "error": "No certificate concept in this deployment."}
     plan = normalise_plan({"question_type": "list", "focus": {"concept": cert.name}})
     plan["focus"]["keys"], plan["focus"]["labels"] = ids, []
-    added = ensure_compliance_includes(onto, plan)
+    added = ensure_compliance_includes(onto, plan, kinds=kinds)
     async with ScopedReader(principal) as r:
         result = await execute_plan(r, onto, plan)
     return shape_certificate_reach(result["records"], budget=budget)

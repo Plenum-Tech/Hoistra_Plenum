@@ -430,8 +430,12 @@ _HISTORY: list[tuple[str, str, str]] = [
 ]
 
 
-async def graph_tables(session: AsyncSession) -> dict[str, Any]:
+async def graph_tables(session: AsyncSession, *, organization_id: Any = None) -> dict[str, Any]:
     """Every graph table: how many rows it holds, how many columns, and its history.
+
+    With ``organization_id`` the rows are that company's only: by the table's own company
+    column, or through its building's company; a table carrying neither cannot be counted
+    for one company and says so rather than giving the platform's figure.
 
     The export panel named a table, a row count and four dated builds. The row count was a
     formula over a seed building and the builds were four hardcoded percentages of it, which
@@ -477,6 +481,20 @@ async def graph_tables(session: AsyncSession) -> dict[str, Any]:
         }
         # One statement per table, one branch per cutoff. Each in its own savepoint: a
         # table that cannot be read loses its own row, not the whole panel.
+        columns = info.get("columns") or set()
+        where, params = "", {}
+        if organization_id is not None:
+            params = {"gt_org": str(organization_id)}
+            if "organization_id" in columns:
+                where = " WHERE organization_id::text = :gt_org"
+            elif "building_id" in columns:
+                where = (" WHERE building_id::text IN (SELECT b.building_id::text"
+                         " FROM plenum_cafm.buildings b WHERE b.organization_id::text = :gt_org)")
+            else:
+                entry["why"] = (f"plenum_cafm.{table} records no company, so it cannot be "
+                                "counted for yours.")
+                out.append(entry)
+                continue
         picks = _HISTORY if dated else _HISTORY[:1]
         selects = ", ".join(
             (f"count(*) AS v{i}" if expr == "now()"
@@ -487,7 +505,7 @@ async def graph_tables(session: AsyncSession) -> dict[str, Any]:
             async with session.begin_nested():
                 row = (
                     await session.execute(
-                        text(f"SELECT {selects} FROM plenum_cafm.{table}")
+                        text(f"SELECT {selects} FROM plenum_cafm.{table}{where}"), params
                     )
                 ).mappings().first()
         except Exception as exc:  # noqa: BLE001

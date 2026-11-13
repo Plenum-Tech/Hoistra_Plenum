@@ -28,12 +28,15 @@ opened here on purpose.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 from sqlalchemy import text
 
 from .principal import Principal, resolve
@@ -76,8 +79,29 @@ _READS = ("GET", "HEAD")
 #: caller's own ingest switch - and stays.
 _DOC_RAG = "/doc-rag/"
 _DOC_RAG_ADD = re.compile(r"^/doc-rag/documents/(upload|upload-batch)$")
-_DOC_RAG_ONE = re.compile(r"^/doc-rag/documents/[^/]+$")
+_DOC_RAG_ONE = re.compile(r"^/doc-rag/documents/(?P<id>[^/]+)$")
 PAGE_NOT_ALLOWED = "That is not part of the pages you have access to."
+NO_INGEST_RIGHT = ("You do not have the right to add documents. An admin can give it to you.")
+
+#: The documents a caller held to pages added, by user id: {document_id: expiry}. The index
+#: records no uploader, so this service remembers what each such caller's upload returned and
+#: lets them read those back while they index. In this process only (the service runs one) and
+#: for a day: lost on a restart, which refuses the read rather than allowing it.
+_ADDED: dict[str, dict[str, float]] = {}
+_ADDED_TTL_S = 24 * 3600.0
+
+
+def _added_by(user_id, document_id: str) -> bool:
+    exp = _ADDED.get(str(user_id), {}).get(document_id)
+    return exp is not None and exp > time.monotonic()
+
+
+def _remember(user_id, document_ids: list[str]) -> None:
+    now = time.monotonic()
+    mine = {d: e for d, e in _ADDED.get(str(user_id), {}).items() if e > now}
+    for d in document_ids:
+        mine[str(d)] = now + _ADDED_TTL_S
+    _ADDED[str(user_id)] = mine
 
 
 def doc_rag_refused(principal: Principal, method: str, path: str) -> tuple[int, str, str] | None:
@@ -88,10 +112,36 @@ def doc_rag_refused(principal: Principal, method: str, path: str) -> tuple[int, 
         return None
     method = method.upper()
     if method == "POST" and _DOC_RAG_ADD.match(path):
-        return None
-    if method in _READS and _DOC_RAG_ONE.match(path):
+        # Adding a document is ingesting: their own switch governs it.
+        return None if principal.can_ingest else (403, NO_INGEST_RIGHT, "no_ingest_right")
+    one = _DOC_RAG_ONE.match(path)
+    if method in _READS and one and _added_by(principal.user_id, one.group("id")):
         return None
     return 403, PAGE_NOT_ALLOWED, "page_not_allowed"
+
+
+async def after(request, response):
+    """Note the documents a caller held to pages just added, so they may watch them index.
+
+    Everyone else's response passes untouched. Only a successful upload is read; its body is
+    handed back unchanged."""
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if (principal is None or getattr(principal, "pages", None) is None
+            or request.method.upper() != "POST" or not 200 <= response.status_code < 300
+            or not _DOC_RAG_ADD.match(route_path(request))):
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        data = {}
+    ids = [data.get("document_id")] if isinstance(data, dict) else []
+    ids += [d.get("document_id") for d in (data.get("documents") or [])
+            if isinstance(d, dict)] if isinstance(data, dict) else []
+    _remember(principal.user_id, [i for i in ids if i])
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    return Response(content=body, status_code=response.status_code, headers=headers,
+                    media_type=getattr(response, "media_type", None))
 
 
 def _deny(code: int, error: str, reason: str) -> JSONResponse:
@@ -207,8 +257,10 @@ async def authorize(request: Request) -> JSONResponse | None:
     held_out = doc_rag_refused(principal, method, path)
     if held_out:
         # The same body every service answers with for a page the caller does not hold.
-        return JSONResponse(status_code=held_out[0], content={"detail": {
-            "ok": False, "reason": held_out[2], "page": None, "error": held_out[1]}})
+        detail = {"ok": False, "reason": held_out[2], "error": held_out[1]}
+        if held_out[2] == "page_not_allowed":
+            detail["page"] = None
+        return JSONResponse(status_code=held_out[0], content={"detail": detail})
 
     m = _RUN.match(path)
     if m:

@@ -211,8 +211,10 @@ def held_decisions(rows: list[dict[str, Any]], pages: frozenset[str] | None) -> 
     """
     if pages is None:
         return rows
+    # A row is an approvals item when it names its queue item; anything else is a work order,
+    # whether or not it carries a code.
     return [d for d in rows
-            if d.get("work_order") or _SOURCE_PAGE.get(str(d.get("source"))) in pages]
+            if d.get("queue_item") is None or _SOURCE_PAGE.get(str(d.get("source"))) in pages]
 
 
 def held_sources(labels: list[str], pages: frozenset[str] | None) -> list[str]:
@@ -363,7 +365,7 @@ async def decisions(
             and (source is None or d["source"] == source)]
 
     page = kept[:limit]
-    await mark_statutory(session, page, building_ids=building_ids)
+    await mark_statutory(session, page, building_ids=building_ids, pages=pages)
     return {
         "ok": True,
         # Three numbers that each mean one thing: how many came back in this response, how
@@ -1348,7 +1350,8 @@ async def statutory_assets(
 
 
 def mark_statutory_rows(rows: list[dict[str, Any]], statutory: dict[str, dict[str, Any]],
-                        today: date | None = None) -> int:
+                        today: date | None = None,
+                        pages: frozenset[str] | None = None) -> int:
     """Mark each decision statutory or not, and say which certificate makes it so. Pure.
 
     Two ways a decision qualifies. A decision raised *about* a certificate is tested against
@@ -1378,20 +1381,24 @@ def mark_statutory_rows(rows: list[dict[str, Any]], statutory: dict[str, dict[st
             if keyed:
                 hit = {**keyed, "matched_on": "a certificate on its asset or vendor"}
         d["statutory"] = bool(hit)
-        d["statutory_certificate"] = hit
+        # The certificate itself is the compliance page's. A caller held to pages without it
+        # is told the decision is statutory, not which certificate makes it so.
+        d["statutory_certificate"] = hit if (pages is None or "compliance" in pages) else None
         if hit:
             marked += 1
     return marked
 
 
 async def mark_statutory(session: AsyncSession, rows: list[dict[str, Any]], *,
-                         building_ids: list[UUID] | None) -> int:
+                         building_ids: list[UUID] | None,
+                         pages: frozenset[str] | None = None) -> int:
     """Mark the decisions in `rows` (see mark_statutory_rows). Until 4 Oct 2026 only the
     overview marked them: the /decisions list the chat tool reads carried no `statutory` field,
     so "which of my decisions are statutory" was answered "not recorded"."""
     if not rows:
         return 0
-    return mark_statutory_rows(rows, await statutory_assets(session, building_ids=building_ids))
+    return mark_statutory_rows(rows, await statutory_assets(session, building_ids=building_ids),
+                               pages=pages)
 
 
 async def overview(
@@ -1416,7 +1423,7 @@ async def overview(
     # NameError and the four cards on the Maintenance page showed no figure until 6 Oct.
     statutory = await statutory_assets(session, building_ids=building_ids)
 
-    ins = await ii.panel(session, building_ids=building_ids)
+    ins = await ii.panel(session, building_ids=building_ids, **held)
     unconv = ins["cards"]["unconverted_recommendations"]
     ppm = await ppm_health_by_contract(session, building_ids=building_ids, year_to_date=True)
     ps = ppm.get("summary", {})

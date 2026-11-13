@@ -316,7 +316,14 @@ def build_session_runtime_context(session_id: str, conversation: str | None = No
     mig_ids = resolve_session_migration_ids(session_id)
     if mig_ids:
         ws_lines.append(f"- **migration_ids (session):** {', '.join(mig_ids)}")
-    conv = conversation if conversation is not None else build_conversation_context(session_id)
+    conv = conversation
+    if conv is None:
+        # The thread store could not be read. Its own read applies a caller's cut; this process's
+        # copy cannot, so a caller whose pages were narrowed gets no history rather than turns
+        # from before it (agents/page_access.py). Everyone else falls back as always.
+        from . import page_access
+
+        conv = "" if page_access.narrowed_at() is not None else build_conversation_context(session_id)
     if not conv and not ws_lines:
         return ""
     parts: list[str] = []

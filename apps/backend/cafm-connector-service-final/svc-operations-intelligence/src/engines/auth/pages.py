@@ -177,7 +177,7 @@ async def for_user(
 # ── are the columns there yet? ────────────────────────────────────────────────────────
 # The sign-in query runs on every request. If it named a column the database does not have,
 # every request would fail and nobody could sign in — so the columns are named only once they
-# are known to exist. Until the migration (migrations/users_access_role.sql) has been applied
+# are known to exist. Until the migration (migrations/manual/users_access_role.sql, run by hand) has been applied
 # everybody is a normal user and a role cannot be assigned.
 
 #: What an administrator is told when they try to give a role before the columns exist.
@@ -192,6 +192,12 @@ _READY = False
 _CHECKED_AT: float | None = None
 #: Whether the last check failed outright, as opposed to finding the columns absent.
 _CHECK_FAILED = False
+#: Whether a check is being asked right now, and whether any check has ever been answered.
+#: A request that arrives while the FIRST check is in flight has no answer to go on: it is
+#: refused (PagesUnreadable) rather than read as a normal user, because before the answer a
+#: role user and a normal user look the same.
+_IN_FLIGHT = False
+_ANSWERED = False
 
 
 def _monotonic() -> float:
@@ -204,25 +210,34 @@ class PagesUnreadable(RuntimeError):
 
 
 def check_failed() -> bool:
-    """Whether the last look for the columns failed outright, rather than finding them absent."""
-    return _CHECK_FAILED
+    """Whether it cannot be told if the columns exist: the last look failed outright, or no
+    look has been answered yet and one is in flight. Either way "absent" would be a guess."""
+    return _CHECK_FAILED or (_IN_FLIGHT and not _ANSWERED)
 
 
 def reset_cache() -> None:
-    global _READY, _CHECKED_AT, _CHECK_FAILED
-    _READY, _CHECKED_AT, _CHECK_FAILED = False, None, False
+    global _READY, _CHECKED_AT, _CHECK_FAILED, _IN_FLIGHT, _ANSWERED
+    _READY, _CHECKED_AT, _CHECK_FAILED, _IN_FLIGHT, _ANSWERED = False, None, False, False, False
 
 
 async def columns_ready(session: Any) -> bool:
     """Whether ``users`` has the access-role columns. Yes is remembered for the life of the
-    process; no is re-asked at most once a minute. A check that fails reads as no."""
-    global _READY, _CHECKED_AT, _CHECK_FAILED
+    process; no is re-asked at most once a minute. A check that fails reads as no.
+
+    While a check is in flight a second caller does not start another: it gets the last
+    answer, or - before any answer - no, with check_failed() true so it is refused rather
+    than read as holding every page. src/app.py asks once at startup, so normally no
+    request ever waits on the first answer."""
+    global _READY, _CHECKED_AT, _CHECK_FAILED, _IN_FLIGHT, _ANSWERED
     if _READY:
         return True
+    if _IN_FLIGHT:
+        return False
     now = _monotonic()
     if _CHECKED_AT is not None and now - _CHECKED_AT < _RECHECK_SECONDS:
         return False
     _CHECKED_AT = now
+    _IN_FLIGHT = True
     try:
         found = (await session.execute(text(
             """SELECT count(*) AS n
@@ -232,6 +247,7 @@ async def columns_ready(session: Any) -> bool:
         ))).scalar()
         _READY = int(found or 0) == 3
         _CHECK_FAILED = False
+        _ANSWERED = True
     except Exception:  # noqa: BLE001
         # Not believed, and not remembered: "it could not be read" is not "they are not
         # there". The next request asks again, and until one can be answered a caller is
@@ -239,4 +255,6 @@ async def columns_ready(session: Any) -> bool:
         _READY = False
         _CHECK_FAILED = True
         _CHECKED_AT = None
+    finally:
+        _IN_FLIGHT = False
     return _READY

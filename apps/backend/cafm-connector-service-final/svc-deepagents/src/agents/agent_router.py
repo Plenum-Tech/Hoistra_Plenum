@@ -238,7 +238,8 @@ async def select_agent(question: str, context_note: str | None = None,
             model=model, latency_ms=(time.perf_counter() - _t0) * 1000,
         )
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
-        return {"agent": eng, "also": [], "reason": f"router failed: {type(exc).__name__}", "source": "keyword"}
+        return _out_of_module(space, eng, "keyword") or {
+            "agent": eng, "also": [], "reason": f"router failed: {type(exc).__name__}", "source": "keyword"}
 
     activity_log.fire_exchange(
         agent="agent_router", stage="router", system=_PROMPT, user=_user, output=chosen,
@@ -259,7 +260,8 @@ async def select_agent(question: str, context_note: str | None = None,
     if agent not in known:
         log.warning("agent_router.unknown_agent", named=agent, known=sorted(known))
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
-        return {"agent": eng, "also": [], "reason": f"unknown agent {agent!r}", "source": "keyword"}
+        return _out_of_module(space, eng, "keyword") or {
+            "agent": eng, "also": [], "reason": f"unknown agent {agent!r}", "source": "keyword"}
 
     # Words that are plainly there beat a reading of them (agent_for_question).
     _sure = agent_for_question(question, agent)

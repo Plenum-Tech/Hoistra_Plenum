@@ -221,6 +221,9 @@ _own((PUBLIC,), "", "GET /health", "GET /metrics")
 NEEDS_ALL: dict[tuple[str, str], tuple[str, ...]] = {
     # Creating a vendor from a certificate writes the vendor master.
     ("POST", "/api/compliance/certificates/{certificate_id}/create-vendor"): (C, V),
+    # An asset's utility bill is its building's supply-meter consumption: the energy
+    # register's figures under the asset's name, so both pages are needed.
+    ("GET", "/api/energy/assets/{asset_id}/utility-bill"): (A, E),
 }
 
 

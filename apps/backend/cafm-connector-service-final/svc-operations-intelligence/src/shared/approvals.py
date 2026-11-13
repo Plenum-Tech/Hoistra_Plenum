@@ -500,6 +500,12 @@ async def decide_queue_item(
     item = await session.get(ApprovalsQueueItem, item_id)
     if not item:
         return {"ok": False, "error": "queue item not found"}
+    # Another company's item does not exist for the caller: the four decide routes arrive
+    # here with an id alone. A superadmin decides any company's item, as before.
+    if (scope is not None and not getattr(scope, "is_superadmin", False)
+            and getattr(scope, "organization_id", None) is not None
+            and str(item.organization_id or "") != str(scope.organization_id)):
+        return {"ok": False, "error": "queue item not found"}
     # The four decide routes all arrive here with an item id and nothing else, so this is the
     # one place that can tell a compliance holder from deciding an energy item by its id.
     if scope is not None:

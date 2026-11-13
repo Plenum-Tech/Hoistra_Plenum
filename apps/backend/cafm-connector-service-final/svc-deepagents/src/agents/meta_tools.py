@@ -503,6 +503,10 @@ class _TaskRunner:
         engine whose page they do not hold, or the table and document-index agents, whose
         tools can read anything - and for an agent nobody registered."""
         key = (agent, page_access.pages_key(page_access.current()))
+        if not page_access.allows_engine(page_access.SUBAGENT_ENGINE.get(agent)):
+            # An engine whose page they do not hold is not run at all, even on the shared and
+            # ingest tools its list also carries.
+            return None
         if key not in self._page_runners:
             spec = self._specs.get(agent)
             kept = ([t for t in page_access.filter_tools(spec[0]) if t is not compact_context]

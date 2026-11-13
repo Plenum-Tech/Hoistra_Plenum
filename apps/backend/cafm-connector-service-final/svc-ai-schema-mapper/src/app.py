@@ -649,7 +649,7 @@ def create_app() -> FastAPI:
                 status=refused.status_code,
             )
             return refused
-        return await call_next(request)
+        return await _run_access.after(request, await call_next(request))
 
     # Add CORS middleware
     app.add_middleware(

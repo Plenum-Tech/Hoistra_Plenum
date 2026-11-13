@@ -22,6 +22,7 @@ from ...db import get_session
 from ...services import ask as ask_svc
 from ...services import inspection_intelligence as ii
 from ...services import maintenance as mx
+from ...services.page_access import refusal as page_refusal
 from ...services.principal import (Principal, assert_building, current_principal,
                                    effective_organization_id, scope_building_ids)
 
@@ -243,7 +244,7 @@ async def inspection_intelligence(
     principal: Principal = Depends(current_principal),
 ):
     ids = await _scope(session, principal, building_id, organization_id)
-    out = await ii.panel(session, building_ids=ids)
+    out = await ii.panel(session, building_ids=ids, **_held(principal))
     log.debug("maintenance.inspection_intelligence",
               reports=out["corpus"]["reports"], unanswerable=len(out["unanswerable"]))
     return out
@@ -383,7 +384,8 @@ async def ask_maintenance(
     principal: Principal = Depends(current_principal),
 ):
     ids = await _scope(session, principal, building_id, organization_id)
-    out = await ask_svc.ask(session, question=body.question, building_ids=ids, page=body.page)
+    out = await ask_svc.ask(session, question=body.question, building_ids=ids, page=body.page,
+                            **_held(principal))
     log.debug("maintenance.ask", intent=out.get("intent"),
               understood=out.get("understood"), confidence=out.get("confidence"))
     return out
@@ -435,5 +437,12 @@ async def inspection_intelligence_card(
     if fn is None:
         raise HTTPException(status_code=404, detail={
             "ok": False, "error": f"No such card. Try one of: {', '.join(sorted(fns))}."})
+    # Energy anomalies are the energy page's, whichever panel they are shown on.
+    pages = getattr(principal, "pages", None)
+    if card == "corroborated-anomalies" and pages is not None and "energy" not in pages:
+        raise page_refusal("energy")
     ids = await _scope(session, principal, building_id, organization_id)
-    return {"ok": True, "card": card, **await fn(session, building_ids=ids, limit=limit)}
+    out = await fn(session, building_ids=ids, limit=limit)
+    if card == "unconverted-recommendations":
+        out = ii.held_unconverted(out, pages)
+    return {"ok": True, "card": card, **out}

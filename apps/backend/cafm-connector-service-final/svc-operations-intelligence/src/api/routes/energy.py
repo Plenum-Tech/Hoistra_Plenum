@@ -391,6 +391,7 @@ async def backfill_buildings_from_sites(
     country_code: str | None = Query(None, description="Country to stamp on every created building, e.g. UK. Omitted = left empty; a country is never guessed from a region."),
     limit: int = Query(5000, ge=1, le=20000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Create one building per site in plenum_cafm.buildings.
 
@@ -399,6 +400,8 @@ async def backfill_buildings_from_sites(
     appear alongside. Defaults to a dry run: the report names every building it would
     create, every conflict, and the fields that would be left empty.
     """
+    # Platform-wide schema work, not one company's records: an administrator's.
+    access.assert_admin(s, action="backfill buildings from sites")
     return await bld_backfill.backfill_buildings_from_sites(
         session, dry_run=dry_run, country_code=country_code, limit=limit
     )
@@ -591,6 +594,7 @@ async def link_buildings_to_locations(
     limit: int = Query(5000, ge=1, le=20000),
     actor: str = Query("hoistra-ui"),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Give every building without a location one, derived from its site.
 
@@ -604,6 +608,7 @@ async def link_buildings_to_locations(
     would attach a legal standard on no evidence, and an unscored building is the safer
     error. Defaults to a dry run.
     """
+    access.assert_admin(s, action="link buildings to locations")
     return await bld_create.link_buildings_to_locations(
         session, dry_run=dry_run, limit=limit, actor=actor
     )
@@ -735,6 +740,7 @@ async def sites_uuid_migration(
                        description="plan (default, reads only) | expand (additive) | contract (swaps the primary key)"),
     confirm: bool = Query(False, description="Required for phase=contract — it rewrites a primary key."),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Repoint plenum_cafm.sites onto a uuid key so the nine tables already declaring
     `site_id uuid` can finally join to it.
@@ -743,6 +749,7 @@ async def sites_uuid_migration(
     expand   additive and reversible — site_id_map, sites.site_uuid, shadow columns; both keys work
     contract the cutover — needs expand and confirm=true; legacy_site_id is kept on every table
     """
+    access.assert_admin(s, action="migrate the sites table")
     if phase == "plan":
         return await sites_uuid.plan_migration(session)
     if phase == "expand":
@@ -762,7 +769,11 @@ async def graph_shape_stats(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/graph/tables")
-async def graph_tables(session: AsyncSession = Depends(get_session)):
+async def graph_tables(
+    organization_id: UUID | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
     """Every graph table with its real row count, column count and history.
 
     The export panel showed a table name, a row count and four dated "builds". The row
@@ -776,7 +787,10 @@ async def graph_tables(session: AsyncSession = Depends(get_session)):
     says so in ``history_basis`` rather than leaving the reader to infer it. A table with
     no ``created_at`` reports ``history_available: false`` and offers the live count alone.
     """
-    return await bld_tree.graph_tables(session)
+    # Counted for the caller's company. A superadmin is counted across the platform, as
+    # before, unless acting as one company.
+    org = organization_id if s.is_superadmin else access.organization_for(s, organization_id)
+    return await bld_tree.graph_tables(session, organization_id=org)
 
 
 async def _building_or_404(
@@ -1359,7 +1373,9 @@ async def act_anomaly(
     anomaly_id: UUID,
     body: AnomalyActionRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "energy_anomalies", anomaly_id, action="act on")
     return await anom_svc.act_on_anomaly(
         session, anomaly_id, action=body.action, reason=body.reason
     )

@@ -63,6 +63,8 @@ _DENIED_TEXT = re.compile(r"\b(forbidden|not authori[sz]ed|unauthori[sz]ed|permi
                           r"no_ingest_right|not_your_run)\b", re.I)
 _SIGNED_OUT = re.compile(r"\b(token (?:expired|missing|invalid)|not authenticated|sign(?:ed)? ?in again|"
                          r"no (?:bearer )?token|unauthenticated)\b", re.I)
+#: A tool or sub-agent refusing a caller held to some pages (agents/page_access.OUTSIDE_PAGES).
+_OUTSIDE_PAGES = re.compile(r"outside the pages you have access to|\bpage_not_allowed\b", re.I)
 _TIMEOUT = re.compile(r"\b(time ?out|timed out|ReadTimeout|ConnectTimeout|deadline exceeded)\b", re.I)
 _UNREACHABLE = re.compile(r"\b(connection (?:refused|reset|error)|ConnectError|name or service not known|"
                           r"circuit (?:is )?open|service unavailable|still loading|not configured)\b", re.I)
@@ -151,6 +153,9 @@ def _classify_text(text: str, name: str, blob: str) -> dict[str, Any]:
     if "GraphRecursionError" in name or "recursion limit" in text.lower():
         return record(FAILED, "too_many_steps", True, "This needed too many steps to answer in one go.",
                       "Narrow it to one building, status or period and ask again.")
+    if _OUTSIDE_PAGES.search(blob):
+        return record(DENIED, "outside_pages", True, "That is outside the pages you have access to.",
+                      "Ask an administrator of your company if you need that page.")
     if _SIGNED_OUT.search(blob):
         return record(*_HTTP[401])
     if _DENIED_TEXT.search(blob):

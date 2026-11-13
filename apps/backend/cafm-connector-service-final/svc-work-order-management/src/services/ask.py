@@ -88,8 +88,8 @@ def _score(q: str, s: Skill) -> float:
 
 # ── the skills ───────────────────────────────────────────────────────────────────────
 
-async def _statutory(session, building_ids, **_):
-    o = await mx.overview(session, building_ids=building_ids)
+async def _statutory(session, building_ids, **held):
+    o = await mx.overview(session, building_ids=building_ids, **held)
     card = o["cards"]["statutory"]
     rows = card.get("decisions") or []
     if not card["value"]:
@@ -111,8 +111,10 @@ async def _statutory(session, building_ids, **_):
         "count": card["value"], "data": rows}
 
 
-async def _unconverted(session, building_ids, **_):
-    r = await ii.unconverted_recommendations(session, building_ids=building_ids, limit=50)
+async def _unconverted(session, building_ids, **held):
+    r = ii.held_unconverted(
+        await ii.unconverted_recommendations(session, building_ids=building_ids, limit=50),
+        held.get("pages"))
     if not r.get("answerable"):
         return {"answer": f"I cannot answer that here: {r['reason']}.", "count": None,
                 "data": [], "answerable": False}
@@ -165,8 +167,8 @@ async def _warranty(session, building_ids, **_):
             "count": r["count"], "data": r["findings"]}
 
 
-async def _corroborated(session, building_ids, **_):
-    r = await ii.corroborated_anomalies(session, building_ids=building_ids, limit=50)
+async def _corroborated(session, building_ids, **held):
+    r = await ii.corroborated_anomalies(session, building_ids=building_ids, limit=50, **held)
     if not r.get("answerable"):
         return {"answer": f"I cannot answer that here: {r['reason']}.", "count": None,
                 "data": [], "answerable": False}
@@ -221,8 +223,8 @@ async def _vendor_reports(session, building_ids, **_):
         "count": r["rankable"], "data": r["vendors"]}
 
 
-async def _decisions(session, building_ids, **_):
-    d = await mx.decisions(session, building_ids=building_ids, limit=200)
+async def _decisions(session, building_ids, **held):
+    d = await mx.decisions(session, building_ids=building_ids, limit=200, **held)
     bs = d.get("by_state", {})
     if not d.get("total"):
         return {"answer": "Nothing is waiting on a decision in your buildings.",
@@ -233,8 +235,8 @@ async def _decisions(session, building_ids, **_):
             "count": d["total"], "data": d["decisions"][:50]}
 
 
-async def _blocked(session, building_ids, **_):
-    d = await mx.decisions(session, building_ids=building_ids, state="Blocked", limit=200)
+async def _blocked(session, building_ids, **held):
+    d = await mx.decisions(session, building_ids=building_ids, state="Blocked", limit=200, **held)
     if not d["count"]:
         return {"answer": "No decision is blocked.", "count": 0, "data": []}
     lead = "; ".join(f"{x.get('work_order')} on {x.get('asset') or x.get('building')}"
@@ -299,9 +301,11 @@ def match(question: str) -> tuple[Skill | None, float, list[tuple[Skill, float]]
 
 async def ask(
     session: AsyncSession, *, question: str, building_ids: list[UUID] | None,
-    page: str | None = None,
+    page: str | None = None, pages: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Answer a question about maintenance, from the caller's buildings only."""
+    """Answer a question about maintenance, from the caller's buildings only — and, for a caller
+    held to some pages, only from what those pages show (services/page_access.py). ``pages`` is
+    handed on only when it narrows, so a caller with every page makes the calls it always did."""
     q = (question or "").strip()
     if not q:
         return {"ok": True, "understood": False, "question": q,
@@ -323,7 +327,8 @@ async def ask(
         }
 
     try:
-        out = await skill.handler(session, building_ids)
+        out = await skill.handler(session, building_ids,
+                                  **({"pages": pages} if pages is not None else {}))
     except Exception as exc:  # noqa: BLE001
         log.warning("ask.handler_failed", skill=skill.id, error=str(exc)[:250])
         return {"ok": False, "understood": True, "question": q, "intent": skill.id,

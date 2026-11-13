@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +17,20 @@ class SessionStore:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def create(self, source: str = "chat") -> str:
+    async def create(self, source: str = "chat", owner: Any = None) -> str:
+        """A new conversation, recorded as ``owner``'s (the signed-in caller) in ``context``.
+
+        Kept in the JSONB context rather than a column of its own: no schema change, and a
+        conversation from before owners were recorded simply has none (api/routes/chat.py
+        shows it to a superadmin only)."""
         session_id = str(uuid.uuid4())
-        ws = WOChatSession(session_id=session_id, messages=[], context={}, source=source)
+        context: Dict[str, Any] = {}
+        if owner is not None:
+            context["owner"] = {
+                "user_id": str(owner.user_id),
+                "organization_id": str(owner.organization_id) if owner.organization_id else None,
+            }
+        ws = WOChatSession(session_id=session_id, messages=[], context=context, source=source)
         self.session.add(ws)
         await self.session.commit()
         log.info("session.created", session_id=session_id, source=source)
@@ -30,6 +41,18 @@ class SessionStore:
             select(WOChatSession.session_id).where(WOChatSession.session_id == session_id)
         )
         return result.scalar_one_or_none() is not None
+
+    async def owner(self, session_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """(exists, owner) for one conversation; owner is None when none was recorded."""
+        result = await self.session.execute(
+            select(WOChatSession.context).where(WOChatSession.session_id == session_id)
+        )
+        row = result.first()
+        if row is None:
+            return False, None
+        ctx = row[0] or {}
+        owner = ctx.get("owner") if isinstance(ctx, dict) else None
+        return True, owner if isinstance(owner, dict) else None
 
     async def load_messages(self, session_id: str) -> List[Dict[str, Any]]:
         result = await self.session.execute(

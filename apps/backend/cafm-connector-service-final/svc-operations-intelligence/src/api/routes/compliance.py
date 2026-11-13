@@ -218,7 +218,11 @@ async def upsert_certificate(
     data = body.model_dump()
     data["organization_id"] = access.organization_for(s, body.organization_id)
     confirmed = data.pop("confirmed_by_pm", False)
-    return await cert_svc.upsert_certificate(session, data, confirmed_by_pm=confirmed)
+    # A certificate naming a company with no vendor row creates one - a record in the Vendors
+    # register. A caller held to pages without Vendors gets the match, never the create.
+    return await cert_svc.upsert_certificate(
+        session, data, confirmed_by_pm=confirmed,
+        create_vendor=page_filter.holds(access.pages_of(s), "vendors"))
 
 
 @router.get("/certificates")
@@ -393,7 +397,9 @@ async def set_remedial_status(
     certificate_id: UUID,
     body: RemedialStatusRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id, action="change")
     return await cert_svc.set_remedial_status(
         session, certificate_id, body.remedial_status
     )
@@ -404,9 +410,11 @@ async def confirm_certificate(
     certificate_id: UUID,
     body: ConfirmCertificateRequest | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """PM confirms a draft certificate — finalises it (clears the draft flag) and links the
     source document to the vendor/site/asset records the PM approved (body.link_targets)."""
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id, action="change")
     return await cert_svc.confirm_certificate(
         session, certificate_id, link_targets=body.link_targets if body else None
     )
@@ -521,9 +529,11 @@ async def create_vendor_for_certificate(
 async def extract_vendor_profile(
     certificate_id: UUID,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """LLM-extract a rich vendor profile (name, trade, address, contact details) from the
     certificate document, to pre-fill the center-chat create-vendor form."""
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
     cert = await session.get(cert_svc.ComplianceCertificate, certificate_id)
     if not cert:
         return {"ok": False, "error": "certificate not found"}

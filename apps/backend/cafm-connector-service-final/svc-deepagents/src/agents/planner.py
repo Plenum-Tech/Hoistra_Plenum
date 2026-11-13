@@ -524,6 +524,10 @@ async def make_plan(question: str, *, context: str, tools: dict[str, str],
         records_rules=RECORDS_RULES if shown else "",
         records=("\nRECORDS (the kinds of record held here: its table, its states, and what it is linked to in the data)\n"
                  + shown + "\n") if shown else "")
+    if RECORD_TOOL not in tools:
+        # Withheld here (a caller held to some pages, or a space without it): the rules above
+        # name it, and a plan that uses it is refused - say so before the plan is made.
+        prompt += (f"\n\n{RECORD_TOOL} is not available for this question: use only the TOOLS listed above.")
     system = "You are the planning step of the Plenum CAFM orchestrator."
     try:
         raw = await llm(system, prompt, "plan")

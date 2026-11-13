@@ -382,6 +382,7 @@ async def run_workflow(
     # modules (agents/spaces.py); None is every module, which is what a caller that does
     # not send one gets.
     spaces.active_space.set(getattr(body, "space", None))
+    await _ask_guard(body.session_id, principal)
     activity_log.set_current_session(body.session_id, body.session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run", message_len=len(body.message), session_id=body.session_id,
@@ -435,6 +436,7 @@ async def run_stateful_workflow(
             status_code=400,
             detail="session_id is required for stateful (HITL-capable) workflow runs.",
         )
+    await _ask_guard(sid, principal)
     # Billed once the request is accepted — a refused one is not charged (re-review, 29 Sep).
     await usage_events.record_usage(
         kind="query", organization_id=usage_events.billing_org(principal.organization_id, _acting),
@@ -512,6 +514,7 @@ async def run_stateful_workflow_with_files(
     # The role space this question is asked in, exactly as /run, /run-stateful and the
     # socket do it. Asking with an attachment is still asking (agents/spaces.py).
     spaces.active_space.set(space)
+    await _ask_guard(session_id, principal)
 
     # Whether this person may add data at all. Read-only users see their buildings and stop
     # there; the message says who can change that rather than just refusing.
@@ -946,7 +949,7 @@ async def _session_guard(session_id: str, principal: Principal, *, unknown_ok: b
     """
     if principal.role == "superadmin":
         return
-    owner = await chat_threads.session_owner(session_id)
+    owner = await _owner_of(session_id)
     if owner is None:
         if unknown_ok:
             return
@@ -956,6 +959,34 @@ async def _session_guard(session_id: str, principal: Principal, *, unknown_ok: b
                             and str(owner["organization_id"]) == str(principal.organization_id))
         if mine or (principal.is_admin and same_company):
             return
+    raise HTTPException(status_code=404, detail={"ok": False, "error": "No such session.",
+                                                 "reason": "not_found"})
+
+
+async def _owner_of(session_id: str) -> dict[str, Any] | None:
+    """The conversation's owner, or None for a session with no record. 503 when the store could
+    not be read: whose it is cannot be told, so it is nobody's to open."""
+    try:
+        return await chat_threads.session_owner(session_id)
+    except chat_threads.SessionStoreUnavailable:
+        raise HTTPException(status_code=503, detail={
+            "ok": False, "error": "Conversations cannot be opened right now. Try again in a moment.",
+            "reason": "store_unavailable"}) from None
+
+
+async def _ask_guard(session_id: str | None, principal: Principal) -> None:
+    """404 unless a question may be asked in this conversation.
+
+    A question asked in a conversation is handed that conversation's history and is written
+    into it, so it is asked only in the asker's own. A session with no record yet is a new
+    conversation - the chat's next one, a report card's run, a scenario - and is the asker's
+    from its first question. A superadmin may ask anywhere, as they may read anywhere.
+    """
+    if not session_id or principal.role == "superadmin":
+        return
+    owner = await _owner_of(session_id)
+    if owner is None or str(owner.get("user_id") or "") == str(principal.user_id):
+        return
     raise HTTPException(status_code=404, detail={"ok": False, "error": "No such session.",
                                                  "reason": "not_found"})
 
@@ -1012,6 +1043,8 @@ async def resume_workflow(
     await _session_guard(session_id, principal, unknown_ok=True)
     caller_authorization.set(request.headers.get("authorization"))
     caller_principal.set(principal)
+    # One company for the run, as every other entry point reads it (_resolve_acting_org).
+    caller_organization_id.set(_resolve_acting_org(None, principal))
     activity_log.set_current_session(session_id, session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     activity_log.set_current_session(session_id, session_id)
@@ -1059,6 +1092,8 @@ async def get_workflow_status(
     completed or doesn't exist.
     """
     await _session_guard(session_id, principal, unknown_ok=True)
+    # The caller, so the thread read is the one their turns run on (page_access.thread_key).
+    caller_principal.set(principal)
     state = await orchestrator.get_thread_state(session_id)
     if state is None:
         return ThreadStatusResponse(
@@ -1141,6 +1176,16 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
     # direct-SQL reads get the same boundary operations-intelligence would have applied.
     caller_authorization.set(authorization)
     caller_principal.set(principal)
+
+    # Only in the caller's own conversation (or a new one): a question asked in somebody
+    # else's would be handed its history and written into it. Refused before accept.
+    try:
+        await _ask_guard(session_id, principal)
+    except HTTPException as exc:
+        log.info("ws_workflow.refused", session_id=session_id, status=exc.status_code, reason="session")
+        await websocket.close(code=1008 if exc.status_code == 404 else 1011,
+                              reason="No such session." if exc.status_code == 404 else "Try again in a moment.")
+        return
 
     # Agreeing to the marker, never to the token: the agreed subprotocol is echoed in the
     # handshake response and kept on the client's socket object.

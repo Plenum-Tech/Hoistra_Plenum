@@ -33,6 +33,7 @@ from .api.routes import (
 )
 from .config import settings
 from .engines.auth import keys as auth_keys
+from .engines.auth import pages as auth_pages
 from .core.exceptions import OpsIntelligenceError
 from .core.logging import configure_logging, get_logger
 from .db import AsyncSessionLocal, apply_sql_seed, init_db
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI):
     # get wrong. A service that cannot read it cannot serve auth, so it does not start.
     async with AsyncSessionLocal() as session:
         await auth_keys.resolve(session)
+        # Whether the access-role columns exist, answered before the first request. A request
+        # that arrives while the first answer is still being read is refused (503) rather than
+        # read as a normal user (engines/auth/pages.columns_ready); asking here means none do.
+        # Never fails a start: a check that cannot be read is simply asked again on demand.
+        await auth_pages.columns_ready(session)
     if settings.auto_seed_portfolio_buildings:
         try:
             await apply_sql_seed("portfolio_buildings.sql")

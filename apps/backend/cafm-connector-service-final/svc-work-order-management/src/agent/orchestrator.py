@@ -34,10 +34,13 @@ class WOOrchestrator:
     in the right order — no hardcoded step sequences.
     """
 
-    def __init__(self, db_session) -> None:
+    def __init__(self, db_session, principal=None) -> None:
         self._client = AsyncOpenAI(api_key=settings.openai_api_key)
         self._model = settings.openai_model
         self._db = db_session
+        # The signed-in caller the conversation is had for: the tools read only what they may
+        # see, and a new conversation is recorded as theirs.
+        self._principal = principal
         self._store = SessionStore(db_session)
         self._normalizer = InputNormalizer()
 
@@ -55,7 +58,7 @@ class WOOrchestrator:
         """
         # Resolve / create session
         if not session_id or not await self._store.exists(session_id):
-            session_id = await self._store.create(source=source)
+            session_id = await self._store.create(source=source, owner=self._principal)
             log.info("orchestrator.new_session", session_id=session_id, source=source)
 
         messages = await self._store.load_messages(session_id)
@@ -101,7 +104,7 @@ class WOOrchestrator:
         Returns (reply_text, work_order_dict | None).
         The work_order dict is populated if create_work_order was called.
         """
-        executor = ToolExecutor(self._db, session_id)
+        executor = ToolExecutor(self._db, session_id, principal=self._principal)
         work_order: Optional[Dict[str, Any]] = None
 
         for iteration in range(_MAX_ITERATIONS):

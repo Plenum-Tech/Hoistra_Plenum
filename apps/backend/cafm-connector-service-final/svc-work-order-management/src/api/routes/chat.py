@@ -17,6 +17,7 @@ from ...db import get_session
 from ...agent.orchestrator import WOOrchestrator
 from ...agent.session_store import SessionStore
 from ...core.logging import get_logger
+from ...services.principal import Principal, current_principal
 
 log = get_logger(__name__)
 router = APIRouter()
@@ -54,6 +55,38 @@ class ChatResponse(BaseModel):
     work_order: Optional[Dict[str, Any]] = None
 
 
+# ── Whose conversation it is ─────────────────────────────────────────────────────
+
+def may_read(principal: Principal, owner: Optional[Dict[str, Any]]) -> bool:
+    """Whether this caller may read or continue a conversation recorded as ``owner``'s.
+
+    Its owner may, and an administrator of the owner's company; a superadmin may read any. A
+    conversation from before owners were recorded belongs to nobody, so only a superadmin sees
+    it: it answered any session id to anybody, and nobody's is not everybody's.
+    """
+    role = (principal.role or "").strip().lower()
+    if role == "superadmin":
+        return True
+    if not owner:
+        return False
+    if str(owner.get("user_id")) == str(principal.user_id):
+        return True
+    return (role == "admin" and principal.organization_id is not None
+            and str(owner.get("organization_id")) == str(principal.organization_id))
+
+
+async def _own_session(session: AsyncSession, principal: Principal,
+                       session_id: Optional[str]) -> Optional[str]:
+    """The session id to continue: the one asked for when the caller may, otherwise None, so a
+    new conversation starts rather than another person's being read into this one."""
+    if not session_id:
+        return None
+    exists, owner = await SessionStore(session).owner(session_id)
+    if exists and may_read(principal, owner):
+        return session_id
+    return None
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post(
@@ -68,11 +101,12 @@ class ChatResponse(BaseModel):
 async def chat(
     req: ChatRequest,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    agent = WOOrchestrator(session)
+    agent = WOOrchestrator(session, principal=principal)
     result = await agent.chat(
         message=req.message,
-        session_id=req.session_id,
+        session_id=await _own_session(session, principal, req.session_id),
         source="chat",
     )
     log.info(
@@ -96,8 +130,9 @@ async def chat(
 async def ingest_email(
     req: EmailIngestRequest,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    agent = WOOrchestrator(session)
+    agent = WOOrchestrator(session, principal=principal)
     result = await agent.start_from_email(req.model_dump())
     log.info("chat.email_ingest", session_id=result["session_id"])
     return result
@@ -116,8 +151,9 @@ async def ingest_email(
 async def trigger_ppm(
     req: PPMTriggerRequest,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    agent = WOOrchestrator(session)
+    agent = WOOrchestrator(session, principal=principal)
     result = await agent.start_from_ppm(req.model_dump())
     log.info("chat.ppm_trigger", session_id=result["session_id"], schedule_id=req.schedule_id)
     return result
@@ -131,13 +167,16 @@ async def trigger_ppm(
 async def get_history(
     session_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     store = SessionStore(session)
-    if not await store.exists(session_id):
+    exists, owner = await store.owner(session_id)
+    # Another person's conversation answers exactly as one that does not exist.
+    if not exists or not may_read(principal, owner):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "session_not_found", "message": f"Session '{session_id}' not found"},
         )
-    agent = WOOrchestrator(session)
+    agent = WOOrchestrator(session, principal=principal)
     messages = await agent.get_history(session_id)
     return {"session_id": session_id, "messages": messages, "count": len(messages)}

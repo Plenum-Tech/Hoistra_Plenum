@@ -7641,6 +7641,13 @@ class DeepAgentOrchestrator:
         ids = [r.get("id") for r in rows or [] if isinstance(r, dict) and r.get("id")]
         if not ids:
             return None
+        # A caller held to some pages is given only the linked records their pages own: work
+        # orders, PPMs and plans are Maintenance's, assets the Assets page's, anomalies Energy's
+        # (agents/page_access.py). None of them held: nothing is read. Everyone else: as before.
+        kinds = page_access.reach_kinds()
+        if kinds is not None and not kinds:
+            return None
+        read_kw: dict[str, Any] = {} if kinds is None else {"kinds": kinds}
         try:
             from .ontology_qa import linked_for_certificates
 
@@ -7651,7 +7658,7 @@ class DeepAgentOrchestrator:
                 # One line in the run trace for the whole read, not one per query (trace.sql_rollup_open).
                 box = trace.sql_rollup_open("linked records")
                 try:
-                    return await linked_for_certificates(ids, budget=25000)
+                    return await linked_for_certificates(ids, budget=25000, **read_kw)
                 finally:
                     trace.sql_rollup_close(box)
 
@@ -7955,6 +7962,15 @@ class DeepAgentOrchestrator:
         answer's zones as the analyst closes them.
         Used when single-door extraction or intent keywords identify A/B/C.
         """
+        # The one door every direct engine dispatch goes through - the router, its fall-backs,
+        # the intent classifier, a re-run. An engine the space or the caller's pages do not
+        # allow is not run: the same one sentence the router says (agents/spaces.py).
+        _refused = spaces.refusal(spaces.current(), engine)
+        if _refused:
+            out = {"session_id": session_id, "answer": _refused, "tool_calls": [], "success": True,
+                   "error": None, "interrupted": False, "interrupt_payload": None}
+            return out if not attach_route else attach_route_to_result(
+                out, session_id, intent=ROUTE_GENERAL, domain="orchestrator")
         set_session_context(session_id)
         # The tools' building and period: the turn's, or set here for an engine called on its own.
         await self._set_turn_scope(session_id, user_message, keep=True)

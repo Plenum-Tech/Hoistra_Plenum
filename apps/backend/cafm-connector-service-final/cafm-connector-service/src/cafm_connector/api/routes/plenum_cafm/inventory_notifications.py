@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
+from cafm_connector.api.security import Principal, current_principal
 from cafm_connector.api.schemas.plenum_cafm import (
     AuditLogCreate, AuditLogResponse,
     InventoryTransactionCreate, InventoryTransactionResponse,
@@ -132,6 +133,18 @@ async def delete_inventory_transaction(txn_id: str, db: AsyncSession = Depends(g
 # NOTIFICATIONS
 # ══════════════════════════════════════════════════════════════════════
 
+def own_only(principal: Principal):
+    """The user a caller held to some pages is limited to: themselves. Notifications are tagged
+    as a person's own (api/page_access.py) and listed everyone's in the company, whatever
+    register each was about. None for everyone else: their reads are unchanged."""
+    return principal.user_id if principal.pages is not None else None
+
+
+def _not_theirs(principal: Principal, row) -> bool:
+    mine = own_only(principal)
+    return mine is not None and str(getattr(row, "user_id", None)) != str(mine)
+
+
 @router.get("/notifications", response_model=PaginatedResponse, tags=["Notifications"])
 async def list_notifications(
     organization_id: str | None = Query(None),
@@ -140,8 +153,11 @@ async def list_notifications(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_plenum_db),
+    caller: Principal = Depends(current_principal),
 ):
     stmt = select(Notification)
+    if own_only(caller) is not None:
+        stmt = stmt.where(Notification.user_id == own_only(caller))
     if organization_id:
         stmt = stmt.where(Notification.organization_id == organization_id)
     if user_id:
@@ -155,9 +171,10 @@ async def list_notifications(
 
 
 @router.get("/notifications/{notif_id}", response_model=NotificationResponse, tags=["Notifications"])
-async def get_notification(notif_id: str, db: AsyncSession = Depends(get_plenum_db)):
+async def get_notification(notif_id: str, db: AsyncSession = Depends(get_plenum_db),
+                           caller: Principal = Depends(current_principal)):
     row = await db.get(Notification, notif_id)
-    if not row:
+    if not row or _not_theirs(caller, row):
         raise HTTPException(404, "Notification not found")
     return NotificationResponse.model_validate(row)
 
@@ -172,9 +189,10 @@ async def create_notification(body: NotificationCreate, db: AsyncSession = Depen
 
 
 @router.put("/notifications/{notif_id}", response_model=NotificationResponse, tags=["Notifications"])
-async def update_notification(notif_id: str, body: NotificationUpdate, db: AsyncSession = Depends(get_plenum_db)):
+async def update_notification(notif_id: str, body: NotificationUpdate, db: AsyncSession = Depends(get_plenum_db),
+                              caller: Principal = Depends(current_principal)):
     obj = await db.get(Notification, notif_id)
-    if not obj:
+    if not obj or _not_theirs(caller, obj):
         raise HTTPException(404, "Notification not found")
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
@@ -184,9 +202,10 @@ async def update_notification(notif_id: str, body: NotificationUpdate, db: Async
 
 
 @router.delete("/notifications/{notif_id}", status_code=200, tags=["Notifications"])
-async def delete_notification(notif_id: str, db: AsyncSession = Depends(get_plenum_db)):
+async def delete_notification(notif_id: str, db: AsyncSession = Depends(get_plenum_db),
+                              caller: Principal = Depends(current_principal)):
     obj = await db.get(Notification, notif_id)
-    if not obj:
+    if not obj or _not_theirs(caller, obj):
         raise HTTPException(404, "Notification not found")
     await db.delete(obj)
     await db.commit()

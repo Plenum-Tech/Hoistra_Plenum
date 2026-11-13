@@ -60,7 +60,7 @@ All backend paths below are under `apps/backend/cafm-connector-service-final/`. 
 ### Task 2: Columns, principal, `/me`, invite and patch
 
 **Files:**
-- Create: `svc-operations-intelligence/migrations/users_access_role.sql`
+- Create: `svc-operations-intelligence/migrations/manual/users_access_role.sql`
 - Modify: `src/engines/auth/pages.py` (add `columns_ready`), `src/engines/auth/tokens.py` (`Principal`, `principal_from_token`), `src/engines/auth/access.py` (`Scope`, `scope_for`, unscoped scope), `src/engines/auth/invitations.py` (`create`, `accept`), `src/api/routes/auth.py` (`me`, `list_roles`), `src/api/routes/admin.py` (`InviteUser`, `PatchUser`, `list_users`, `invite_user`, `patch_user`, `delete_user`)
 - Test: `tests/unit/test_access_role_identity.py`, `tests/unit/test_access_role_admin.py`; scratch-Postgres check of the SQL
 

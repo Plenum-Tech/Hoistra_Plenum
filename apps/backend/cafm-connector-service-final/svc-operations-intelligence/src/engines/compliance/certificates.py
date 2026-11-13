@@ -1288,9 +1288,13 @@ async def upsert_certificate(
     *,
     confirmed_by_pm: bool = False,
     link_targets: list[str] | None = None,
+    create_vendor: bool = True,
 ) -> dict[str, Any]:
     """
     Ingest / update a certificate record.
+
+    ``create_vendor`` False matches the named company to an existing vendor but never adds
+    one: for a caller who does not hold the Vendors page.
 
     Single-door / extract always persists a **draft** when confirmed_by_pm=False
     so Compliance Saved Space and list tools show the record for HITL confirm.
@@ -1497,7 +1501,7 @@ async def upsert_certificate(
             session,
             company_name=company,
             organization_id=vendor_org,
-            create_if_missing=bool(vendor_org and company),
+            create_if_missing=bool(create_vendor and vendor_org and company),
         )
         if resolved:
             cert.vendor_id = resolved

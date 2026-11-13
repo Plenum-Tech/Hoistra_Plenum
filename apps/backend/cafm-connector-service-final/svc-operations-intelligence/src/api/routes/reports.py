@@ -18,6 +18,7 @@ other route applies, applied here by the same mechanism.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -83,8 +84,22 @@ def _shown(s: access.Scope, runs: list[Any]) -> list[Any]:
     """A card's runs, for this caller. Cards are already their owner's alone; a caller whose
     pages were narrowed does not see the answers stored before that, which may hold data from
     a page they no longer have (shared/page_filter.since_narrowing)."""
-    return page_filter.since_narrowing(runs, s.pages, s.access_narrowed_at,
-                                       when=lambda r: r.ran_at)
+    return page_filter.since_narrowing(runs, s.pages, s.access_narrowed_at, when=_started)
+
+
+#: How long the other services may answer under pages they read before a narrowing: they
+#: cache the caller's identity for 60 seconds.
+_IDENTITY_CACHE = timedelta(seconds=60)
+
+
+def _started(run: Any) -> datetime | None:
+    """When a run began, less the identity cache: a run is shown only if it was certainly
+    answered under the narrowed pages. ``ran_at`` is when it finished."""
+    ran_at = getattr(run, "ran_at", None)
+    if ran_at is None:
+        return None
+    took = int(getattr(run, "duration_ms", None) or 0)
+    return ran_at - timedelta(milliseconds=took) - _IDENTITY_CACHE
 
 
 # ── reports ──────────────────────────────────────────────────────────────────

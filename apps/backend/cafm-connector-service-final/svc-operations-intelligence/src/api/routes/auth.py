@@ -212,6 +212,10 @@ async def refresh(
         )
         principal = await token_engine.principal_from_token(session, pair.access_token)
         await session.commit()
+    except page_engine.PagesUnreadable:
+        # Not committed: the rotation rolls back, so the refresh token the client holds still
+        # works and the retry this asks for can succeed.
+        raise _pages_unreadable() from None
     except token_engine.InvalidToken as exc:
         await session.commit()   # a replay revokes sessions; that must not roll back
         raise HTTPException(
@@ -264,6 +268,15 @@ async def logout(
 # ── who am I ─────────────────────────────────────────────────────────────────────────
 
 
+def _pages_unreadable() -> HTTPException:
+    """Whether the caller is held to some pages could not be read: try again, not "every page"."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={"ok": False, "error": "Your access could not be checked just now. Try again.",
+                "reason": "access_unreadable"},
+    )
+
+
 async def _principal(session: AsyncSession, authorization: str | None):
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token:
@@ -276,11 +289,7 @@ async def _principal(session: AsyncSession, authorization: str | None):
     try:
         return await token_engine.principal_from_token(session, token.strip())
     except page_engine.PagesUnreadable:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"ok": False, "error": "Your access could not be checked just now. Try again.",
-                    "reason": "access_unreadable"},
-        ) from None
+        raise _pages_unreadable() from None
     except token_engine.InvalidToken as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

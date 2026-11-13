@@ -20,6 +20,14 @@
 --
 -- The service runs without these columns (everybody is a normal user and a role cannot be
 -- assigned), so this file may be applied before or after the code that reads it.
+--
+-- RUN BY HAND, never by the service. It lives in migrations/manual/ so the startup apply
+-- (src/db.py, which reads migrations/*.sql only) cannot reach it: deploying a build must
+-- never alter plenum_cafm.users on its own, whatever AUTO_MIGRATE_ON_STARTUP says. Each ALTER
+-- needs a brief ACCESS EXCLUSIVE lock on users, and every sign-in reads users, so a lock it
+-- cannot get at once is given up after five seconds rather than queueing sign-in behind it.
+-- If it gives up, run the file again; every statement is idempotent.
+SET lock_timeout = '5s';
 ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS access_role varchar(32);
 ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS allowed_pages text[];
 ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS access_narrowed_at timestamptz;

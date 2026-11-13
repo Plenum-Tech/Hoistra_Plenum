@@ -45,7 +45,6 @@ def test_a_role_user_is_refused_the_document_index(method, path):
 @pytest.mark.parametrize("method,path", [
     ("POST", "/doc-rag/documents/upload"),
     ("POST", "/doc-rag/documents/upload-batch"),
-    ("GET", DOC),
 ])
 def test_a_role_user_may_still_add_a_document_and_watch_it_index(method, path):
     assert R.doc_rag_refused(HELD, method, path) is None

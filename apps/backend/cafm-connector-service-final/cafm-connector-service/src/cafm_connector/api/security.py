@@ -76,6 +76,9 @@ class Principal:
     #: An empty set is a real answer: held to no page at all.
     pages: "frozenset[str] | None" = None
 
+    #: Whether this caller may import data ("Can ingest data", identity's /me ``can_ingest``).
+    can_ingest: bool = False
+
     def allows_page(self, page: str) -> bool:
         return self.pages is None or page in self.pages
 
@@ -154,6 +157,7 @@ def _from_me(payload: dict[str, Any]) -> Principal:
         role=str(user.get("platform_role") or user.get("role") or "user"),
         building_ids=building_ids,
         pages=_pages_from(user),
+        can_ingest=bool(user.get("can_ingest")),
     )
 
 

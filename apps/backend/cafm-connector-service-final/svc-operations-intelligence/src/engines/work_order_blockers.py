@@ -90,10 +90,28 @@ def classify(row: dict[str, Any], today: date | None = None) -> list[dict[str, A
     return sorted(seen.values(), key=lambda b: (not b["hard"], b["kind"]))
 
 
+#: Which page owns each reason a work order is blocked. A vendor's Blocked state shows
+#: wherever the vendor does (2 Nov 2026); the certificate behind it is Compliance's, the
+#: contract and its terms are the Vendors page's.
+KIND_PAGE: dict[str, str] = {
+    "accreditation_lapsed": "compliance", "accreditation_expiring": "compliance",
+    "contract_expired": "vendors", "contract_inactive": "vendors",
+    "contract_renewal_due": "vendors", "contract_terms_unconfirmed": "vendors",
+}
+
+
+def held(blockers: list[dict[str, Any]], pages: frozenset[str] | None) -> list[dict[str, Any]]:
+    """The blockers a caller held to some pages may read. None = every page, unchanged."""
+    if pages is None:
+        return blockers
+    return [b for b in blockers if KIND_PAGE.get(b["kind"]) is None or KIND_PAGE[b["kind"]] in pages]
+
+
 async def read_blockers(session: AsyncSession, *, organization_id: UUID | None,
                         building_ids: tuple[UUID, ...] | None = None, building_id: UUID | None = None,
                         period_from: date | None = None, period_to: date | None = None,
-                        wo_codes: list[str] | None = None, today: date | None = None) -> dict[str, Any]:
+                        wo_codes: list[str] | None = None, today: date | None = None,
+                        pages: frozenset[str] | None = None) -> dict[str, Any]:
     t = today or date.today()
     where = ["lower(coalesce(w.status, '')) <> ALL(:wb_closed)"]
     from datetime import timedelta
@@ -162,7 +180,7 @@ async def read_blockers(session: AsyncSession, *, organization_id: UUID | None,
         for k in ("certs", "contracts", "unconfirmed_sla"):
             v = row.get(k)
             row[k] = json.loads(v) if isinstance(v, str) else (v or [])
-        blockers = classify(row, t)
+        blockers = held(classify(row, t), pages)
         item = {"wo_code": row["wo_code"], "title": row["title"], "status": row["status"], "priority": row["priority"],
                 "sla_due_at": row["sla_due_at"].isoformat() if isinstance(row["sla_due_at"], datetime) else row["sla_due_at"],
                 "asset": row.get("asset_name") or row.get("asset_code"), "building": row.get("building_name"),

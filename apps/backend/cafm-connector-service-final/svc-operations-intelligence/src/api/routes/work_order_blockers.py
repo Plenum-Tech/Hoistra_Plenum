@@ -31,4 +31,5 @@ async def work_order_blockers(
     if building_id is not None:
         access.assert_building(s, building_id, action="read")
     return await svc.read_blockers(session, organization_id=org, building_ids=s.building_ids, building_id=building_id,
-                                   period_from=period_from, period_to=period_to, wo_codes=wo_code)
+                                   period_from=period_from, period_to=period_to, wo_codes=wo_code,
+                                   pages=access.pages_of(s))

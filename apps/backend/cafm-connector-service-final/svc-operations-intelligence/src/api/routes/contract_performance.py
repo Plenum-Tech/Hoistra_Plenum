@@ -229,7 +229,9 @@ async def update_contract(
     parameters_id: UUID,
     body: ContractUpdateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "contract_sla_parameters", parameters_id, action="change")
     return await params_svc.update_contract_parameters(
         session, parameters_id, body.updates, actor=body.actor
     )
@@ -240,7 +242,9 @@ async def confirm_contract(
     parameters_id: UUID,
     body: ContractConfirmRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "contract_sla_parameters", parameters_id, action="change")
     return await params_svc.confirm_contract_parameters(
         session, parameters_id, confirmed_by=body.confirmed_by
     )
@@ -253,7 +257,9 @@ async def reopen_contract(
     parameters_id: UUID,
     body: ContractReopenRequest | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "contract_sla_parameters", parameters_id, action="change")
     return await params_svc.reopen_contract_parameters(
         session, parameters_id, reopened_by=(body.reopened_by if body else None)
     )

@@ -356,6 +356,10 @@ async def apply_sql_migrations(
     A file the ledger records as applied with its current statements is skipped outright: no
     statement runs, so no lock is taken. ``use_ledger=False`` (or MIGRATIONS_LEDGER=0) runs
     every file regardless, which is how every start behaved before 6 Nov 2026.
+
+    Only the folder's own *.sql files: migrations/manual/ holds what a person runs by hand
+    (users_access_role.sql alters plenum_cafm.users, which every sign-in reads), and a deploy
+    must never apply those on its own.
     """
     if not _MIGRATIONS_DIR.exists():
         log.warning("db.migration.dir_missing", path=str(_MIGRATIONS_DIR))

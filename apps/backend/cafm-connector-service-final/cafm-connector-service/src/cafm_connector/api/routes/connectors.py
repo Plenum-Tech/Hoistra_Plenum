@@ -26,6 +26,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from cafm_connector.api.dependencies import get_current_user, get_service, get_settings
+from cafm_connector.api.security import Principal, _detail, current_principal
 from cafm_connector.api.schemas.connectors import (
     APIResponse,
     ConnectorCreateRequest,
@@ -48,7 +49,62 @@ from cafm_connector.core.types import ImportJobStatus
 from cafm_connector.models.db import ImportJobModel
 from cafm_connector.services.connector_service import ConnectorService
 
-router = APIRouter(tags=["Data Connectors & Imports"])
+async def ingest_gate(principal: Principal = Depends(current_principal)) -> None:
+    """Importing is governed by "Can ingest data". A caller an administrator held to some pages
+    needs that right to use these routes at all; everyone else is not looked at here (their
+    company is bound route by route below)."""
+    if principal.pages is not None and not principal.can_ingest:
+        raise HTTPException(status_code=403, detail=_detail(
+            "You do not have the right to import data. An admin can give it to you.",
+            "no_ingest_right"))
+
+
+router = APIRouter(tags=["Data Connectors & Imports"], dependencies=[Depends(ingest_gate)])
+
+
+def bound_org(principal: Principal, requested) -> str | None:
+    """The company a connector or an import is for: the caller's own, never the request's.
+
+    These routes took the company from the form, so any signed-in caller could import into
+    another company. Naming another company is 403 unless the caller is a superadmin, who gets
+    the one named (or none: their listings read across companies, as before)."""
+    own = str(principal.organization_id) if principal.organization_id else None
+    if requested in (None, ""):
+        return None if principal.is_superadmin else own
+    wanted = str(requested).strip()
+    if principal.is_superadmin or wanted == own:
+        return wanted
+    raise HTTPException(status_code=403, detail=_detail(
+        "You can only work within your own company.", "wrong_organization",
+        your_organization_id=own))
+
+
+def _may_use(principal: Principal, model) -> bool:
+    """A connector is its company's. One with no company recorded is a superadmin's only."""
+    if principal.is_superadmin:
+        return True
+    org = (getattr(model, "options", None) or {}).get("organization_id")
+    return bool(org) and principal.organization_id is not None \
+        and str(org) == str(principal.organization_id)
+
+
+async def _own_connector(svc: ConnectorService, principal: Principal, connector_id: str):
+    model = await svc.get_connector(connector_id)
+    if not model or not _may_use(principal, model):
+        # Another company's connector answers exactly as one that does not exist.
+        raise HTTPException(status_code=404, detail=f"Connector {connector_id} not found")
+    return model
+
+
+async def _own_job(svc: ConnectorService, principal: Principal, job_id: str):
+    job = (await svc._session.execute(
+        select(ImportJobModel).where(ImportJobModel.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    model = await svc.get_connector(job.connector_id)
+    if not model or not _may_use(principal, model):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return job
 
 
 # ── POST /connectors/test ─────────────────────────────────────────────
@@ -84,13 +140,17 @@ async def create_connector(
     user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
+    options = dict(body.options or {})
+    org = bound_org(user.principal, options.get("organization_id"))
+    if org:
+        options["organization_id"] = org
     try:
         model = await svc.save_connector(
             name=body.name,
             source_type=body.source_type,
             connection_params=body.connection_params,
             credentials=body.credentials,
-            options=body.options,
+            options=options,
             description=body.description,
             created_by=getattr(user, "sub", None),
         )
@@ -126,7 +186,7 @@ async def list_connectors(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
-    models = await svc.list_connectors(organization_id=organization_id)
+    models = await svc.list_connectors(organization_id=bound_org(_user.principal, organization_id))
     return ConnectorListResponse(
         connectors=[
             ConnectorResponse(
@@ -155,9 +215,7 @@ async def get_connector(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
-    model = await svc.get_connector(connector_id)
-    if not model:
-        raise HTTPException(status_code=404, detail=f"Connector {connector_id} not found")
+    model = await _own_connector(svc, _user.principal, connector_id)
     return ConnectorResponse(
         id=model.id,
         name=model.name,
@@ -180,9 +238,7 @@ async def delete_connector(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
-    model = await svc.get_connector(connector_id)
-    if not model:
-        raise HTTPException(status_code=404, detail=f"Connector {connector_id} not found")
+    await _own_connector(svc, _user.principal, connector_id)
     await svc.delete_connector(connector_id)
 
 
@@ -287,6 +343,8 @@ async def run_file_import(
     from cafm_connector.storage.blob import get_blob_storage, ALLOWED_EXTENSIONS
     from cafm_connector.models.db import UploadedFileModel
 
+    # The company is the caller's, never the form's: checked before anything is uploaded.
+    organization_id = bound_org(user.principal, organization_id)
     filename = file.filename or "upload"
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -385,6 +443,7 @@ async def preview_import(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
+    await _own_connector(svc, _user.principal, body.connector_id)
     try:
         result = await svc.preview_import(
             connector_id=body.connector_id,
@@ -416,6 +475,7 @@ async def save_field_map(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
+    await _own_connector(svc, _user.principal, body.connector_id)
     saved = await svc.save_field_map(
         connector_id=body.connector_id,
         mappings=[m.model_dump() for m in body.mappings],
@@ -436,6 +496,7 @@ async def run_import(
     user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
+    await _own_connector(svc, user.principal, body.connector_id)
     try:
         job = await svc.create_import_job(
             connector_id=body.connector_id,
@@ -466,12 +527,7 @@ async def cancel_job(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
-    result = await svc._session.execute(
-        select(ImportJobModel).where(ImportJobModel.id == job_id)
-    )
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    job = await _own_job(svc, _user.principal, job_id)
     if job.status in (ImportJobStatus.COMPLETED, ImportJobStatus.FAILED, ImportJobStatus.CANCELLED):
         raise HTTPException(
             status_code=409,
@@ -494,6 +550,7 @@ async def get_job_status(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
+    await _own_job(svc, _user.principal, job_id)
     try:
         data = await svc.get_job_status(job_id)
         return JobStatusResponse(**data)
@@ -515,6 +572,7 @@ async def get_job_log(
     _user=Depends(get_current_user),
     svc: ConnectorService = Depends(get_service),
 ):
+    await _own_job(svc, _user.principal, job_id)
     try:
         data = await svc.get_job_log(job_id, limit=limit, offset=offset)
         from cafm_connector.api.schemas.connectors import ErrorLogEntry

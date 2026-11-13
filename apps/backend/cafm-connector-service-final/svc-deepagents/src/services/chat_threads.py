@@ -555,10 +555,18 @@ def _owner_sql(p: Principal, org: str | None) -> tuple[str, dict[str, Any]]:
     return "user_id = CAST(:uid AS uuid) AND organization_id IS NULL", params
 
 
+class SessionStoreUnavailable(RuntimeError):
+    """The thread store could not be read, so whose a conversation is cannot be told."""
+
+
 async def session_owner(session_id: str) -> dict[str, Any] | None:
     """Who a conversation belongs to - {"user_id", "organization_id"} - or None when there is
-    no record of it (or the store is unavailable). For the routes that are handed a session id
-    and nothing else, so they can refuse somebody else's."""
+    no record of it. For the routes that are handed a session id and nothing else, so they can
+    refuse somebody else's.
+
+    A store that could not be read raises SessionStoreUnavailable: "could not look" is never
+    read as "nobody owns it". A deployment with no thread store at all (never set up) has no
+    records to check against, and answers None as it always did."""
     if not _ready or not session_id:
         return None
     try:
@@ -571,7 +579,7 @@ async def session_owner(session_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
     except Exception as exc:  # noqa: BLE001
         log.warning("chat_threads.session_owner_failed", session_id=session_id, error=str(exc)[:300])
-        return None
+        raise SessionStoreUnavailable(str(exc)[:200]) from None
 
 
 async def list_threads(*, limit: int = 60, q: str | None = None, before: str | None = None) -> list[dict[str, Any]]:
