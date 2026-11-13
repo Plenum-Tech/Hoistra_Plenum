@@ -50,7 +50,12 @@ STATUS: dict[str, Any] = {"enabled": False, "every_s": 0, "last_run_at": None, "
                           "sessions_ok": None, "last_new_sessions": 0, "sessions_error": None,
                           "session_runs_ok": None, "last_session_questions": 0, "session_runs_error": None,
                           "scenario_sessions_ok": None, "last_new_scenario_sessions": 0,
-                          "scenario_sessions_error": None}
+                          "scenario_sessions_error": None, "scenario_sessions_waiting": 0,
+                          "scenario_sessions_skipped": 0, "scenario_sessions_other_company": 0,
+                          "scenario_sessions_failed": 0}
+#: The scenario read runs at most this often (13 Nov 2026 review): it scans the chat's turn table.
+SCENARIO_EVERY = timedelta(minutes=5)
+_scenario_read_at: datetime | None = None
 
 
 def session_runs_on() -> bool:
@@ -120,15 +125,23 @@ async def sync_scenario_sessions(now: datetime | None = None) -> int:
         return 0
     from . import eval_store
 
+    global _scenario_read_at
     started = now or datetime.now(timezone.utc)
+    if _scenario_read_at is not None and started - _scenario_read_at < SCENARIO_EVERY:
+        STATUS.update(last_new_scenario_sessions=0)         # not read this round
+        return 0
+    _scenario_read_at = started
     try:
         out = await eval_store.ingest_from_main(since=started - timedelta(hours=SESSIONS_HOURS),
-                                                chat=False, scenarios=True)
+                                                chat=False, scenarios=True, remember=True, curators_only=True)
         new = int(out.get("sessions") or 0)
-        STATUS.update(scenario_sessions_ok=True, last_new_scenario_sessions=new, scenario_sessions_error=None)
-        if new or int(out.get("traces") or 0) or int(out.get("failed") or 0):
+        n = {k: int(out.get(k) or 0) for k in ("waiting", "skipped", "other_company", "failed", "not_curator", "held")}
+        STATUS.update(scenario_sessions_ok=True, last_new_scenario_sessions=new, scenario_sessions_error=None,
+                      scenario_sessions_waiting=n["waiting"], scenario_sessions_skipped=n["skipped"] + n["not_curator"],
+                      scenario_sessions_other_company=n["other_company"], scenario_sessions_failed=n["failed"])
+        if new or int(out.get("traces") or 0) or any(n.values()):
             log.info("trace_lab.autosync.scenario_sessions", new_sessions=new, new_traces=int(out.get("traces") or 0),
-                     failed=int(out.get("failed") or 0), waiting=int(out.get("waiting") or 0))
+                     **n)
         return new
     except Exception as exc:  # noqa: BLE001 - the next round tries again
         STATUS.update(scenario_sessions_ok=False, last_new_scenario_sessions=0, scenario_sessions_error=str(exc)[:300])

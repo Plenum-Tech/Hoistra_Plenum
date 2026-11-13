@@ -31,6 +31,7 @@ import json
 import os
 import re
 import socket
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -346,10 +347,79 @@ async def _scenario_link(conn: Any, scenario_id: str | None, org: str) -> tuple[
     return (scenario_id, int(version)) if version is not None else None
 
 
+#: How long the automatic sync leaves a conversation it could not file (waiting, failed) before reading it again.
+HOLD_S = 15 * 60
+_HELD: dict[str, float] = {}
+
+
+def _clock() -> float:
+    return time.monotonic()
+
+
+async def _read_page(owners: Mapping[str, str]) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    """The turns (of each conversation's own company) and their spans, for one page of conversations."""
+    async with conversations._read() as conn:
+        turns = [dict(r) for r in (await conn.execute(text(
+            f"SELECT tt.* FROM {TURNS} tt WHERE tt.session_id = ANY(CAST(:ids AS text[]))"
+            " ORDER BY tt.session_id, tt.started_at, tt.turn_id"), {"ids": list(owners)})).mappings().all()]
+        turns = [t for t in turns if str(t.get("organization_id")) == owners.get(t["session_id"])]
+        spans: dict[str, list[dict[str, Any]]] = {}
+        if turns:
+            for s in (await conn.execute(text(
+                    f"SELECT * FROM {SPANS} WHERE turn_id = ANY(CAST(:tids AS text[])) ORDER BY turn_id, seq"),
+                    {"tids": [t["turn_id"] for t in turns]})).mappings().all():
+                spans.setdefault(s["turn_id"], []).append(dict(s))
+    return turns, spans
+
+
+async def _curators(pairs: set[tuple[str, str]]) -> set[str]:
+    """The session ids, of (company, session id) pairs, whose first asker may curate Trace Lab in that company: the
+    platform team, a company admin, an active consultant, or an active Trace Lab admin of the company."""
+    if not pairs:
+        return set()
+    ids = sorted({sid for _o, sid in pairs})
+    async with conversations._read() as conn:
+        askers = {r[0]: str(r[1]) if r[1] else None for r in (await conn.execute(text(
+            f"SELECT DISTINCT ON (tt.session_id) tt.session_id, tt.user_id FROM {TURNS} tt"
+            " WHERE tt.session_id = ANY(CAST(:ids AS text[])) ORDER BY tt.session_id, tt.started_at, tt.turn_id"),
+            {"ids": ids})).all()}
+        uids = sorted({u for u in askers.values() if u})
+        roles: dict[str, tuple[str | None, str | None]] = {}
+        if uids:
+            try:                                # the accounts table is the sign-in service's: optional here
+                async with conn.begin_nested():
+                    roles = {str(r[0]): (r[1], str(r[2]) if r[2] else None) for r in (await conn.execute(text(
+                        f"SELECT id, platform_role, organization_id FROM {labelling.USERS}"
+                        " WHERE id = ANY(CAST(:u AS uuid[]))"), {"u": uids})).all()}
+            except Exception as exc:            # noqa: BLE001
+                log.warning("trace_lab.eval.accounts_unavailable", error=type(exc).__name__)
+    if not uids:
+        return set()
+    async with conversations._lab_read() as conn:
+        consultants = {str(r[0]) for r in (await conn.execute(text(
+            "SELECT DISTINCT ON (user_id) user_id, status FROM tracelab.lab_platform_members"
+            " WHERE user_id = ANY(CAST(:u AS uuid[])) ORDER BY user_id, created_at DESC, id DESC"),
+            {"u": uids})).all() if r[1] == "active"}
+        admins = {(str(r[0]), str(r[1])) for r in (await conn.execute(text(
+            "SELECT organization_id, user_id FROM tracelab.lab_members WHERE superseded_by IS NULL"
+            " AND lab_role = 'admin' AND status = 'active' AND user_id = ANY(CAST(:u AS uuid[]))"), {"u": uids})).all()}
+    out = set()
+    for org, sid in pairs:
+        uid = askers.get(sid)
+        if not uid:
+            continue
+        role, own = roles.get(uid, (None, None))
+        if (role == "superadmin" or (role == "admin" and own == org) or uid in consultants
+                or (org, uid) in admins):
+            out.add(sid)
+    return out
+
+
 async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
                            sessions: Mapping[str, str | None] | None = None, org: str | None = None,
                            by: labelling.Member | None = None, chat: bool = False,
-                           scenarios: bool = True) -> dict[str, int]:
+                           scenarios: bool = True, remember: bool = False,
+                           curators_only: bool = False) -> dict[str, int]:
     """File the conversations the chat recorded as sessions, and say what happened:
 
         sessions, traces, observations   rows that were new
@@ -367,7 +437,11 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
     scenario still being asked must not be filed until a person reads it in (a session row means it is finished).
 
     Every conversation is read, INGEST_PAGE at a time, and only those with turns the store does not have. The
-    application database is only read. A run tag that is not there yet is made (baseline_v0 as a baseline)."""
+    application database is only read. A run tag that is not there yet is made (baseline_v0 as a baseline).
+
+    The automatic sync (13 Nov 2026 review) passes `remember`: a conversation left waiting or failed is held for HOLD_S
+    and not read again until then ("held"); and `curators_only`: a scenario session is filed only when its asker may
+    curate Trace Lab, so a session id anyone can type is never filed by itself ("not_curator")."""
     named = dict(sessions or {})
     if named:
         if not ok_part(TAG_RE, run_tag):
@@ -379,7 +453,8 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
                 raise Invalid("bad_scenario_id", f"{scenario!r} is not a scenario id.")
     company = " AND tt.organization_id = CAST(:org AS uuid)" if org else ""
     p: dict[str, Any] = {"org": org} if org else {}
-    out = {"sessions": 0, "traces": 0, "observations": 0, "waiting": 0, "other_company": 0, "skipped": 0, "failed": 0}
+    out = {"sessions": 0, "traces": 0, "observations": 0, "waiting": 0, "other_company": 0, "skipped": 0, "failed": 0,
+           "held": 0, "not_curator": 0}
 
     # Which conversations there are, per company, and how many turns each has.
     async with conversations._read() as conn:
@@ -424,23 +499,34 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
             continue
         if sid in have and have[sid][1] >= int(f["turns"]):
             continue                            # nothing new in it
+        if remember and _HELD.get(sid, 0) > _clock():
+            out["held"] += 1                    # left waiting or failed a short while ago: read again later
+            continue
         todo.append((sid, owner, tag, scenario, attempt))
+
+    if curators_only and todo:
+        allowed = await _curators({(owner, sid) for sid, owner, _t, sc, _a in todo if sc is not None})
+        kept = []
+        for item in todo:
+            if item[3] is not None and item[0] not in allowed:
+                out["not_curator"] += 1
+                continue
+            kept.append(item)
+        todo = kept
 
     here = origin()
     for at in range(0, len(todo), INGEST_PAGE):
         page = todo[at:at + INGEST_PAGE]
         owners = {sid: owner for sid, owner, *_ in page}
-        async with conversations._read() as conn:
-            turns = [dict(r) for r in (await conn.execute(text(
-                f"SELECT tt.* FROM {TURNS} tt WHERE tt.session_id = ANY(CAST(:ids AS text[]))"
-                " ORDER BY tt.session_id, tt.started_at, tt.turn_id"), {"ids": list(owners)})).mappings().all()]
-            turns = [t for t in turns if str(t.get("organization_id")) == owners.get(t["session_id"])]
-            spans: dict[str, list[dict[str, Any]]] = {}
-            if turns:
-                for s in (await conn.execute(text(
-                        f"SELECT * FROM {SPANS} WHERE turn_id = ANY(CAST(:tids AS text[])) ORDER BY turn_id, seq"),
-                        {"tids": [t["turn_id"] for t in turns]})).mappings().all():
-                    spans.setdefault(s["turn_id"], []).append(dict(s))
+        try:
+            turns, spans = await _read_page(owners)
+        except Exception as exc:                # noqa: BLE001 - one slow page must not stop the others
+            out["failed"] += len(page)
+            log.warning("trace_lab.eval.ingest_page_failed", sessions=len(page), error=type(exc).__name__)
+            if remember:
+                for sid in owners:
+                    _HELD[sid] = _clock() + HOLD_S
+            continue
         by_session: dict[str, list[dict[str, Any]]] = {}
         for t in turns:
             by_session.setdefault(t["session_id"], []).append(t)
@@ -454,7 +540,9 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
                     link = await _scenario_link(conn, scenario, owner)
                     if scenario and link is None:
                         out["waiting"] += 1     # filed by a later read, once its scenario is stored: a session
-                        continue                # row cannot be changed, so it is never filed without its link
+                        if remember:            # row cannot be changed, so it is never filed without its link
+                            _HELD[sid] = _clock() + HOLD_S
+                        continue
                     await _ensure_tag(conn, tag, by=by)
                     meta = SessionMeta(
                         id=sid, organization_id=owner, run_tag=tag, scenario_id=link[0] if link else None,
@@ -467,6 +555,8 @@ async def ingest_from_main(*, since: datetime, run_tag: str | None = None,
                 continue
             except Exception as exc:            # noqa: BLE001 - one conversation must not stop the others
                 out["failed"] += 1
+                if remember:
+                    _HELD[sid] = _clock() + HOLD_S
                 log.warning("trace_lab.eval.ingest_failed", session=sid, error=type(exc).__name__)
                 continue
             for k, v in new.items():
@@ -666,7 +756,7 @@ async def trace_tree_of(m: labelling.Member, trace_id: str) -> dict[str, Any]:
 async def trace_notes(m: labelling.Member, trace_id: str) -> dict[str, Any]:
     """What the session page needs to show and write notes on a trace's spans: {"trace_id", "organization_id",
     "record": the chat's own record of the turn (its messages give each span the note keys Trace Lab has always used;
-    None when the chat no longer has it), "labels": everyone's live notes on it, "me"}. Notes are written through the
+    built from the stored trace when only Trace Lab has the turn; None when it is nowhere), "labels": everyone's live notes on it, "me"}. Notes are written through the
     existing /lab/turns/{turn_id}/step-labels calls, as the trace's company."""
     labelling.require_active(m)
     scope, p = runs._scope(m, "t")
@@ -678,5 +768,8 @@ async def trace_notes(m: labelling.Member, trace_id: str) -> dict[str, Any]:
         raise NotFound("trace_not_found", "That trace is not in Trace Lab.")
     mm = labelling.for_org(m, org)
     got = await conversations.get_turn(labelling.company_view(mm.principal, mm.org), mm.org, trace_id)
+    if got is None:                           # copied from another machine: the record is built from the stored trace
+        from . import stored_turn
+        got = await stored_turn.get(org, trace_id)
     return {"trace_id": trace_id, "organization_id": org, "record": got["trace"] if got else None,
             "labels": await labelling.labels_for_turn(mm, trace_id), "me": m.user_id}

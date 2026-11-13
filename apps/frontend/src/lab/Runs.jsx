@@ -56,7 +56,21 @@ export function syncText(out) {
     + (out && out.more ? '. There are more: press Sync now again.' : '.');
 }
 
-export function RunsList({ runs, onOpen, loading, error, filtered, curator }) {
+// A run the sync made from a run tag's sessions ("Sessions · <tag>", runs.sync_sessions) opens that tag on the Sessions
+// page (14 Nov 2026, Hussain); every other run opens as a run.
+const SESSIONS_PREFIX = 'Sessions · ';
+export function sessionsTagOf(r) {
+  if (!r || r.kind !== 'synthetic' || r.source !== 'sync') return null;
+  const t = String(r.title || '');
+  return t.startsWith(SESSIONS_PREFIX) && t.length > SESSIONS_PREFIX.length ? t.slice(SESSIONS_PREFIX.length) : null;
+}
+export function openRow(r, onRun, onOpenTag) {
+  const tag = sessionsTagOf(r);
+  if (tag && onOpenTag) onOpenTag(tag);
+  else if (onRun) onRun(r && r.code);
+}
+
+export function RunsList({ runs, onOpen, onOpenTag, loading, error, filtered, curator }) {
   const rows = (runs || []).map(runView);
   const open = onOpen || (() => {});
   return (
@@ -72,9 +86,9 @@ export function RunsList({ runs, onOpen, loading, error, filtered, curator }) {
         </div>
       ) : null}
       <ul className="lab-run-list">
-        {rows.map((r) => (
+        {rows.map((r, i) => (
           <li key={r.code}>
-            <button type="button" className="lab-run-card" onClick={() => open(r.code)}>
+            <button type="button" className="lab-run-card" onClick={() => openRow((runs || [])[i], open, onOpenTag)}>
               <span className="lab-run-top">
                 <strong className="lab-run-code">{r.code}</strong>
                 {r.title ? <span className="lab-run-title">{r.title}</span> : null}
@@ -250,7 +264,7 @@ export function NewRunPanel({ onCreated, onClose }) {
   );
 }
 
-function RunsHome({ me, onRun }) {
+function RunsHome({ me, onRun, onOpenTag }) {
   const curator = isCurator(me);
   const [f, setF] = React.useState({ q: '', kind: '' });
   const [applied, setApplied] = React.useState({ q: '', kind: '' });
@@ -258,9 +272,11 @@ function RunsHome({ me, onRun }) {
   const [sync, setSync] = React.useState({ busy: false, msg: '', error: '' });
   const [panel, setPanel] = React.useState(null);
   const ask = React.useRef(0);
+  const appliedRef = React.useRef(applied);       // the filter in view, for a reload that finishes later
 
   const load = React.useCallback(async (g, offset) => {
     const mine = (ask.current += 1);
+    appliedRef.current = g;
     setApplied(g);
     setList((p) => Object.assign({}, p, { loading: true, error: '' }));
     try {
@@ -280,7 +296,7 @@ function RunsHome({ me, onRun }) {
     try {
       const out = await labApi.syncRuns();
       setSync({ busy: false, msg: syncText(out), error: '' });
-      load(applied, 0);
+      load(appliedRef.current, 0);
     } catch (e) {
       setSync({ busy: false, msg: '', error: errText(e) });
     }
@@ -322,7 +338,7 @@ function RunsHome({ me, onRun }) {
         </div>
         {list.total ? <span className="lab-small lab-push" aria-live="polite">{list.loading ? 'Reading…' : 'Showing ' + list.runs.length + ' of ' + list.total}</span> : null}
       </form>
-      <RunsList runs={list.runs} loading={list.loading} error={list.error} filtered={filtered} curator={curator} onOpen={onRun} />
+      <RunsList runs={list.runs} loading={list.loading} error={list.error} filtered={filtered} curator={curator} onOpen={onRun} onOpenTag={onOpenTag} />
       {list.runs.length < list.total ? (
         <div className="lab-row">
           <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" disabled={list.loading} onClick={() => load(applied, list.runs.length)}>
@@ -370,9 +386,9 @@ function RunDetail({ me, code, onRun, question, onQuestion, onOpenLoop, focus })
 
 // Runs: the list of runs, or one run's questions beside the chosen question. `run` and `question` are codes (R3, R3-12)
 // the caller keeps; `onRun(code | null)` and `onQuestion(code | null)` change them.
-export default function RunsPage({ me, run, onRun, question, onQuestion, onOpenLoop, focus }) {
+export default function RunsPage({ me, run, onRun, question, onQuestion, onOpenLoop, focus, onOpenTag }) {
   const go = onRun || (() => {});
-  if (!run) return <RunsHome me={me} onRun={(code) => { if (onQuestion) onQuestion(null); go(code); }} />;
+  if (!run) return <RunsHome me={me} onRun={(code) => { if (onQuestion) onQuestion(null); go(code); }} onOpenTag={onOpenTag} />;
   return <RunDetail me={me} code={run} onRun={go} question={question || null} onQuestion={onQuestion} onOpenLoop={onOpenLoop}
     focus={focus || null} />;
 }

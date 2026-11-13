@@ -16,7 +16,7 @@ import { labApi } from './labApi.js';
 import { errText } from './logic/labelling.js';
 import { TraceView } from './TraceTab.jsx';
 import { FAILURE_TEXT, FORMAT_TEXT, LEVELS, LEVEL_TEXT, TRACE_STATUS_TEXT, TYPE_TEXT, canScoreDomain, modeRows, needsRead, planLines,
-  scoreLines, sessionTitle, turnTabs, verdictText, failureReasons } from './logic/sessions.js';
+  scoreLines, sessionTitle, turnTabs, verdictText, failureReasons, hasExpectedOutcome } from './logic/sessions.js';
 import { fmtWhen } from './logic/format.js';
 import { NextStep } from './NextStep.jsx';
 import { useTraceNotes } from './TraceNotes.jsx';
@@ -287,7 +287,7 @@ export function ExpectedFlag({ data, busy, error, onSet }) {
 // `labels` GET /eval/traces/{id}/labels; `onLabel(mode, value)` sets the reader's label; `onNoted(step)` offers the next
 // step after a note is saved.
 function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel, onNoted, onScore, saving, scoreError, flag,
-  flagBusy, flagError, onFlag }) {
+  flagBusy, flagError, onFlag, canFlag }) {
   const t = tree || null;
   const n = notes || null;
   const nodes = t && t.tree && Array.isArray(t.tree.nodes) ? t.tree.nodes : [];
@@ -313,8 +313,8 @@ function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel,
         </div>
       ) : null}
       <WhyFailed trace={trace} nodes={nodes} />
-      <ExpectedFlag data={flag && !flag.loading && !flag.error ? flag : null} busy={flagBusy}
-        error={(flag && flag.error) || flagError || ''} onSet={onFlag} />
+      {canFlag ? <ExpectedFlag data={flag && !flag.loading && !flag.error ? flag : null} busy={flagBusy}
+        error={(flag && flag.error) || flagError || ''} onSet={onFlag} /> : null}
       {/* Hidden for now (Hussain, 13 Nov 2026): the failure modes with their Present / Absent buttons. FailureModes is
           kept as it is; put these two lines back to show it again.
       <FailureModes data={labels && !labels.loading && !labels.error ? labels : null} busy={labelBusy}
@@ -378,7 +378,8 @@ export function SessionBody({ data, active, trees, notes, labels, flags, flagSta
               onScore={onScore} saving={saving} scoreError={scoreError} flag={(flags || {})[current.id] || null}
               flagBusy={flagState && flagState.traceId === current.id ? flagState.busy : false}
               flagError={flagState && flagState.traceId === current.id ? flagState.error : ''}
-              onFlag={(flagged, comment) => onFlag && onFlag(current.id, flagged, comment)} />
+              onFlag={(flagged, comment) => onFlag && onFlag(current.id, flagged, comment)}
+              canFlag={hasExpectedOutcome(d.scenario, current.turn_index) || !!(current.expected_flag && current.expected_flag.flagged)} />
               : <p className="lab-small">{'Choose a turn.'}</p>}
           </div>
         </>

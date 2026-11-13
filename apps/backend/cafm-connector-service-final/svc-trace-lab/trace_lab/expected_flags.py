@@ -30,11 +30,17 @@ _NEWEST = """
 """
 
 
-def flagged_sql(trace_alias: str) -> str:
-    """SQL that is true when the trace `<alias>.id` is flagged: some person's newest flag on it says so."""
+def flagged_id_sql(trace_id: str) -> str:
+    """SQL that is true when the trace whose id is the SQL expression `trace_id` is flagged: some person's newest flag
+    on it says so."""
     return (f"EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (coalesce(f.author_id::text, f.author_email)) f.flagged"
-            f" FROM tracelab.expected_flags f WHERE f.trace_id = {trace_alias}.id"
+            f" FROM tracelab.expected_flags f WHERE f.trace_id = {trace_id}"
             f" ORDER BY coalesce(f.author_id::text, f.author_email), f.created_at DESC, f.id DESC) nf WHERE nf.flagged)")
+
+
+def flagged_sql(trace_alias: str) -> str:
+    """SQL that is true when the trace `<alias>.id` is flagged."""
+    return flagged_id_sql(f"{trace_alias}.id")
 
 
 async def flagged_traces(conn: Any, trace_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
@@ -61,6 +67,21 @@ async def _trace(conn: Any, m: labelling.Member, trace_id: str) -> dict[str, Any
     return dict(row)
 
 
+async def _has_expected(conn: Any, trace_id: str) -> bool:
+    """Whether the scenario version the trace's session was asked with has an expected outcome for its turn."""
+    row = (await conn.execute(text(
+        "SELECT sc.turns::text AS turns, t.turn_index FROM tracelab.traces t JOIN tracelab.sessions s ON s.id = t.session_id"
+        " JOIN tracelab.scenarios sc ON sc.scenario_id = s.scenario_id AND sc.version = s.scenario_version"
+        " WHERE t.id = :tid"), {"tid": trace_id})).mappings().first()
+    if row is None:
+        return False
+    import json
+    turns = json.loads(row["turns"]) if isinstance(row["turns"], str) else (row["turns"] or [])
+    i = int(row["turn_index"] or 0)
+    turn = turns[i - 1] if isinstance(turns, list) and 0 < i <= len(turns) else None
+    return isinstance(turn, dict) and turn.get("expected") is not None
+
+
 async def flags_of(m: labelling.Member, trace_id: str) -> dict[str, Any]:
     """{"trace_id", "flagged": whether anyone flags it now, "mine": whether the reader does, "flags": the people
     flagging it, the reader first, then newest first}."""
@@ -85,6 +106,8 @@ async def set_flag(m: labelling.Member, trace_id: str, *, flagged: bool, comment
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         trace = await _trace(conn, m, trace_id)
+        if flagged and not await _has_expected(conn, trace_id):
+            raise Invalid("no_expected_outcome", "This turn has no expected outcome to flag.")
         row = (await conn.execute(text(
             "INSERT INTO tracelab.expected_flags (trace_id, organization_id, flagged, comment, author_id, author_email,"
             " author_role) VALUES (:tid, CAST(:org AS uuid), :flagged, :comment, CAST(:by AS uuid), :email, :role)"

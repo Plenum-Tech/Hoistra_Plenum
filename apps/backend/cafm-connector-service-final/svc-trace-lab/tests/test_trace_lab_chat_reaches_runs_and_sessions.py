@@ -40,6 +40,7 @@ def synced(monkeypatch):
     monkeypatch.setattr(eval_store, "ingest_from_main", ingest_from_main)
     monkeypatch.delenv("TRACE_LAB_AUTO_SYNC_CHAT_SESSIONS", raising=False)
     monkeypatch.delenv("TRACE_LAB_AUTO_SYNC_SCENARIO_SESSIONS", raising=False)
+    monkeypatch.setattr(autosync, "_scenario_read_at", None)          # the five-minute spacing starts afresh
     autosync.STATUS.update(last_ok=None, last_error=None, last_new_questions=0, sessions_ok=None,
                            last_new_sessions=0, sessions_error=None, scenario_sessions_ok=None,
                            last_new_scenario_sessions=0, scenario_sessions_error=None)

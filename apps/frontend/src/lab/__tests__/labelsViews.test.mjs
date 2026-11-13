@@ -105,45 +105,57 @@ test('labels: no run asks for one; no failure modes says where they come from, w
   assert.ok(html(LV.LabelsMatrix, { run: 'R3', me: TESTER, loading: true }).includes('Reading…'));
 });
 
-// ── Labels for sessions (13 Nov 2026): a run tag's sessions, a row per turn, saved as the session's labels ──────────
-const SESSION_GRID = {
-  run: { code: 'hussain_5q_v0', title: 'Sessions', kind: 'sessions' },
-  questions: [{ id: 'turn-a', code: 'MT-S07-001 · turn 1', question: 'How many open work orders does each vendor have?',
-    turn_ids: ['turn-a'], session_id: 'scn__hussain_5q_v0__MT-S07-001__2' }],
-  modes: MODES,
-  cells: { 'turn-a': { m1: [{ value: 'positive', author_id: 'me-1', author_email: 'me@x.test', mine: true, source: 'manual', at: '2026-11-13T10:00:00Z' }] } },
-  last_updated: '2026-11-13T10:00:00Z', me: 'me-1' };
+// ── Labels for sessions (13 Nov 2026 review): the run made from a run tag's sessions ("Sessions · <tag>"), labelled in
+// the same store as every run, so Progress, the Loop and the coding agent see the labels ─────────────────────────────
+const SESSION_RUNS = [{ code: 'R7', title: 'Sessions · hussain_5q_v0', n_questions: 5, kind: 'synthetic', source: 'sync' }];
+const SESSION_GRID = Object.assign({}, MATRIX, { run: { code: 'R7', title: 'Sessions · hussain_5q_v0', kind: 'synthetic', source: 'sync' } });
 
-test('labels for sessions: Sessions or Runs, the run tag, then a row per turn with my value pressed', () => {
-  const picker = html(LV.LabelsSource, { source: 'sessions', tags: [{ tag: 'hussain_5q_v0', sessions: 5 }], tag: 'hussain_5q_v0',
-    onSource() {}, onTag() {} });
+test('labels for sessions: Sessions or Runs, then the runs made from sessions to pick from', () => {
+  const picker = html(LV.LabelsSource, { source: 'sessions', runs: SESSION_RUNS, run: 'R7', onSource() {}, onRun() {} });
   assert.match(picker, /aria-pressed="true"[^>]*>Sessions</);
   assert.match(picker, /aria-pressed="false"[^>]*>Runs</);
-  assert.ok(picker.includes('hussain_5q_v0 (5)') && picker.includes('Run tag'));
-  assert.ok(!html(LV.LabelsSource, { source: 'runs', tags: [], tag: null, onSource() {}, onTag() {} }).includes('Run tag'),
+  assert.ok(picker.includes('R7 · Sessions · hussain_5q_v0 (5)') && picker.includes('Run tag'));
+  assert.ok(!html(LV.LabelsSource, { source: 'runs', runs: [], run: null, onSource() {}, onRun() {} }).includes('Run tag'),
     'runs are picked in the top bar, as before');
-  const out = html(LV.LabelsMatrix, { run: 'hussain_5q_v0', data: SESSION_GRID, me: { user_id: 'me-1' }, onCell() {},
-    onOpenQuestion() {}, picker: React.createElement('p', null, 'THE PICKER') });
-  assert.ok(out.includes('THE PICKER'));
-  assert.ok(out.includes('Failure modes for hussain_5q_v0 · Sessions'));
-  assert.match(out, /aria-label="Open question MT-S07-001 · turn 1"/);
-  assert.ok(out.includes('How many open work orders does each vendor have?'));
-  assert.match(out, /aria-pressed="true"[^>]*>positive</);
-  assert.ok(html(LV.LabelsMatrix, { run: null, me: TESTER, picker: React.createElement('p', null, 'THE PICKER') }).includes('THE PICKER'),
-    'the picker shows even before anything is picked');
+  const out = html(LV.LabelsMatrix, { run: 'R7', data: SESSION_GRID, me: TESTER, onCell() {}, onOpenQuestion() {},
+    picker: React.createElement('p', null, 'THE PICKER') });
+  assert.ok(out.includes('THE PICKER') && out.includes('Failure modes for R7 · Sessions · hussain_5q_v0'));
+  assert.match(out, /aria-label="Open question R3-1"/);
 });
 
-test('labels for sessions: no run tag yet says so', () => {
-  assert.ok(html(LV.LabelsSource, { source: 'sessions', tags: [], tag: null, onSource() {}, onTag() {} }).includes('No sessions yet'));
+test('labels for sessions: none yet says so; a list that failed to load says why with Try again; reading says reading', () => {
+  assert.ok(html(LV.LabelsSource, { source: 'sessions', runs: [], run: null, onSource() {}, onRun() {} }).includes('No sessions yet'));
+  const failed = html(LV.LabelsSource, { source: 'sessions', runs: null, error: 'Network down', run: null, onSource() {}, onRun() {}, onRetry() {} });
+  assert.ok(failed.includes('Network down') && failed.includes('>Try again<') && !failed.includes('No sessions yet'));
+  const reading = html(LV.LabelsSource, { source: 'sessions', runs: null, run: null, onSource() {}, onRun() {} });
+  assert.ok(reading.includes('Reading…'));
+  const waitingPage = html(LV.LabelsMatrix, { run: null, me: TESTER, empty: '' });
+  assert.ok(!waitingPage.includes('Pick a run'), 'no stale "Pick a run" while the list is read or failed');
 });
 
-test('labels for sessions: a click is saved on the turn (a session label); a run question\'s on the question', async () => {
+test('labels: a click is always saved on the question, the one label store', async () => {
   const calls = [];
   const api = { evalSetTraceLabel: async (...a) => { calls.push(['turn', ...a]); return { label: { at: 'T1' } }; },
     setCell: async (...a) => { calls.push(['question', ...a]); return { cell: { at: 'T2' } }; } };
-  assert.equal(await LV.saveCell(api, 'sessions', { id: 'turn-a', code: 'MT-S07-001 · turn 1' }, 'm1', 'positive'), 'T1');
-  assert.equal(await LV.saveCell(api, 'runs', { id: 'q1', code: 'R3-1' }, 'm1', null), 'T2');
-  assert.deepEqual(calls, [['turn', 'turn-a', 'm1', 'positive'], ['question', 'R3-1', 'm1', null]]);
+  assert.equal(await LV.saveCell(api, { id: 'q1', code: 'R7-1' }, 'm1', 'positive'), 'T2');
+  assert.deepEqual(calls, [['question', 'R7-1', 'm1', 'positive']]);
+});
+
+test('labels: a run picked in the top bar or named in the address is the one shown', () => {
+  assert.equal(LV.startSource('sessions', 'R3'), 'runs');
+  assert.equal(LV.startSource('sessions', null), 'sessions');
+  assert.equal(LV.startSource('runs', null), 'runs');
+});
+
+test('labels: a save that fails after the grid changed leaves no error on the new grid', () => {
+  assert.equal(LV.saveErrorShown('R7', 'R7'), true);
+  assert.equal(LV.saveErrorShown('R3', 'R7'), false);
+});
+
+test('labels: a capped grid says how many questions there are', () => {
+  const big = Object.assign({}, MATRIX, { total: 2400, more: true });
+  assert.ok(matrix(TESTER, big).includes('Showing the first 2 of 2,400 questions'));
+  assert.ok(!matrix(TESTER).includes('Showing the first'));
 });
 
 const PROG = {

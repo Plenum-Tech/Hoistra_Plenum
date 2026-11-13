@@ -33,6 +33,15 @@ export function failureReasons(trace, nodes) {
   return out;
 }
 
+// Whether the scenario a session was asked with has an expected outcome for this turn (13 Nov 2026 review): only such a
+// turn can have its expected outcome flagged as wrong.
+export function hasExpectedOutcome(scenario, turnIndex) {
+  const turns = scenario && Array.isArray(scenario.turns) ? scenario.turns : [];
+  const i = Number(turnIndex) || 0;
+  const turn = i > 0 && i <= turns.length ? turns[i - 1] : null;
+  return !!(turn && turn.expected != null);
+}
+
 const plural = (n, one, many) => (Number(n) || 0) + ' ' + (Number(n) === 1 ? one : many);
 
 export function verdictText(v) {

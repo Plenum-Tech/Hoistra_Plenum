@@ -345,3 +345,13 @@ test('the time is stamped when the page receives the batch, not read from the re
   assert.ok(/Object\.assign\(\{\}, made, \{ made_at: Date\.now\(\) \}\)/.test(src),
     'the stamp must be the page\'s own, and must not be overwritten by the reply');
 });
+
+// 13 Nov 2026 review: Labels shows the run picked in the top bar (or named by ?run=), and labels sessions through the run
+// made from them, so there is no second label store to open a session from.
+test('labels is handed the run picked in the top bar and nothing reads the old sessions grid', () => {
+  const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.match(app, /<LabelsView [^>]*picked=\{run\}/);
+  assert.ok(!app.includes('onOpenSession'), 'a session row no longer exists on Labels');
+  const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
+  assert.ok(!api.includes("'/eval/labels'"), 'the per-turn grid route is gone');
+});

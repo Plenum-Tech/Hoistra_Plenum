@@ -192,3 +192,35 @@ test("runs: a run made from a run tag's sessions says sessions and synced, never
   assert.ok(out.includes('Sessions · hussain_5q_v0') && out.includes('>sessions<') && out.includes('>synced<'));
   assert.equal((out.match(/>synthetic</g) || []).length, 1, 'only the typed batch is synthetic');
 });
+
+// 13 Nov 2026 review: Sync now reloads the list with the filter in view when it finishes, not the one in view when it
+// was pressed. (No DOM in these tests: the page keeps the newest filter in a ref, and every reload reads it.)
+test('runs: Sync now reloads with the filter in view when it finishes', async () => {
+  const { readFileSync: read } = await import('node:fs');
+  const src = read(new URL('../Runs.jsx', import.meta.url), 'utf-8');
+  const body = src.slice(src.indexOf('const runSync = async'), src.indexOf('const toggle ='));
+  assert.ok(body.includes('load(appliedRef.current, 0)'), body);
+  assert.ok(src.includes('appliedRef.current = g;'));
+});
+
+// 14 Nov 2026 (Hussain): a run made from a run tag's sessions opens that tag on the Sessions page, not as a run.
+test('runs: the sessions run of a tag is known by its title and the sync that made it', () => {
+  assert.equal(R.sessionsTagOf({ title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync' }), 'frontend_nov13_202718');
+  assert.equal(R.sessionsTagOf({ title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'excel' }), null, 'a typed batch named so is a run');
+  assert.equal(R.sessionsTagOf({ title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync' }), null);
+  assert.equal(R.sessionsTagOf(null), null);
+});
+
+test('runs: clicking a sessions run opens its tag; any other run opens as a run', () => {
+  const opened = [];
+  const out = html(R.RunsList, { runs: [
+    { code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync', n_questions: 40 },
+    { code: 'R48', title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync', n_questions: 4 }],
+  onOpen: (c) => opened.push(['run', c]), onOpenTag: (t) => opened.push(['tag', t]) });
+  assert.ok(out.includes('Sessions · frontend_nov13_202718'));
+  assert.equal(typeof R.openRow, 'function');
+  R.openRow({ code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync' }, (c) => opened.push(['run', c]), (t) => opened.push(['tag', t]));
+  R.openRow({ code: 'R48', title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync' }, (c) => opened.push(['run', c]), (t) => opened.push(['tag', t]));
+  R.openRow({ code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync' }, (c) => opened.push(['run', c]), undefined);
+  assert.deepEqual(opened, [['tag', 'frontend_nov13_202718'], ['run', 'R48'], ['run', 'R47']], 'with nowhere to open a tag it opens as a run');
+});

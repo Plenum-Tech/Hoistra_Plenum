@@ -32,63 +32,6 @@ _NEWEST = """
 """
 
 
-GRID_MAX = 2000      # rows (turns) in one run tag's labels grid
-
-# A run tag's sessions the member may see, each scenario's latest attempt only (as the Sessions list shows them), and
-# every turn of them in order: the rows of the Labels page for sessions.
-_GRID_ROWS = """
-    SELECT t.id, t.turn_index, t.input, t.session_id, x.scenario_id
-      FROM (SELECT s.id, s.scenario_id, row_number() OVER (PARTITION BY s.run_tag, s.scenario_id
-                   ORDER BY s.attempt DESC, s.created_at DESC, s.id DESC) AS rn
-              FROM tracelab.sessions s WHERE s.run_tag = :tag AND {scope}) x
-      JOIN tracelab.traces t ON t.session_id = x.id
-     WHERE x.rn = 1 OR x.scenario_id IS NULL
-     ORDER BY coalesce(x.scenario_id, x.id), x.id, t.turn_index
-     LIMIT :lim
-"""
-# Each person's newest value per failure mode on each of those traces, clears included (they say when it was touched).
-_GRID_CELLS = """
-    SELECT DISTINCT ON (c.trace_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
-           c.trace_id, c.mode_lineage_id::text AS mode, c.value, c.author_id::text AS author_id, c.author_email,
-           c.author_role, c.source, c.created_at
-      FROM tracelab.trace_label_cells c
-     WHERE c.trace_id = ANY(CAST(:ids AS text[]))
-     ORDER BY c.trace_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email), c.created_at DESC, c.id DESC
-"""
-
-
-def _cell(r: Any, m: labelling.Member) -> dict[str, Any]:
-    return {"value": r["value"], "author_id": r["author_id"], "author_email": r["author_email"],
-            "author_role": r["author_role"], "source": r["source"], "at": runs._iso(r["created_at"]),
-            "mine": r["author_id"] is not None and r["author_id"] == m.user_id,
-            "suggestion": r["source"] == "coding_agent"}
-
-
-async def tag_matrix(m: labelling.Member, run_tag: str) -> dict[str, Any]:
-    """The Labels page for a run tag's sessions (13 Nov 2026), in the shape of a run's labels view (runs.matrix) so the
-    same grid draws it: {"run": {"code": the tag, "title": "Sessions", "kind": "sessions"}, "questions": one row per
-    turn (id = the trace id, code = "<scenario> · turn <n>", question, turn_ids, session_id), "modes", "cells":
-    {trace id: {mode lineage: [each person's value]}}, "last_updated", "me"}. Values are the session labels
-    (trace_label_cells), set with set_label."""
-    labelling.require_active(m)
-    scope, p = runs._scope(m, "s")
-    async with conversations._lab_read() as conn:
-        rows = (await conn.execute(text(_GRID_ROWS.format(scope=scope)),
-                                   {**p, "tag": run_tag, "lim": GRID_MAX})).mappings().all()
-        modes = await runs._live_modes(conn)
-        cells = (await conn.execute(text(_GRID_CELLS), {"ids": [r["id"] for r in rows]})).mappings().all() if rows else []
-    live = {x["lineage_id"] for x in modes}
-    by: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for c in cells:
-        if c["value"] is not None and c["mode"] in live:
-            by.setdefault(c["trace_id"], {}).setdefault(c["mode"], []).append(_cell(c, m))
-    last = max((c["created_at"] for c in cells), default=None)
-    questions = [{"id": r["id"], "code": f"{r['scenario_id'] or r['session_id']} · turn {r['turn_index']}",
-                  "question": r["input"], "turn_ids": [r["id"]], "session_id": r["session_id"]} for r in rows]
-    return {"run": {"code": run_tag, "title": "Sessions", "kind": "sessions"}, "questions": questions, "modes": modes,
-            "cells": by, "last_updated": runs._iso(last), "me": m.user_id}
-
-
 async def _trace(conn: Any, m: labelling.Member, trace_id: str) -> dict[str, Any]:
     """The trace with its company, when the member may see it."""
     scope, p = runs._scope(m, "t")

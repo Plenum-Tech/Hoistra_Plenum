@@ -27,6 +27,12 @@ const PAGE = 50;
 const LEVEL_OPTIONS = [['', 'Any level']].concat(LEVELS.map((k) => [k, LEVEL_TEXT[k]]));
 const VERDICT_OPTIONS = [['', 'Any verdict'], ['pass', 'Pass'], ['fail', 'Fail'], ['not_evaluated', 'Not evaluated']];
 const EMPTY = { runTag: '', type: '', status: '', level: '', verdict: '', needsSme: false, stale: false, allAttempts: false };
+// The list's first filters: a run tag a Runs row named (?tag=, 14 Nov 2026), else every tag.
+export function startFilters(search) {
+  let tag = '';
+  try { tag = new URLSearchParams(search || '').get('tag') || ''; } catch (e) { tag = ''; }
+  return Object.assign({}, EMPTY, { runTag: tag.slice(0, 40) });
+}
 const PASSES_MAX = 400;
 // Scores are hidden on this page for now (Hussain, 12 Nov 2026): the list's Logic / User experience / Domain columns,
 // the Level, Verdict and "Waiting for a domain expert" filters, the Evaluate button and the Compare view. A session's verdict is to come
@@ -194,7 +200,7 @@ export function SessionsTable({ rows, runTag, onOpen }) {
 }
 
 function SessionsList({ me, tags, reloadTags, onOpen }) {
-  const [filters, setFilters] = React.useState(EMPTY);
+  const [filters, setFilters] = React.useState(() => startFilters(typeof window !== 'undefined' && window.location ? window.location.search : ''));
   const [rows, setRows] = React.useState(null);
   const [next, setNext] = React.useState(null);
   const [error, setError] = React.useState('');

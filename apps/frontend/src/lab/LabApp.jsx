@@ -277,12 +277,16 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const [focus, setFocus] = React.useState(null);
   const pickRun = (code) => { setRun(code); setQuestion(null); setFocus(null); };
   const pickQuestion = (code) => { setFocus(null); setQuestion(code); };
-  // A session row on the Labels page opens that session on the Sessions page, which reads ?session= when it opens.
-  const openSession = (id) => {
-    if (!id) return;
+  // A "Sessions · <tag>" run on the Runs page opens the Sessions list filtered to that tag (14 Nov 2026), which reads
+  // ?tag= when it opens.
+  const openTag = (tag) => {
+    if (!tag) return;
     try {
       const q = new URLSearchParams(window.location.search);
-      q.set('session', id);
+      q.delete('session');
+      q.delete('run');
+      q.delete('q');
+      q.set('tag', tag);
       window.history.replaceState(null, '', window.location.pathname + '?' + q.toString());
     } catch (e) { /* the address is a convenience */ }
     onView('sessions');
@@ -330,12 +334,12 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
       </div>
       <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
         {current === 'sessions' ? <Sessions me={me} onOpenLoop={() => onView('loop')} /> : null}
-        {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion}
+        {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion} onOpenTag={openTag}
           focus={focus && focus.code === question ? focus : null}
           onOpenLoop={() => onView('loop')} /> : null}
         {/* Commented out (13 Nov 2026): {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null} */}
-        {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion}
-          onOpenSession={openSession} onOpenLoop={() => onView('loop')} /> : null}
+        {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} picked={run} onOpenQuestion={openQuestion}
+          onOpenLoop={() => onView('loop')} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'loop' ? <Loop me={me} runs={runs} run={run} onOpenQuestion={openQuestion} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}

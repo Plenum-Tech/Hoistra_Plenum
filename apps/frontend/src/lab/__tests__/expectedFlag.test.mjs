@@ -35,7 +35,7 @@ test('the flag box: offer to flag, then say who flagged it and why, the reader f
 });
 
 test('a session page turn carries the flag box', () => {
-  const data = { session: { id: 's1' }, scenario: null, traces: [{ id: 'turn-1', turn_index: 1, input: 'q', output: 'a', status: 'ok', metadata: {}, scores: {} }] };
+  const data = { session: { id: 's1' }, scenario: { turns: [{ message: 'q', expected: { answer: 'a' } }] }, traces: [{ id: 'turn-1', turn_index: 1, input: 'q', output: 'a', status: 'ok', metadata: {}, scores: {} }] };
   const out = html(P.SessionBody, { data, active: 'turn-1', trees: {}, notes: {}, labels: {}, flags: { 'turn-1': { flagged: false, mine: false, flags: [] } }, onTab() {}, me: { user_id: 'me' } });
   assert.ok(out.includes('Is the expected outcome for this turn wrong?'));
 });
@@ -54,4 +54,20 @@ test('compare says when a scenario was not counted because its expected outcome 
   const v = compareView({ base: 'a', head: 'b', summary: { logic: { fixed: 1, regressed: 0, same: 0, changed: 0, new: 0, missing: 0, not_counted: 2 },
     ux: {}, domain: {}, sessions: { base: 3, head: 3 }, answer_words: {} }, rows: [] });
   assert.ok(v.summary[0].includes('2 not counted (expected outcome flagged)'), v.summary[0]);
+});
+
+// 13 Nov 2026 review: a turn with no expected outcome (a chat session, a turn the scenario has no turn for) is never
+// offered the flag; one already flagged can still be cleared.
+test('the flag is offered only on a turn that has an expected outcome', async () => {
+  const { hasExpectedOutcome } = await import('../logic/sessions.js');
+  const scenario = { scenario_id: 'EV-1', version: 1, turns: [{ message: 'Q', expected: { answer: 'A' } }] };
+  assert.equal(hasExpectedOutcome(scenario, 1), true);
+  assert.equal(hasExpectedOutcome(scenario, 2), false);
+  assert.equal(hasExpectedOutcome(null, 1), false);
+  const trace = { id: 't1', turn_index: 1, status: 'ok', expected_flag: { flagged: false, count: 0, mine: false } };
+  const body = (sc, t) => html(P.SessionBody, { data: { session: { id: 's' }, scenario: sc, traces: [t] }, active: 't1', flags: {} });
+  assert.ok(!body(null, trace).includes('Is the expected outcome for this turn wrong?'), 'a chat turn has no flag box');
+  assert.ok(body(scenario, trace).includes('Is the expected outcome for this turn wrong?'));
+  const flagged = Object.assign({}, trace, { expected_flag: { flagged: true, count: 1, mine: true } });
+  assert.ok(body(null, flagged).includes('Is the expected outcome for this turn wrong?'), 'a flagged one can be cleared');
 });

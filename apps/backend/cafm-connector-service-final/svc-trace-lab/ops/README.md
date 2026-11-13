@@ -295,7 +295,7 @@ CREATE ROLE tracelab_push LOGIN PASSWORD '...';
 GRANT USAGE ON SCHEMA tracelab TO tracelab_push;
 GRANT SELECT ON tracelab.schema_migrations TO tracelab_push;
 GRANT SELECT, INSERT ON tracelab.run_tags, tracelab.spec_sections, tracelab.scenarios, tracelab.sessions,
-    tracelab.traces, tracelab.observations, tracelab.scores TO tracelab_push;
+    tracelab.traces, tracelab.observations, tracelab.scores, tracelab.expected_flags TO tracelab_push;
 ```
 
 A real push writes to a shared database. No Claude session runs one: a person does, after the dry run.

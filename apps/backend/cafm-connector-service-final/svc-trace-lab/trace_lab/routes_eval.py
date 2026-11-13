@@ -7,7 +7,6 @@
     GET    /eval/sessions/{session_id}        one session: its scenario, its traces in turn order, their scores
     GET    /eval/traces/{trace_id}/tree       one trace as the tree view reads it
     GET    /eval/traces/{trace_id}/notes      the chat record and everyone's notes on a trace's spans
-    GET    /eval/labels?run_tag=              a run tag's sessions as the Labels grid: a row per turn (13 Nov 2026)
     GET    /eval/traces/{trace_id}/labels     the failure modes and everyone's label on a trace
     PUT    /eval/traces/{trace_id}/labels/{mode}  the caller's label: positive, negative or null to clear
     GET    /eval/traces/{trace_id}/expected-flag      who says this turn's expected outcome is wrong
@@ -257,13 +256,6 @@ async def eval_set_trace_expected_flag(trace_id: str, body: ExpectedFlagIn,
     """The caller's flag on this turn's expected outcome."""
     return {"ok": True, "flag": await _call(expected_flags.set_flag(m, trace_id, flagged=body.flagged,
                                                                     comment=body.comment))}
-
-
-@router.get("/eval/labels")
-async def eval_tag_labels(run_tag: str = Query(..., min_length=1, max_length=40),
-                          m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
-    """The Labels page for a run tag's sessions: a row per turn, the failure modes as columns (13 Nov 2026)."""
-    return {"ok": True, **await _call(trace_labels.tag_matrix(m, run_tag))}
 
 
 @router.get("/eval/traces/{trace_id}/labels")

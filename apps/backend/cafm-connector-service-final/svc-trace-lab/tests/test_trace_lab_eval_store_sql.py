@@ -381,11 +381,12 @@ async def test_notes_on_a_trace_are_only_read_by_those_who_may_see_it(lab_scratc
         await eval_store.trace_notes(member(), "no-such-trace")
 
 
-async def test_a_trace_whose_chat_record_is_gone_still_shows_its_notes_place_as_empty(lab_scratch, main_scratch):
+async def test_a_trace_whose_chat_record_is_gone_is_noted_from_its_stored_trace(lab_scratch, main_scratch):
+    """14 Nov 2026: it used to answer record None (no notes); the stored trace now gives the record."""
     await _tag(lab_scratch)
     await _write(lab_scratch, _meta(), [sample_turn("turn-x", SID)])
     got = await eval_store.trace_notes(member(), "turn-x")
-    assert got["record"] is None and got["labels"] == []
+    assert got["record"]["stored"] is True and got["record"]["id"] == "turn-x" and got["labels"] == []
 
 
 async def test_chat_questions_are_read_in_only_when_asked_for(lab_scratch, main_scratch):

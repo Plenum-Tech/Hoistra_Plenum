@@ -33,7 +33,6 @@ PATHS = {
     ("GET", "/eval/traces/{trace_id}/notes"), ("GET", "/eval/traces/{trace_id}/labels"),
     ("PUT", "/eval/traces/{trace_id}/labels/{mode}"),
     ("GET", "/eval/traces/{trace_id}/expected-flag"), ("PUT", "/eval/traces/{trace_id}/expected-flag"),
-    ("GET", "/eval/labels"),
 }
 
 
@@ -402,11 +401,6 @@ def test_a_reviewer_reads_and_sets_a_turns_expected_outcome_flag(client, who, mo
     assert client.put(f"{B}/eval/traces/turn-1/expected-flag", json={"flagged": True, "comment": "x" * 2001}).status_code == 422
 
 
-def test_the_labels_page_reads_a_run_tags_sessions_as_one_grid(client, who, monkeypatch):
-    grid = {"run": {"code": "baseline_v0", "title": "Sessions", "kind": "sessions"}, "questions": [], "modes": [],
-            "cells": {}, "last_updated": None, "me": "u"}
-    got = _record(monkeypatch, trace_labels, "tag_matrix", grid)
-    r = client.get(f"{B}/eval/labels", params={"run_tag": "baseline_v0"})
-    assert r.status_code == 200 and r.json() == {"ok": True, **grid} and got[0][0] == (who, "baseline_v0")
-    assert client.get(f"{B}/eval/labels").status_code == 422, "a run tag is needed"
-    assert client.get(f"{B}/eval/labels", params={"run_tag": "x" * 41}).status_code == 422
+def test_session_labels_live_on_the_run_made_from_the_sessions_not_a_grid_of_their_own(client, who):
+    """One label store (13 Nov 2026 review): the Labels page labels the "Sessions · <tag>" run's questions."""
+    assert client.get(f"{B}/eval/labels", params={"run_tag": "baseline_v0"}).status_code == 404

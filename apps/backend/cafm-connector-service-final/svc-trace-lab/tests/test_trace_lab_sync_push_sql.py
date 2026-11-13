@@ -316,7 +316,10 @@ async def test_failure_mode_labels_on_traces_are_not_pushed_until_their_modes_tr
 
 async def test_expected_outcome_flags_are_pushed_with_their_traces(lab_scratch, dest):
     await _seed(lab_scratch)
-    await expected_flags.set_flag(member(), "turn-1", flagged=True, comment="The expected list is wrong.")
+    async with lab_scratch.begin() as c:       # turn-1 has no scenario here: the flag row is written as it is stored
+        await c.execute(text("INSERT INTO tracelab.expected_flags (trace_id, organization_id, flagged, comment, author_email)"
+                             " SELECT id, organization_id, true, 'The expected list is wrong.', 'reviewer@example.com'"
+                             " FROM tracelab.traces WHERE id = 'turn-1'"))
     out = await sync_push.push()
     assert out["status"] == "done" and out["pushed"]["expected_flags"] == 1, out["error"]
     assert "1 expected-outcome flag" in sync_push.summary_line(out)

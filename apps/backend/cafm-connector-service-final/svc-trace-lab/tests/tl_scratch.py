@@ -56,6 +56,10 @@ async def fresh_lab_schema(monkeypatch, *, apply: bool = True) -> AsyncEngine:
         await conn.exec_driver_sql(f"DROP SCHEMA IF EXISTS {migrate.SCHEMA} CASCADE")
     monkeypatch.setattr(db, "_lab", engine)
     monkeypatch.setattr(db, "STATE", None)
+    # In-process memory of the automatic scenario read (13 Nov 2026): each test starts with none of it.
+    from trace_lab import autosync, eval_store
+    monkeypatch.setattr(autosync, "_scenario_read_at", None, raising=False)
+    monkeypatch.setattr(eval_store, "_HELD", {}, raising=False)
     if apply:
         st = await migrate.apply_pending(engine, applied_by="pytest")
         assert st.status == "ready", st.as_dict()

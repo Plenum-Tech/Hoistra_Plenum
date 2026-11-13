@@ -233,7 +233,6 @@ NOT_DRIVEN = {
     "/eval/traces/{trace_id}/notes": "notes and labels on the session page (11 Nov): covered by test_trace_lab_eval_store_sql and test_trace_lab_trace_labels_sql",
     "/eval/traces/{trace_id}/labels": "same", "/eval/traces/{trace_id}/labels/{mode}": "same",
     "/eval/traces/{trace_id}/expected-flag": "expected outcome flagged while reviewing (12 Nov): covered by test_trace_lab_expected_flags_sql",
-    "/eval/labels": "a run tag's sessions as the Labels grid (13 Nov): covered by test_trace_lab_trace_labels_sql",
     "/lab/agent/propose-from-notes": "the agent in the container (5 Nov): covered by test_trace_lab_agent_in_container_sql",
     "/lab/modes/{lineage_id}/draft-fix": "same",
     "/lab/modes/{lineage_id}/rule": "the shorter loop (6 Nov): covered by test_trace_lab_shorter_loop_sql", "/lab/changes": "same", "/lab/changes/{overlay_id}/approve": "same",

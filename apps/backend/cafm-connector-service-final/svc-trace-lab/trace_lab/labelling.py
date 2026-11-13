@@ -341,6 +341,11 @@ def _question_of(trace: dict[str, Any]) -> str | None:
 async def _turn(m: Member, turn_id: str) -> dict[str, Any]:
     out = await conversations.get_turn(company_view(m.principal, m.org), m.org, turn_id)
     if out is None:
+        # A turn asked on another machine and copied here is only in the eval store (14 Nov 2026): the chat
+        # record, when there is one, is always used first.
+        from . import stored_turn
+        out = await stored_turn.get(m.org, turn_id)
+    if out is None:
         raise NotFound("turn_not_found")
     return out
 
@@ -399,7 +404,8 @@ async def save_label(m: Member, turn_id: str, *, step_key: str | None, label: st
     if not step_key:
         raise Invalid("step_required", "Choose the step to label.")
     kind = _step_kind(trace, step_key)
-    await evidence.snapshot([turn_id], organization_id=m.org, reason=SNAPSHOT_REASON)
+    if not got.get("stored"):                 # a stored-only turn has no chat rows to copy
+        await evidence.snapshot([turn_id], organization_id=m.org, reason=SNAPSHOT_REASON)
     return await _write(m, turn_id, lineage=None, label=label, note=note, title=title, quote=validate_quote(quote),
                         tomb=False, base=None, expected=expected, only_if=only_if,
                         new_step={"key": step_key, "kind": kind, "ckey": got["conversation_key"],
@@ -435,7 +441,8 @@ async def save_group(m: Member, turn_id: str, *, label: str, note: str | None,
     trace = got["trace"]
     for st in steps:
         st["kind"] = _step_kind(trace, st["key"])
-    await evidence.snapshot([turn_id], organization_id=m.org, reason=SNAPSHOT_REASON)
+    if not got.get("stored"):                 # a stored-only turn has no chat rows to copy
+        await evidence.snapshot([turn_id], organization_id=m.org, reason=SNAPSHOT_REASON)
     group_id, question = str(uuid.uuid4()), _question_of(trace)
     rows = []
     try:

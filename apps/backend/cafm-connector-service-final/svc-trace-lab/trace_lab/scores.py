@@ -75,8 +75,11 @@ async def current_scores(conn: Any, trace_ids: Sequence[str]) -> dict[str, dict[
         f"SELECT DISTINCT ON (k.trace_id, k.name) {_COLS} FROM tracelab.scores k"
         f" WHERE k.trace_id = ANY(CAST(:ids AS text[])) ORDER BY k.trace_id, k.name, {CURRENT_ORDER}"),
         {"ids": list(trace_ids)})).mappings().all()
+    # A turn whose expected outcome a reviewer flags as wrong is not counted (13 Nov 2026): while it is flagged, no
+    # earlier score of it is current. Its history keeps every score.
+    flagged = await expected_flags.flagged_traces(conn, list(trace_ids))
     for r in rows:
-        if r["name"] in LEVELS:
+        if r["name"] in LEVELS and r["trace_id"] not in flagged:
             out.setdefault(r["trace_id"], {level: None for level in LEVELS})[r["name"]] = _out(r)
     return out
 
@@ -111,11 +114,13 @@ LEVEL_VERDICT_SQL = (
     " WHEN count(*) > 0 AND count(*) FILTER (WHERE c.string_value = 'pass') ="
     " (SELECT count(*) FROM tracelab.traces t WHERE t.session_id = s.id) THEN 'pass' ELSE 'not_evaluated' END"
     " FROM (SELECT DISTINCT ON (k.trace_id) k.string_value FROM tracelab.scores k"
-    f" WHERE k.session_id = s.id AND k.name = :level ORDER BY k.trace_id, {CURRENT_ORDER}) c")
+    f" WHERE k.session_id = s.id AND k.name = :level AND NOT {expected_flags.flagged_id_sql('k.trace_id')}"
+    f" ORDER BY k.trace_id, {CURRENT_ORDER}) c")
 #: SQL that is true for a session with a trace whose current domain score is automatic and asks for an expert.
 NEEDS_SME_SQL = (
     "EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (k.trace_id) k.source, k.details FROM tracelab.scores k"
-    f" WHERE k.session_id = s.id AND k.name = 'domain' ORDER BY k.trace_id, {CURRENT_ORDER}) q"
+    f" WHERE k.session_id = s.id AND k.name = 'domain' AND NOT {expected_flags.flagged_id_sql('k.trace_id')}"
+    f" ORDER BY k.trace_id, {CURRENT_ORDER}) q"
     " WHERE q.source = 'EVAL' AND (q.details->>'needs_sme') = 'true')")
 
 

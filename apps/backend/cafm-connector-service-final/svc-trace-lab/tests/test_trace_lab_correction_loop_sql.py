@@ -297,7 +297,12 @@ async def _asked_both_ways(main, uid):
 
 
 async def test_a_scenario_session_is_filed_by_itself_and_listed_under_its_run_tag_not_the_askers_day(main_scratch, lab_scratch):  # noqa: F811
-    await _asked_both_ways(main_scratch, str(uuid.uuid4()))
+    uid = str(uuid.uuid4())
+    async with lab_scratch.begin() as conn:     # the automatic read files a curator's scenario sessions only
+        await conn.execute(text(
+            "INSERT INTO tracelab.lab_platform_members (user_id, email, lab_role, status, decided_by)"
+            " VALUES (CAST(:u AS uuid), 'ann@a.test', 'consultant', 'active', CAST(:u AS uuid))"), {"u": uid})
+    await _asked_both_ways(main_scratch, uid)
     out = await autosync.tick()
     assert out["last_ok"] is True and out["last_new_questions"] == 1, "only what was asked by hand is a live question"
     assert out["last_new_scenario_sessions"] == 1 and out["scenario_sessions_error"] is None

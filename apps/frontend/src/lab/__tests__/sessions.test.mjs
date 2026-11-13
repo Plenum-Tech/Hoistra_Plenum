@@ -487,3 +487,9 @@ test('a chat conversation with no scenario is still a row a person can read', ()
   assert.ok(row && typeof row === 'object');
   assert.equal(sessionTitle({ id: '2db72d10-e565-46b4-b0b6-5ff51304c586', scenario_id: null }), '2db72d10-e565-46b4-b0b6-5ff51304c586');
 });
+
+test('the Sessions list opens on the run tag a Runs row names (?tag=), else on every tag', () => {
+  assert.equal(S.startFilters('?view=sessions&tag=frontend_nov13_202718').runTag, 'frontend_nov13_202718');
+  assert.equal(S.startFilters('?view=sessions').runTag, '');
+  assert.equal(S.startFilters('').status, '', 'the other filters start empty');
+});

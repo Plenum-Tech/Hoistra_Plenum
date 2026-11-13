@@ -172,10 +172,11 @@ function Cell({ q, mode, c, busy, onCell }) {
   );
 }
 
-// What is labelled (13 Nov 2026): a run tag's sessions, a row per turn (GET /eval/labels, the session labels the
-// session page used to set), or a run's questions as before (the run is picked in the top bar).
+// What is labelled (13 Nov 2026): the run made from a run tag's sessions ("Sessions · <tag>", one per company), picked
+// here, or the run picked in the top bar. Both are runs, so every label is in one store that Progress, the Loop and the
+// coding agent read (13 Nov 2026 review).
 export const SOURCES = [['sessions', 'Sessions'], ['runs', 'Runs']];
-export function LabelsSource({ source, tags, tag, onSource, onTag }) {
+export function LabelsSource({ source, runs, run, error, onSource, onRun, onRetry }) {
   return (
     <div className="lab-row lab-lv-source">
       <div className="lab-row" role="group" aria-label="What to label">
@@ -184,34 +185,47 @@ export function LabelsSource({ source, tags, tag, onSource, onTag }) {
             aria-pressed={source === key ? 'true' : 'false'} onClick={() => onSource && onSource(key)}>{text}</button>
         ))}
       </div>
-      {source === 'sessions' && tags && tags.length ? (
+      {source === 'sessions' && runs && runs.length ? (
         <label className="lab-lv-tag">
           <span className="lab-qp-label">{'Run tag'}</span>
-          <select value={tag || ''} onChange={(e) => onTag && onTag(e.target.value)}>
-            {tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag + ' (' + (Number(t.sessions) || 0) + ')'}</option>)}
+          <select value={run || ''} onChange={(e) => onRun && onRun(e.target.value)}>
+            {runs.map((r) => <option key={r.code} value={r.code}>{r.code + ' · ' + r.title + ' (' + (Number(r.n_questions) || 0) + ')'}</option>)}
           </select>
         </label>
       ) : null}
-      {source === 'sessions' && tags && !tags.length ? <span className="lab-small">{'No sessions yet: ask scenarios first, then label their turns here.'}</span> : null}
+      {source === 'sessions' && !runs && error ? (
+        <span className="lab-row">
+          <span role="alert" className="lab-error">{'Could not read the sessions: ' + error}</span>
+          {onRetry ? <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onRetry}>{'Try again'}</button> : null}
+        </span>
+      ) : null}
+      {source === 'sessions' && !runs && !error ? <span className="lab-small" role="status">{'Reading…'}</span> : null}
+      {source === 'sessions' && runs && !runs.length ? <span className="lab-small">{'No sessions yet: ask scenarios first, then label their turns here.'}</span> : null}
     </div>
   );
 }
 
-// Saves the caller's value for one cell and returns the service's time: on the turn for a session row (the session
-// label, PUT /eval/traces/{id}/labels/{mode}), on the question for a run row (PUT /lab/q/{code}/cells).
-export async function saveCell(api, source, q, lineage, value) {
-  if (source === 'sessions') {
-    const out = await api.evalSetTraceLabel(q.id, lineage, value);
-    return (out && out.label && out.label.at) || null;
-  }
+// Saves the caller's value for one cell on its question (PUT /lab/q/{code}/cells) and returns the service's time.
+export async function saveCell(api, q, lineage, value) {
   const out = await api.setCell(q.code, lineage, value);
   return (out && out.cell && out.cell.at) || null;
+}
+
+// Which source the page opens on: a run picked in the top bar or named in the address (?run=) is shown as it is;
+// otherwise the one this browser chose last.
+export function startSource(stored, picked) {
+  return picked ? 'runs' : (stored === 'runs' ? 'runs' : 'sessions');
+}
+
+// A failed save says so only while its grid is the one in view.
+export function saveErrorShown(shownRun, savedRun) {
+  return String(shownRun || '').toUpperCase() === String(savedRun || '').toUpperCase();
 }
 
 // The page for one run, from what the service returned (GET /lab/runs/{code}/labels). Nothing here reads the service:
 // LabelsView does, and hands the clicks back through onCell and the onAddMode / onEditMode / onRetireMode promises.
 export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, onOpenQuestion, onAddMode, onEditMode, onRetireMode,
-  onRetry, waiting, onOpenLoop, picker }) {
+  onRetry, waiting, onOpenLoop, picker, empty }) {
   const [form, setForm] = React.useState(null);        // null, { add: true }, or { mode } while one column is edited
   const [asking, setAsking] = React.useState(null);    // the column whose retirement is being confirmed
   const [modeBusy, setModeBusy] = React.useState(false);
@@ -222,7 +236,7 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
     return (
       <div className="lab-page-body lab-page-full">
         <div className="lab-page-head"><div><h1>{'Labels'}</h1>{picker || null}</div></div>
-        <Empty title="Pick a run">{'Choose a run to label its questions against the failure modes.'}</Empty>
+        {empty === undefined ? <Empty title="Pick a run">{'Choose a run to label its questions against the failure modes.'}</Empty> : empty || null}
       </div>
     );
   }
@@ -289,6 +303,8 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
         <span>{data.last_updated ? 'Last updated ' + when(data.last_updated) : 'No cells labelled yet'}</span>
         {questions.length && modes.length ? <span>{'You have labelled ' + mineN + ' of ' + questions.length * modes.length + ' cells'}</span> : null}
         {loading ? <span>{'Reading…'}</span> : null}
+        {data.more ? <span>{'Showing the first ' + questions.length.toLocaleString('en-GB') + ' of '
+          + (Number(data.total) || 0).toLocaleString('en-GB') + ' questions'}</span> : null}
       </div>
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
       {modeError ? <div role="alert" className="lab-error">{modeError}</div> : null}
@@ -348,21 +364,27 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
 const SOURCE_KEY = 'tracelab.labels.source';
 const readSource = () => { try { return window.localStorage.getItem(SOURCE_KEY) === 'runs' ? 'runs' : 'sessions'; } catch (e) { return 'sessions'; } };
 
-export default function LabelsView({ me, run: pickedRun, onOpenQuestion, onOpenSession, onOpenLoop }) {
-  // Sessions (a run tag's turns) or Runs (the run picked in the top bar); the choice is kept in this browser.
-  const [source, setSource] = React.useState(readSource);
-  const [tags, setTags] = React.useState(null);
-  const [tag, setTag] = React.useState(null);
-  React.useEffect(() => {
+export default function LabelsView({ me, run: fallbackRun, picked, onOpenQuestion, onOpenLoop }) {
+  // Sessions (the runs made from sessions) or Runs (the run picked in the top bar); the choice is kept in this browser.
+  const [source, setSource] = React.useState(() => startSource(readSource(), picked));
+  React.useEffect(() => { if (picked) setSource('runs'); }, [picked]);
+  const [list, setList] = React.useState({ runs: null, error: '' });
+  const [tagRun, setTagRun] = React.useState(null);
+  const readList = React.useCallback(() => {
     let live = true;
-    labApi.evalRunTags().then((out) => { if (live) setTags((out && out.run_tags) || []); }, () => { if (live) setTags([]); });
+    setList({ runs: null, error: '' });
+    labApi.runs({ kind: 'sessions', limit: 200 })
+      .then((out) => { if (live) setList({ runs: (out && out.runs) || [], error: '' }); },
+        (e) => { if (live) setList({ runs: null, error: errText(e) }); });
     return () => { live = false; };
   }, []);
+  React.useEffect(() => readList(), [readList]);
   React.useEffect(() => {
-    if (tags && tags.length && !tags.some((t) => t.tag === tag)) setTag(tags[0].tag);
-  }, [tags, tag]);
+    const rs = list.runs;
+    if (rs && rs.length && !rs.some((r) => r.code === tagRun)) setTagRun(rs[0].code);
+  }, [list, tagRun]);
   const pickSource = (key) => { setSource(key); try { window.localStorage.setItem(SOURCE_KEY, key); } catch (e) { /* a convenience */ } };
-  const run = source === 'sessions' ? tag : pickedRun;
+  const run = source === 'sessions' ? tagRun : fallbackRun;
   const [res, setRes] = React.useState({ data: null, loading: !!run, error: '' });
   const [waiting, setWaiting] = React.useState(0);
   React.useEffect(() => {
@@ -375,22 +397,23 @@ export default function LabelsView({ me, run: pickedRun, onOpenQuestion, onOpenS
   const [cellError, setCellError] = React.useState('');
   const ask = React.useRef(0);
   const inflight = React.useRef({});
+  const shown = React.useRef(run);
+  shown.current = run;
 
   // A quiet read keeps what is on screen (and any error) until the answer comes; another run starts empty.
   const load = React.useCallback(async (quiet) => {
     const mine = (ask.current += 1);
     if (!run) { setRes({ data: null, loading: false, error: '' }); return; }
     const wanted = String(run).toUpperCase();
-    const sessions = source === 'sessions';
-    setRes((p) => ({ data: p.data && p.data.run && String(p.data.run.code).toUpperCase() === wanted
-      && (p.data.run.kind === 'sessions') === sessions ? p.data : null, loading: true, error: quiet ? p.error : '' }));
+    setRes((p) => ({ data: p.data && p.data.run && String(p.data.run.code).toUpperCase() === wanted ? p.data : null,
+      loading: true, error: quiet ? p.error : '' }));
     try {
-      const out = sessions ? await labApi.evalTagLabels(run) : await labApi.runLabels(run);
+      const out = await labApi.runLabels(run);
       if (mine === ask.current) setRes({ data: out || null, loading: false, error: '' });
     } catch (e) {
       if (mine === ask.current) setRes((p) => Object.assign({}, p, { loading: false, error: errText(e) }));
     }
-  }, [run, source]);
+  }, [run]);
   React.useEffect(() => { inflight.current = {}; setSaving({}); setCellError(''); load(false); }, [load]);
 
   // One cell at a time per cell: the click shows at once; the service's time replaces ours, a refusal puts it back.
@@ -410,11 +433,11 @@ export default function LabelsView({ me, run: pickedRun, onOpenQuestion, onOpenS
     setSaving((p) => Object.assign({}, p, { [key]: true }));
     setCellError('');
     try {
-      const at = await saveCell(labApi, data.run && data.run.kind === 'sessions' ? 'sessions' : 'runs', q, mode.lineage_id, value);
+      const at = await saveCell(labApi, q, mode.lineage_id, value);
       if (at) put(next ? Object.assign({}, next, { at }) : null, { last_updated: at });
     } catch (e) {
       put(before);
-      setCellError('Could not save ' + q.code + ' · ' + mode.name + ': ' + errText(e));
+      if (saveErrorShown(shown.current, code)) setCellError('Could not save ' + q.code + ' · ' + mode.name + ': ' + errText(e));
     } finally {
       delete inflight.current[key];
       setSaving((p) => { const n = Object.assign({}, p); delete n[key]; return n; });
@@ -425,14 +448,13 @@ export default function LabelsView({ me, run: pickedRun, onOpenQuestion, onOpenS
   const onEditMode = async (mode, body) => { await labApi.editMode(mode.lineage_id, body); await load(true); };
   const onRetireMode = async (mode) => { await labApi.retireMode(mode.lineage_id); await load(true); };
 
-  // A session row opens its session; a run row its question, as before.
-  const openRow = source === 'sessions'
-    ? (onOpenSession ? (code) => { const q = ((res.data && res.data.questions) || []).find((x) => x.code === code); if (q) onOpenSession(q.session_id); } : undefined)
-    : onOpenQuestion;
+  // With Sessions and nothing to show yet, the picker says why (reading, failed, none yet): no stale "Pick a run".
+  const noRun = source === 'sessions' && !run ? '' : undefined;
   return (
     <LabelsMatrix run={run} data={res.data} me={me} loading={res.loading} error={cellError || res.error} saving={saving} onCell={onCell}
-      onOpenQuestion={openRow} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
-      waiting={waiting} onOpenLoop={onOpenLoop}
-      picker={<LabelsSource source={source} tags={tags} tag={tag} onSource={pickSource} onTag={setTag} />} />
+      onOpenQuestion={onOpenQuestion} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
+      waiting={waiting} onOpenLoop={onOpenLoop} empty={noRun}
+      picker={<LabelsSource source={source} runs={list.runs} run={tagRun} error={list.error} onSource={pickSource} onRun={setTagRun}
+        onRetry={readList} />} />
   );
 }

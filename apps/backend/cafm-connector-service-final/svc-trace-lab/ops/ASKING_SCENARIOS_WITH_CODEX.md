@@ -37,8 +37,12 @@ Trace Lab files a conversation from the chat records in **its own Hoistra's data
 The script signs in to each address it uses (a sign-in token is only valid on the Hoistra that issued it), with the
 same account: the account must exist on both, which it does when both use `hoistra_test`.
 
-Questions asked on `hoistra_test` are visible to everyone using the hosted Hoistra, and the hosted Trace Lab's auto-sync
-also lists them as a live run under **Runs**.
+Questions asked on `hoistra_test` are visible to everyone using the hosted Hoistra. The hosted Trace Lab's automatic
+sync (at most every five minutes) files a scenario session by itself only when the person who asked it is a curator
+(platform team, consultant or company admin); otherwise run "Read new sessions" / `POST LAB/eval/ingest`. Filed
+sessions show under **Sessions** and, as a run named "Sessions · <run tag>", under **Runs**. A scenario turn that is
+still not filed an hour after it was asked (scenario not imported, a malformed session id, an asker who may not curate)
+is listed in the asker's live run of that day instead, so it is never lost.
 
 ## Before you start
 

@@ -265,9 +265,9 @@ async def _load(m: labelling.Member, run_tag: str) -> dict[str, Any]:
             "SELECT t.id, t.session_id, t.turn_index, t.input, t.output, t.status FROM tracelab.traces t"
             " WHERE t.session_id = ANY(CAST(:ids AS text[])) ORDER BY t.session_id, t.turn_index"),
             {"ids": ids})).mappings().all()] if ids else []
-        done = {(r[0], r[1], r[2]) for r in (await conn.execute(text(
-            "SELECT k.trace_id, k.name, k.evaluator FROM tracelab.scores k WHERE k.source = 'EVAL'"
-            " AND k.trace_id = ANY(CAST(:ids AS text[]))"), {"ids": [t["id"] for t in traces]})).all()} if traces else set()
+        scored = (await conn.execute(text(
+            "SELECT k.trace_id, k.name, k.evaluator, k.details->>'reason' FROM tracelab.scores k WHERE k.source = 'EVAL'"
+            " AND k.trace_id = ANY(CAST(:ids AS text[]))"), {"ids": [t["id"] for t in traces]})).all() if traces else []
         scenarios: dict[tuple[str, int], dict[str, Any]] = {}
         for key in {(s["scenario_id"], s["scenario_version"]) for s in sessions if s["scenario_id"]}:
             row = (await conn.execute(text(
@@ -282,6 +282,9 @@ async def _load(m: labelling.Member, run_tag: str) -> dict[str, Any]:
                                   "spec_sections": list(row["spec_sections"] or [])}
         _version, hashes = await spec_doc.current_hashes(conn)
         flagged = set(await expected_flags.flagged_traces(conn, [t["id"] for t in traces]))
+        # Left unscored because its expected outcome was flagged: done while it is still flagged, to be scored once the
+        # flag is cleared (13 Nov 2026).
+        done = {(r[0], r[1], r[2]) for r in scored if r[3] != "expected_flagged" or r[0] in flagged}
         spent = float((await conn.execute(text(
             "SELECT coalesce(sum((k.details->>'usd')::numeric), 0) FROM tracelab.scores k"
             " JOIN tracelab.sessions s ON s.id = k.session_id WHERE k.source = 'EVAL' AND s.run_tag = :tag"),

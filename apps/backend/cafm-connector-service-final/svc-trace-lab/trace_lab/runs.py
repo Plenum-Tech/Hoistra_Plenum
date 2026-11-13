@@ -36,6 +36,12 @@ SESSIONS_KIND = "sessions"
 CELL_VALUES = ("positive", "negative")
 SYNC_DAYS = 90
 SYNC_BATCH = 2000
+#: A scenario turn not filed as a session this long after it was asked goes to its asker's day (13 Nov 2026).
+SCENARIO_GRACE = timedelta(hours=1)
+#: How far back sync_live looks for such turns.
+SCENARIO_LOOKBACK = timedelta(hours=48)
+#: The most questions one labels grid shows (13 Nov 2026); the answer says how many there are.
+MATRIX_MAX = 2000
 SYNC_LOCK = 4_201_011
 IMPORT_MAX = 2000
 TITLE_MAX = 200
@@ -313,11 +319,25 @@ async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str
     if org is not None:
         where.append("tt.organization_id = CAST(:org AS uuid)")
         p["org"] = org
+    cols = (f"SELECT tt.turn_id, tt.organization_id::text AS org, tt.user_id::text AS uid, tt.email, tt.started_at, "
+            f"left({conversations._ASKER_WORDS_SQL}, {QUESTION_MAX}) AS q FROM {TURNS} tt WHERE ")
+    # ...unless its session was never filed (13 Nov 2026 review): a scenario turn older than SCENARIO_GRACE that is in
+    # no stored session (its scenario not imported, a malformed id, another company's id, an asker who may not curate)
+    # goes to its asker's day as before, so no turn ends up nowhere.
+    late = [w for w in where if "NOT LIKE 'scn" not in w and w != "tt.started_at >= :since"]
+    late += ["tt.session_id LIKE 'scn\\_\\_%'", "tt.started_at >= :scn_since", "tt.started_at < :grace"]
     async with conversations._read() as conn:
         turns = [dict(r) for r in (await conn.execute(text(
-            f"SELECT tt.turn_id, tt.organization_id::text AS org, tt.user_id::text AS uid, tt.email, tt.started_at, "
-            f"left({conversations._ASKER_WORDS_SQL}, {QUESTION_MAX}) AS q FROM {TURNS} tt WHERE {' AND '.join(where)} "
-            "ORDER BY tt.started_at, tt.turn_id LIMIT :lim"), p)).mappings().all()]
+            cols + " AND ".join(where) + " ORDER BY tt.started_at, tt.turn_id LIMIT :lim"), p)).mappings().all()]
+        unfiled = [dict(r) for r in (await conn.execute(text(
+            cols + " AND ".join(late) + " ORDER BY tt.started_at, tt.turn_id LIMIT :lim"),
+            {**p, "scn_since": max(floor, now - SCENARIO_LOOKBACK), "grace": now - SCENARIO_GRACE})).mappings().all()]
+    if unfiled:
+        async with db.lab_engine().connect() as conn:
+            filed = {r[0] for r in (await conn.execute(text(
+                "SELECT id FROM tracelab.traces WHERE id = ANY(CAST(:ids AS text[]))"),
+                {"ids": [t["turn_id"] for t in unfiled]})).all()}
+        turns += [t for t in unfiled if t["turn_id"] not in filed]
     async with db.lab_engine().connect() as conn:
         turns += [dict(r) for r in (await conn.execute(text(
             "SELECT 'browser:' || f.id::text AS turn_id, f.organization_id::text AS org, f.user_id::text AS uid, f.email, "
@@ -907,7 +927,9 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
         run = await _run_row(conn, m, code)
         questions = (await conn.execute(text(
             f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q WHERE q.run_id = CAST(:rid AS uuid) "
-            f"ORDER BY {_q_order(run)}"), {"rid": run["id"]})).mappings().all()
+            f"ORDER BY {_q_order(run)} LIMIT :lim"), {"rid": run["id"], "lim": MATRIX_MAX})).mappings().all()
+        total = int((await conn.execute(text("SELECT count(*) FROM tracelab.lab_questions WHERE run_id = CAST(:rid AS uuid)"),
+                                        {"rid": run["id"]})).scalar_one())
         modes = await _live_modes(conn)
         cells = (await conn.execute(text(_CELLS_SQL), {"rid": run["id"]})).mappings().all()
         last = (await conn.execute(text(
@@ -922,7 +944,7 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
             "author_role": c.get("author_role"), "source": c["source"], "at": _iso(c["created_at"]),
             "mine": c.get("author_id") == m.user_id, "suggestion": c["source"] == "coding_agent"})
     return {"run": run_out(run), "questions": [question_out(q, run["run_no"]) for q in questions], "modes": modes,
-            "cells": by, "last_updated": _iso(last), "me": m.user_id}
+            "cells": by, "last_updated": _iso(last), "me": m.user_id, "total": total, "more": total > len(questions)}
 
 
 async def set_cell(m: labelling.Member, code: str, *, mode: str, value: str | None) -> dict[str, Any]:
