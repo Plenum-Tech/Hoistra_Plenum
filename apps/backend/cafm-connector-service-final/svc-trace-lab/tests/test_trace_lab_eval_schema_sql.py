@@ -27,10 +27,15 @@ def test_0014_lints_clean():
     assert migrate.lint(f) == []
 
 
-def test_catalog_is_version_15_with_the_eight_tables_and_the_trace_labels():
+def test_catalog_is_version_16_with_the_eight_tables_the_trace_labels_and_the_expected_flags():
     c = migrate.expected_catalog()
-    assert c["version"] == 15
-    assert EVAL_TABLES | {"trace_label_cells"} <= set(c["tables"])
+    assert c["version"] == 16
+    assert EVAL_TABLES | {"trace_label_cells", "expected_flags"} <= set(c["tables"])
+
+
+def test_0016_lints_clean():
+    f = next(x for x in migrate.files() if x.name == "0016_expected_flags.sql")
+    assert migrate.lint(f) == []
 
 
 def test_0015_lints_clean():

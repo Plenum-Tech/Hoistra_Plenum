@@ -63,20 +63,56 @@ async def test_another_run_tag_and_another_company_each_get_their_own_run(lab_sc
     assert only == {"new_questions": 0, "new_runs": 0, "more": False}
 
 
-async def test_a_turn_the_chat_here_just_recorded_is_left_to_the_chats_own_sync(lab_scratch, main_scratch):
+async def test_a_chat_turn_just_recorded_here_is_left_to_the_chats_own_sync(lab_scratch, main_scratch):
     """It becomes a question of that person's day; listing it under its run tag as well would file it twice."""
     from test_trace_lab_eval_store_sql import _main_turn
 
     now = datetime.now(timezone.utc)
-    turn, spans = sample_turn("turn-live", "scn__baseline_v0__MT-001__1", at=now - timedelta(minutes=5))
+    chat = "3f2c1a6e-5b7d-4c8e-9a1f-2b3c4d5e6f70"
+    turn, spans = sample_turn("turn-live", chat, at=now - timedelta(minutes=5))
     await _main_turn(main_scratch, turn, spans)
-    await seed_session(lab_scratch, "scn__baseline_v0__MT-001__1", tag="baseline_v0", turn_ids=("turn-live",),
-                       at=now - timedelta(minutes=5))
+    await seed_session(lab_scratch, chat, tag="chat", turn_ids=("turn-live",), at=now - timedelta(minutes=5))
     assert await runs.sync_sessions(None, now=now) == {"new_questions": 0, "new_runs": 0, "more": False}
     live = await runs.sync_live(None, now=now)
     assert live["new_questions"] == 1
     assert await runs.sync_sessions(None, now=now) == {"new_questions": 0, "new_runs": 0, "more": False}
     assert await _rows(lab_scratch, "SELECT kind FROM tracelab.lab_runs") == [("production",)]
+
+
+async def test_a_scenario_turn_recorded_here_goes_to_its_run_tags_run_at_once_never_a_persons_day(lab_scratch, main_scratch):
+    """Hussain, 13 Nov 2026: live runs keep only what people ask by hand. A scenario session's turn (session id
+    scn__<tag>__<scenario>__<n>) is never the chat's own sync's, so there is nothing to wait an hour for."""
+    from test_trace_lab_eval_store_sql import _main_turn
+
+    now = datetime.now(timezone.utc)
+    turn, spans = sample_turn("turn-scn", "scn__baseline_v0__MT-001__1", at=now - timedelta(minutes=5))
+    await _main_turn(main_scratch, turn, spans)
+    await seed_session(lab_scratch, "scn__baseline_v0__MT-001__1", tag="baseline_v0", turn_ids=("turn-scn",),
+                       at=now - timedelta(minutes=5))
+    assert (await runs.sync_live(None, now=now))["new_questions"] == 0, "not a question of the asker's day"
+    assert await runs.sync_sessions(None, now=now) == {"new_questions": 1, "new_runs": 1, "more": False}
+    assert await _rows(lab_scratch, "SELECT kind, title, source FROM tracelab.lab_runs") == [
+        ("synthetic", "Sessions · baseline_v0", "sync")]
+    assert await runs.sync_sessions(None, now=now) == {"new_questions": 0, "new_runs": 0, "more": False}
+
+
+async def test_the_runs_list_can_show_only_the_runs_made_from_sessions(lab_scratch, main_scratch):
+    """The Runs page's Sessions filter (13 Nov 2026): a run made from a run tag's sessions is synthetic and synced."""
+    import pytest
+
+    from trace_lab.review_errors import Invalid
+
+    await seed_session(lab_scratch, PUSHED, tag="frontend_nov13", turn_ids=("turn-p1",))
+    await runs.sync_sessions(None)
+    batch = await runs.create_run(member(), title="A typed batch", questions=[{"question": "How many floors?"}])
+    listed = await runs.list_runs(member(), kind="sessions")
+    assert [(r["title"], r["kind"], r["source"]) for r in listed["runs"]] == [("Sessions · frontend_nov13", "synthetic", "sync")]
+    assert listed["total"] == 1
+    assert {r["title"] for r in (await runs.list_runs(member(), kind="synthetic"))["runs"]} == {
+        "Sessions · frontend_nov13", "A typed batch"}, "the synthetic filter is unchanged"
+    assert batch and (await runs.list_runs(member(), kind="production"))["runs"] == []
+    with pytest.raises(Invalid):
+        await runs.list_runs(member(), kind="everything")
 
 
 async def test_the_question_of_a_copied_turn_opens_on_its_stored_trace(lab_scratch, main_scratch):

@@ -39,8 +39,10 @@ def synced(monkeypatch):
     monkeypatch.setattr(runs, "sync_live", sync_live)
     monkeypatch.setattr(eval_store, "ingest_from_main", ingest_from_main)
     monkeypatch.delenv("TRACE_LAB_AUTO_SYNC_CHAT_SESSIONS", raising=False)
+    monkeypatch.delenv("TRACE_LAB_AUTO_SYNC_SCENARIO_SESSIONS", raising=False)
     autosync.STATUS.update(last_ok=None, last_error=None, last_new_questions=0, sessions_ok=None,
-                           last_new_sessions=0, sessions_error=None)
+                           last_new_sessions=0, sessions_error=None, scenario_sessions_ok=None,
+                           last_new_scenario_sessions=0, scenario_sessions_error=None)
     return calls, replies
 
 
@@ -57,11 +59,22 @@ def test_one_round_syncs_the_chat_to_runs_and_to_sessions(synced):
     assert status["sessions_ok"] is True and status["last_new_sessions"] == 1
 
 
-def test_scenario_sessions_are_left_to_the_person_who_reads_them_in(synced):
-    """A scenario is filed when its whole conversation has been asked; the round never files one half-asked."""
+def test_scenario_sessions_are_filed_by_the_round_too_and_can_be_left_to_the_button(synced, monkeypatch):
+    """Hussain, 13 Nov 2026 ("it all should be synced"): the round files scenario sessions as well, in a read of its
+    own; a turn that arrives later is added to its session by a later round. One setting leaves them to the person
+    who presses Read new sessions, as before."""
     calls, _ = synced
-    asyncio.run(autosync.tick())
-    assert all(kw["scenarios"] is False for kw in calls["sessions"])
+    now = datetime(2026, 11, 13, 9, 0, tzinfo=timezone.utc)
+    status = asyncio.run(autosync.tick(now))
+    scenario = [kw for kw in calls["sessions"] if kw["scenarios"]]
+    assert len(scenario) == 1 and scenario[0]["chat"] is False
+    assert scenario[0]["since"] == now - timedelta(hours=autosync.SESSIONS_HOURS)
+    assert status["scenario_sessions_ok"] is True and status["last_new_scenario_sessions"] == 1
+    calls["sessions"].clear()
+    monkeypatch.setenv("TRACE_LAB_AUTO_SYNC_SCENARIO_SESSIONS", "0")
+    status = asyncio.run(autosync.tick(now))
+    assert all(kw["scenarios"] is False for kw in calls["sessions"]), "the chat read alone"
+    assert status["scenario_sessions_ok"] is None and status["last_new_scenario_sessions"] == 0
 
 
 def test_a_failure_filing_sessions_does_not_fail_the_questions_sync(synced):
@@ -77,7 +90,8 @@ def test_a_failure_syncing_questions_does_not_stop_the_sessions(synced):
     replies["runs"] = RuntimeError("the chat database did not answer")
     status = asyncio.run(autosync.tick())
     assert status["last_ok"] is False
-    assert len(calls["sessions"]) == 1 and status["sessions_ok"] is True
+    assert len(calls["sessions"]) == 2 and status["sessions_ok"] is True, "the chat read and the scenario read"
+    assert status["scenario_sessions_ok"] is True
 
 
 @pytest.mark.parametrize("value", ["0", "false", "off", "no"])
@@ -85,7 +99,7 @@ def test_the_sessions_part_can_be_turned_off(synced, monkeypatch, value):
     calls, _ = synced
     monkeypatch.setenv("TRACE_LAB_AUTO_SYNC_CHAT_SESSIONS", value)
     asyncio.run(autosync.tick())
-    assert calls["runs"] == [None] and calls["sessions"] == []
+    assert calls["runs"] == [None] and [kw for kw in calls["sessions"] if kw["chat"]] == [], "no chat read"
 
 
 def test_the_button_and_the_round_look_back_the_same_week():
@@ -129,7 +143,7 @@ def test_the_round_also_makes_questions_of_sessions_the_chat_here_never_recorded
     assert [org for org, _kw in calls["session_runs"]] == [None]            # every company
     assert status["session_runs_ok"] is True and status["last_session_questions"] == 3
     # after the chat's own sync, so a turn the chat recorded is already a question of its person's day
-    assert calls["runs"] == [None] and len(calls["sessions"]) == 1
+    assert calls["runs"] == [None] and len(calls["sessions"]) == 2
 
 
 def test_a_backlog_is_worked_through_in_batches(sessions_to_runs):

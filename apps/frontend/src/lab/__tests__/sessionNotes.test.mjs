@@ -54,13 +54,14 @@ const NOTES = { trace_id: 'turn-1', organization_id: 'org-1', me: 'me',
 const DATA = { session: { id: 'scn__baseline_v0__MT-001__1', run_tag: 'baseline_v0' }, scenario: null,
   traces: [{ id: 'turn-1', turn_index: 1, input: 'Which certificates expire?', output: 'Two do.', status: 'ok', metadata: {}, scores: {} }] };
 
-test('a turn on the session page carries notes on its spans, a comment box for the turn, and its failure modes', () => {
+test('a turn on the session page carries notes on its spans and a comment box for the turn; its failure modes are hidden for now', () => {
   const out = html(P.SessionBody, { data: DATA, active: 'turn-1', trees: { 'turn-1': { tree: TREE } },
     notes: { 'turn-1': NOTES }, labels: { 'turn-1': LABELS }, onTab() {}, me: { user_id: 'me' } });
   assert.ok(out.includes('Asked about B-301, answered about B-302.'), 'a note on the question message shows under chat');
   assert.match(out, /aria-label="Add note on Input · chat"/);
   assert.ok(out.includes('Comment on this turn as a whole') && out.includes('The whole turn missed the point.'));
-  assert.match(out, /aria-label="Failure modes in this turn"/);
+  assert.ok(!out.includes('Failure modes in this turn') && !out.includes('>Present<') && !out.includes('>Absent<'),
+    'the failure-mode block is hidden on the session page for now (Hussain, 13 Nov 2026)');
   assert.ok(out.includes('Pick a span, then press Add note under its input or output'));
 });
 
@@ -108,12 +109,19 @@ test('a turn the chat no longer has offers no comment box, and says why', () => 
 });
 
 test('a label error or busy mode belongs to the turn it happened on', () => {
+  // The failure-mode block is hidden on the session page for now (Hussain, 13 Nov 2026), so nothing about a label
+  // shows there, for this turn or another. The block itself still shows its own error and busy mode, and the page
+  // still hands each turn only its own, so the block comes back whole.
   const at = (label) => html(P.SessionBody, { data: DATA, active: 'turn-1', trees: { 'turn-1': { tree: TREE } },
     notes: { 'turn-1': NOTES }, labels: { 'turn-1': LABELS }, label, onTab() {}, me: { user_id: 'me' } });
   assert.ok(!at({ traceId: 'turn-9', busy: null, error: 'Could not save.' }).includes('Could not save.'));
-  assert.ok(at({ traceId: 'turn-1', busy: null, error: 'Could not save.' }).includes('Could not save.'));
-  assert.ok(/disabled=""[^>]*>Present</.test(at({ traceId: 'turn-1', busy: 'm1', error: '' })));
-  assert.ok(!/disabled=""[^>]*>Present</.test(at({ traceId: 'turn-9', busy: 'm1', error: '' })));
+  assert.ok(!at({ traceId: 'turn-1', busy: null, error: 'Could not save.' }).includes('Could not save.'));
+  assert.ok(!at({ traceId: 'turn-1', busy: 'm1', error: '' }).includes('>Present<'));
+  assert.ok(html(P.FailureModes, { data: LABELS, error: 'Could not save.', onSet() {} }).includes('Could not save.'));
+  assert.ok(/disabled=""[^>]*>Present</.test(html(P.FailureModes, { data: LABELS, busy: 'm1', onSet() {} })));
+  const page = src('SessionPage.jsx');
+  assert.ok(page.includes('labelBusy={label && label.traceId === current.id ? label.busy : null}'));
+  assert.ok(page.includes("labelError={label && label.traceId === current.id ? label.error : ''}"));
 });
 
 test('an older link to a run or a question opens Runs, and Sessions keeps its own address', () => {

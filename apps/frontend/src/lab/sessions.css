@@ -80,3 +80,12 @@
 .lab-ses-modes { display: flex; flex-direction: column; gap: 6px; }
 .lab-ses-modes .lab-ses-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .lab-ses-mode { display: flex; flex-direction: column; gap: 4px; }
+
+/* A turn whose expected outcome a reviewer flagged as wrong (12 Nov 2026). */
+.lab-ses-flag { display: flex; flex-direction: column; gap: 6px; }
+.lab-ses-flag > .lab-btn { align-self: flex-start; }
+
+/* Why a turn failed (13 Nov 2026): only the reason, under the answer. */
+.lab-ses-why { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--color-accent-700);
+  border-radius: 8px; background: var(--color-surface); }
+.lab-ses-flagmark { color: var(--color-accent-500, currentColor); font-weight: 600; }

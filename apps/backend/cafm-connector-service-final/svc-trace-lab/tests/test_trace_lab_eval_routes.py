@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 
 from eval_fixtures import ORG, member
 from trace_lab import app as app_module
-from trace_lab import (db, eval_judges, eval_store, routes_eval, routes_runs, scenario_file, scores, spec_doc, sync_push,
-                       trace_labels)
+from trace_lab import (db, eval_judges, eval_store, expected_flags, routes_eval, routes_runs, scenario_file, scores, spec_doc,
+                       sync_push, trace_labels)
 from trace_lab.review_errors import Forbidden, NotFound
 
 B = "/api/trace-lab"
@@ -32,6 +32,8 @@ PATHS = {
     ("POST", "/eval/evaluate"), ("PUT", "/eval/traces/{trace_id}/scores/{level}"), ("GET", "/eval/compare"),
     ("GET", "/eval/traces/{trace_id}/notes"), ("GET", "/eval/traces/{trace_id}/labels"),
     ("PUT", "/eval/traces/{trace_id}/labels/{mode}"),
+    ("GET", "/eval/traces/{trace_id}/expected-flag"), ("PUT", "/eval/traces/{trace_id}/expected-flag"),
+    ("GET", "/eval/labels"),
 }
 
 
@@ -266,7 +268,7 @@ def test_a_push_says_how_many_records_went(monkeypatch):
     body = r.json()
     assert body["ok"] is True and body["pushed"]["sessions"] == 250
     assert body["line"] == ("Pushed to db.example.com/hoist_tracelab: 250 sessions, 312 traces, 9,804 spans, "
-                            "0 scores, 250 scenarios, 1 run tag, 0 spec sections.")
+                            "0 scores, 0 expected-outcome flags, 250 scenarios, 1 run tag, 0 spec sections.")
     assert calls[0] == ((), {"dry_run": False, "full": True, "by": platform})
 
 
@@ -387,3 +389,24 @@ def test_the_ordinary_read_does_not_ask_for_chat_questions(client, monkeypatch):
     calls = _record(monkeypatch, eval_store, "ingest_from_main", {"sessions": 0})
     assert client.post(f"{B}/eval/ingest", json={}).status_code == 200
     assert "chat" not in calls[0][1]
+
+
+def test_a_reviewer_reads_and_sets_a_turns_expected_outcome_flag(client, who, monkeypatch):
+    got = _record(monkeypatch, expected_flags, "flags_of", {"trace_id": "turn-1", "flagged": False, "mine": False, "flags": []})
+    r = client.get(f"{B}/eval/traces/turn-1/expected-flag")
+    assert r.status_code == 200 and r.json()["flagged"] is False and got[0][0] == (who, "turn-1")
+    put = _record(monkeypatch, expected_flags, "set_flag", {"trace_id": "turn-1", "flagged": True, "at": None})
+    r = client.put(f"{B}/eval/traces/turn-1/expected-flag", json={"flagged": True, "comment": "Wrong band."})
+    assert r.status_code == 200 and r.json()["flag"]["flagged"] is True
+    assert put[0] == ((who, "turn-1"), {"flagged": True, "comment": "Wrong band."})
+    assert client.put(f"{B}/eval/traces/turn-1/expected-flag", json={"flagged": True, "comment": "x" * 2001}).status_code == 422
+
+
+def test_the_labels_page_reads_a_run_tags_sessions_as_one_grid(client, who, monkeypatch):
+    grid = {"run": {"code": "baseline_v0", "title": "Sessions", "kind": "sessions"}, "questions": [], "modes": [],
+            "cells": {}, "last_updated": None, "me": "u"}
+    got = _record(monkeypatch, trace_labels, "tag_matrix", grid)
+    r = client.get(f"{B}/eval/labels", params={"run_tag": "baseline_v0"})
+    assert r.status_code == 200 and r.json() == {"ok": True, **grid} and got[0][0] == (who, "baseline_v0")
+    assert client.get(f"{B}/eval/labels").status_code == 422, "a run tag is needed"
+    assert client.get(f"{B}/eval/labels", params={"run_tag": "x" * 41}).status_code == 422

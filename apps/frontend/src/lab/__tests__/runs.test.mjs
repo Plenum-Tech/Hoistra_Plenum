@@ -178,3 +178,17 @@ test('a question whose answer was asked on another machine shows its stored trac
   // an answer the chat here recorded says nothing of the kind
   assert.ok(!html(Q.QuestionView, { data: DATA2, tree: TREE_OK }).includes('copied into Trace Lab'));
 });
+
+// ── Sessions in Runs (13 Nov 2026): Synthetic is gone from the filter; the runs made from sessions say "sessions" ────
+test('runs: the filter is All, Sessions and Live; Synthetic is gone', () => {
+  assert.deepEqual(R.KINDS.map((k) => k[1]), ['All', 'Sessions', 'Live']);
+  assert.deepEqual(R.KINDS.map((k) => k[0]), ['', 'sessions', 'production'], 'what the service is asked for');
+});
+
+test("runs: a run made from a run tag's sessions says sessions and synced, never synthetic", () => {
+  const out = html(R.RunsList, { runs: [
+    { code: 'R60', title: 'Sessions · hussain_5q_v0', kind: 'synthetic', source: 'sync', n_questions: 8, n_traced: 8 },
+    { code: 'R3', title: 'Certificates batch', kind: 'synthetic', source: 'coding_agent', n_questions: 12 }], onOpen() {} });
+  assert.ok(out.includes('Sessions · hussain_5q_v0') && out.includes('>sessions<') && out.includes('>synced<'));
+  assert.equal((out.match(/>synthetic</g) || []).length, 1, 'only the typed batch is synthetic');
+});

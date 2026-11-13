@@ -34,7 +34,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from . import conversations, db, eval_store, labelling, runs, spec_doc
+from . import conversations, db, eval_store, expected_flags, labelling, runs, spec_doc
 from .review_errors import Invalid
 
 TYPES = ("single_domain", "multi_domain", "multi_turn", "failure")
@@ -363,7 +363,17 @@ async def list_scenarios(m: labelling.Member, *, type: str | None = None, sectio
     specification that have changed since that version was written."""
     labelling.require_active(m)
     async with conversations._lab_read() as conn:
-        return await latest(conn, type=type, section=section, status=status, org_scope=_visible(m), stale=stale)
+        rows = await latest(conn, type=type, section=section, status=status, org_scope=_visible(m), stale=stale)
+        # How many turns asked with each scenario's current version have their expected outcome flagged as wrong (in
+        # the sessions the caller may see): a corrected version starts at 0.
+        scope, p = runs._scope(m, "ss")
+        flagged = {(r[0], r[1]): int(r[2]) for r in (await conn.execute(text(
+            "SELECT ss.scenario_id, ss.scenario_version, count(*) FROM tracelab.traces t"
+            f" JOIN tracelab.sessions ss ON ss.id = t.session_id WHERE {scope} AND {expected_flags.flagged_sql('t')}"
+            " GROUP BY 1, 2"), p)).all()}
+    for row in rows:
+        row["expected_flagged"] = flagged.get((row["scenario_id"], row["version"]), 0)
+    return rows
 
 
 def _stamped(row: Mapping[str, Any], spec_version: str | None, hashes: Mapping[str, str]) -> dict[str, Any]:

@@ -15,7 +15,9 @@ import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
 import RunsPage from './Runs.jsx';
 import Sessions from './Sessions.jsx';
-import Synthetic from './Synthetic.jsx';
+// Synthetic is commented out (13 Nov 2026, Hussain): sessions take its place. Put this line, the menu item and the
+// page line below back to bring it back.
+// import Synthetic from './Synthetic.jsx';
 import { readInstance, writeInstance } from './Instances.jsx';
 import LabelsView from './LabelsView.jsx';
 import ProgressView from './ProgressView.jsx';
@@ -37,7 +39,7 @@ export function navFor(me) {
   // the work happens in: read a run, leave notes on it, then see what the notes add up to.
   // Sessions (11 Nov 2026) comes first: the scenario conversations, a trace per turn, noted and labelled. Runs follows
   // it: the questions people ask by hand, synced from the chat as one run per person per day.
-  const items = [['sessions', 'Sessions'], ['runs', 'Runs'], ['synthetic', 'Synthetic'], ['labels', 'Labels'],
+  const items = [['sessions', 'Sessions'], ['runs', 'Runs'], /* ['synthetic', 'Synthetic'], */ ['labels', 'Labels'],
     ['progress', 'Progress'], ['loop', 'Loop'], ['notes', 'Notes'], ['learning', 'Learning']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
@@ -275,6 +277,16 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const [focus, setFocus] = React.useState(null);
   const pickRun = (code) => { setRun(code); setQuestion(null); setFocus(null); };
   const pickQuestion = (code) => { setFocus(null); setQuestion(code); };
+  // A session row on the Labels page opens that session on the Sessions page, which reads ?session= when it opens.
+  const openSession = (id) => {
+    if (!id) return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      q.set('session', id);
+      window.history.replaceState(null, '', window.location.pathname + '?' + q.toString());
+    } catch (e) { /* the address is a convenience */ }
+    onView('sessions');
+  };
   const openQuestion = (code, at) => {
     const r = runOf(code); if (!r) return;
     setRun(r); setQuestion(code);
@@ -321,9 +333,9 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
         {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion}
           focus={focus && focus.code === question ? focus : null}
           onOpenLoop={() => onView('loop')} /> : null}
-        {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null}
+        {/* Commented out (13 Nov 2026): {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null} */}
         {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} onOpenQuestion={openQuestion}
-          onOpenLoop={() => onView('loop')} /> : null}
+          onOpenSession={openSession} onOpenLoop={() => onView('loop')} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'loop' ? <Loop me={me} runs={runs} run={run} onOpenQuestion={openQuestion} /> : null}
         {current === 'notes' ? <Notes me={me} onOpenQuestion={openQuestion} /> : null}

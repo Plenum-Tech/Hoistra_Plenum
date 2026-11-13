@@ -41,7 +41,7 @@ from sqlalchemy import text
 
 from src.agents import langfuse_export as lf
 
-from . import conversations, db, labelling, runs, scores, spec_doc, trace_tree
+from . import conversations, db, expected_flags, labelling, runs, scores, spec_doc, trace_tree
 from .review_errors import Invalid, NotFound
 
 TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
@@ -482,7 +482,9 @@ _SESSION_STATS = (
     "(SELECT count(*) FROM tracelab.traces t WHERE t.session_id = s.id) AS turns,"
     " (EXISTS (SELECT 1 FROM tracelab.traces t WHERE t.session_id = s.id AND t.status <> 'ok')"
     "  OR EXISTS (SELECT 1 FROM tracelab.observations o JOIN tracelab.traces t ON t.id = o.trace_id"
-    "             WHERE t.session_id = s.id AND o.level = 'ERROR')) AS failed")
+    "             WHERE t.session_id = s.id AND o.level = 'ERROR')) AS failed,"
+    f" (SELECT count(*) FROM tracelab.traces t WHERE t.session_id = s.id AND {expected_flags.flagged_sql('t')})"
+    " AS expected_flagged")
 
 
 def _stats(spec_version: str | None) -> str:
@@ -512,6 +514,7 @@ def _session_out(r: Mapping[str, Any]) -> dict[str, Any]:
         out["turns"] = int(r["turns"] or 0)
         out["status"] = "failed" if r["failed"] else "ok"
         out["stale"] = bool(r["stale"])
+        out["expected_flagged"] = int(r.get("expected_flagged") or 0)
     return out
 
 
@@ -629,8 +632,12 @@ async def get_session(m: labelling.Member, session_id: str) -> dict[str, Any]:
                       {"id": session_id, "org": row["organization_id"]})).mappings().all()]
         ids = [t["id"] for t in traces]
         current, past = await scores.current_scores(conn, ids), await scores.history(conn, ids)
+        flags = await expected_flags.flagged_traces(conn, ids)
         for t in traces:
             t["scores"], t["score_history"] = current[t["id"]], past[t["id"]]
+            f = flags.get(t["id"]) or {}
+            t["expected_flag"] = {"flagged": bool(f), "count": int(f.get("count") or 0),
+                                  "mine": str(m.user_id) in (f.get("people") or [])}
     return {"session": _session_out(row), "scenario": scenario, "traces": traces}
 
 

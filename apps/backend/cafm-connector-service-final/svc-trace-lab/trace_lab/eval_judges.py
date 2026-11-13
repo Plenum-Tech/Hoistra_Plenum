@@ -31,7 +31,7 @@ from typing import Any
 import structlog
 from sqlalchemy import text
 
-from . import conversations, db, eval_logic, eval_store, labelling, proposals, runs, scores, spec_doc
+from . import conversations, db, eval_logic, eval_store, expected_flags, labelling, proposals, runs, scores, spec_doc
 from .review_errors import Conflict, Forbidden, Invalid
 
 log = structlog.get_logger(__name__)
@@ -281,12 +281,13 @@ async def _load(m: labelling.Member, run_tag: str) -> dict[str, Any]:
                                                                              "spec_hashes")},
                                   "spec_sections": list(row["spec_sections"] or [])}
         _version, hashes = await spec_doc.current_hashes(conn)
+        flagged = set(await expected_flags.flagged_traces(conn, [t["id"] for t in traces]))
         spent = float((await conn.execute(text(
             "SELECT coalesce(sum((k.details->>'usd')::numeric), 0) FROM tracelab.scores k"
             " JOIN tracelab.sessions s ON s.id = k.session_id WHERE k.source = 'EVAL' AND s.run_tag = :tag"),
             {"tag": run_tag})).scalar() or 0)
     return {"sessions": {s["id"]: s for s in sessions}, "order": ids, "traces": traces, "done": done,
-            "scenarios": scenarios, "hashes": hashes, "spent": spent}
+            "scenarios": scenarios, "hashes": hashes, "spent": spent, "flagged": flagged}
 
 
 def _asked(text_: Any) -> str:
@@ -371,6 +372,8 @@ async def _one_pass(m: labelling.Member, run_tag: str, wanted: tuple[str, ...], 
             why_not = "no_scenario"
         elif expected is None:
             why_not = "no_expected_for_turn"
+        elif trace["id"] in data["flagged"]:
+            why_not = "expected_flagged"        # a reviewer says the expected outcome itself is wrong
         elif _asked(trace["input"]) != _asked(turn.get("message")):
             why_not = "question_differs"
         elif scenario.get("faults") and not any(c["failed"] for c in eval_logic.tool_calls(nodes)):

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { bundle, cleanBundles } from '../../tracelab/__tests__/esbuild-helper.mjs';
 import { LEVELS, evaluateLevels, evaluateStep, evaluateText, ingestText, planLines, scoreSummary, sessionQuery, sessionRow,
-  sessionTitle, turnTabs, verdictText } from '../logic/sessions.js';
+  sessionTitle, turnTabs, verdictText, failureReasons } from '../logic/sessions.js';
 
 globalThis.window = globalThis.window || { location: { origin: 'http://test.local', pathname: '/lab/', search: '' }, history: { replaceState: () => {} } };
 after(cleanBundles);
@@ -139,9 +139,44 @@ test('the session header and the scenario: Langfuse\'s words, the run tag, and t
   assert.ok(out.includes('MT-001') && out.includes('version 2'));
   assert.ok(out.includes('Expected outcome'));
   assert.ok(out.includes('c2 · list_certificates (compliance) · after c1'));
-  assert.ok(out.includes('Partial success'), 'the answer format in words');
-  assert.ok(out.includes('Partial failure') && out.includes('c2'), 'how the failure must be handled');
+  assert.ok(!out.includes('Answer format') && !out.includes('Partial success'), 'the answer format is hidden (13 Nov 2026)');
+  assert.ok(!out.includes('Failure handling') && !out.includes('Partial failure'), 'the failure handling is hidden (13 Nov 2026)');
   assert.ok(out.includes('WO-B-301-4551'), 'what the answer must include');
+});
+
+test('a failure scenario is not labelled "Failure" on the session page: that word is only for a turn that failed', () => {
+  const data = { ...DATA, session: { ...SESSION, type: 'failure' }, scenario: { ...DATA.scenario, type: 'failure' } };
+  const out = html(P.SessionBody, { data, active: 'turn-1', trees: {}, onTab() {} });
+  assert.ok(!out.includes('>Failure<'), 'no Failure chip in the header');
+  assert.ok(!out.includes('· Failure'), 'no Failure in the scenario line');
+  assert.ok(!out.includes('Why it failed'), 'turn 1 ended well, so nothing failed');
+});
+
+test('why a turn failed: how the turn ended and each failed step with its reason, never an expected answer', () => {
+  assert.deepEqual(failureReasons({ status: 'ok' }, [{ name: 'plan', ok: true }]), []);
+  assert.deepEqual(failureReasons({ status: 'ok' }, [{ name: 'plan', ok: true }, { name: 'energy_engine', ok: false, error: 'Connection error.' }]),
+    [{ step: 'energy_engine', reason: 'Connection error.' }]);
+  assert.deepEqual(failureReasons({ status: 'timeout' }, null), [{ step: null, reason: 'The turn ended: Timed out' }]);
+  assert.deepEqual(failureReasons({ status: 'ok' }, [{ name: 'lookup', ok: false, error: null }]), [{ step: 'lookup', reason: 'Failed, no reason recorded.' }]);
+  const long = failureReasons({ status: 'ok' }, [{ name: 'db', ok: false, error: 'x'.repeat(500) }])[0].reason;
+  assert.equal(long.length, 301, 'a long error is cut to 300 characters and an ellipsis');
+});
+
+test('a failed turn shows why it failed under its answer, and only the reason', () => {
+  const out = html(P.SessionBody, { data: DATA, active: 'turn-2', trees: {}, onTab() {} });
+  assert.match(out, /aria-label="Why it failed"/);
+  assert.ok(out.includes('The turn ended: Timed out'));
+  assert.ok(!out.includes('A proper answer'), 'no expected answer inside the failure box');
+  const ok = html(P.SessionBody, { data: DATA, active: 'turn-1', trees: {}, onTab() {} });
+  assert.ok(!ok.includes('Why it failed'), 'a turn that ended well shows no failure box');
+});
+
+test('the session page does not show the specification section tags (hidden 13 Nov 2026)', () => {
+  const out = html(P.SessionBody, { data: DATA, active: 'turn-1', trees: {}, onTab() {} });
+  assert.ok(!out.includes('multi_turn_continuity'), 'the scenario\'s section names are not shown');
+  assert.ok(!out.includes('Section of the specification this scenario tests'));
+  const draft = html(P.SessionBody, { data: { ...DATA, scenario: { ...DATA.scenario, status: 'draft' } }, active: 'turn-1', trees: {}, onTab() {} });
+  assert.ok(draft.includes('Expected outcome not approved yet'), 'the approval chip stays');
 });
 
 test('a turn that did not end well says how it ended, and a trace still loading says so', () => {

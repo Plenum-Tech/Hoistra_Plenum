@@ -45,13 +45,14 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Sessions, Runs, Synthetic, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
-  // Sessions first (11 Nov 2026); Runs is back after it for the questions people ask by hand.
-  const WORK = ['sessions', 'runs', 'synthetic', 'labels', 'progress', 'loop', 'notes', 'learning'];
+test('the menu: Sessions, Runs, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
+  // Sessions first (11 Nov 2026); Runs is back after it for the questions people ask by hand. Synthetic is commented
+  // out (13 Nov 2026): sessions take its place.
+  const WORK = ['sessions', 'runs', 'labels', 'progress', 'loop', 'notes', 'learning'];
   assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), WORK);
   assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), WORK.concat(['people']));
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Sessions', 'Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Sessions', 'Runs', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -78,11 +79,12 @@ test('the platform team picks a company only (no platform view) when labelling',
   assert.deepEqual(names, ['Plenum Technologies']);
 });
 
-test('Synthetic is a page of its own, and the lab app renders it', () => {
+test('Synthetic is commented out (13 Nov 2026): not in the menu, not drawn, its page kept to bring back', () => {
   const src = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
-  assert.ok(src.includes("import Synthetic from './Synthetic.jsx'"));
-  assert.ok(src.includes("current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} />"),
-    'the menu names a page nothing draws, so opening it shows nothing');
+  assert.ok(!/^import Synthetic from/m.test(src), 'not imported');
+  assert.ok(src.includes("// import Synthetic from './Synthetic.jsx'"), 'the import is kept, commented');
+  assert.ok(!/^\s*\{current === 'synthetic'/m.test(src), 'not drawn');
+  assert.ok(readFileSync(new URL('../Synthetic.jsx', import.meta.url), 'utf-8').length > 0, 'the page file stays');
 });
 
 test('it asks the service rather than making questions up in the browser', () => {
@@ -250,7 +252,7 @@ test('Learning is a page of its own, and the lab app renders it', () => {
   assert.ok(app.includes("current === 'learning' ? <Learning"),
     'the menu names a page nothing draws, so opening it shows nothing');
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Sessions', 'Runs', 'Synthetic', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Sessions', 'Runs', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
 });
 
 test('the draft comes from the service, not from the browser', () => {

@@ -85,15 +85,15 @@ type anything.
 ```sh
 docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate status
 docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate plan
-docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0015 --applied-by YOURNAME --dry-run
-docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0015 --applied-by YOURNAME
+docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0016 --applied-by YOURNAME --dry-run
+docker exec -it hoistra_plenum-trace-lab-1 python -m trace_lab.migrate apply --expect-db hoist_tracelab --through 0016 --applied-by YOURNAME
 ```
 
 * `status` and `plan` only read. `status` prints the state as JSON and exits 0 only when it is `ready`.
 * `apply` needs an interactive terminal: it asks you to type the database name (`hoist_tracelab`) and refuses
   without a TTY. With `docker compose exec` never pass `-T`, which removes the terminal.
 * `--dry-run` runs the files in a transaction and rolls back. Do it first.
-* `--expect-db` must equal the database the container is connected to, or it refuses. `--through 0015` is the last
+* `--expect-db` must equal the database the container is connected to, or it refuses. `--through 0016` is the last
   file in `svc-trace-lab/migrations/`; `--applied-by` is recorded in the ledger as `cli:YOURNAME`.
 * After a real apply it prints `SHIPPED_CHECKSUMS` lines. Send them to a developer to add to
   `trace_lab/migrate.py`: that is a code change after the run, not part of it.
@@ -250,6 +250,11 @@ already recorded, and it can be copied from one Trace Lab database to another.
 Migration 0015 (11 Nov 2026) adds `trace_label_cells`: a person's failure-mode label (present or absent) on one trace,
 written on the session page. It is not pushed to the development instance yet: a label names its failure mode, and
 the failure modes are numbered per database and not pushed, so a pushed label would show nowhere there.
+
+Migration 0016 (12 Nov 2026) adds `expected_flags`: a reviewer reading a turn says its expected outcome is wrong (the
+scenario needs correcting, not the answer). Append-only; each person's newest row is their flag. A flagged turn is not
+scored, Compare shows its scenario as not counted, and the Scenarios view says it needs correcting until a corrected
+version of the scenario is stored. Flags are pushed to the development instance with the scores.
 
 **Sessions.** A conversation becomes a session when its chat session id names its run tag and scenario:
 

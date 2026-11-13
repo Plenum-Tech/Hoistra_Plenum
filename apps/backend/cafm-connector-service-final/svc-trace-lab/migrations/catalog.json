@@ -540,6 +540,62 @@
     "type": "text"
    }
   },
+  "expected_flags": {
+   "author_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "author_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "author_role": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "comment": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "flagged": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "trace_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
   "golden_cases": {
    "ask_as": {
     "default": "'company'::text",
@@ -5198,6 +5254,30 @@
    "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
    "type": "c"
   },
+  "expected_flags.ck_tl_expected_flags_author": {
+   "def": "CHECK (((author_id IS NOT NULL) OR (author_email IS NOT NULL)))",
+   "type": "c"
+  },
+  "expected_flags.expected_flags_author_email_check": {
+   "def": "CHECK (((author_email IS NULL) OR (char_length(author_email) <= 320)))",
+   "type": "c"
+  },
+  "expected_flags.expected_flags_author_role_check": {
+   "def": "CHECK (((author_role IS NULL) OR (char_length(author_role) <= 40)))",
+   "type": "c"
+  },
+  "expected_flags.expected_flags_comment_check": {
+   "def": "CHECK (((comment IS NULL) OR (char_length(comment) <= 2000)))",
+   "type": "c"
+  },
+  "expected_flags.expected_flags_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "expected_flags.expected_flags_trace_id_fkey": {
+   "def": "FOREIGN KEY (trace_id) REFERENCES tracelab.traces(id)",
+   "type": "f"
+  },
   "golden_cases.golden_cases_ask_as_check": {
    "def": "CHECK ((ask_as = 'company'::text))",
    "type": "c"
@@ -7099,6 +7179,10 @@
    "def": "CREATE UNIQUE INDEX evidence_turns_pkey ON tracelab.evidence_turns USING btree (turn_id)",
    "table": "evidence_turns"
   },
+  "expected_flags_pkey": {
+   "def": "CREATE UNIQUE INDEX expected_flags_pkey ON tracelab.expected_flags USING btree (id)",
+   "table": "expected_flags"
+  },
   "golden_cases_pkey": {
    "def": "CREATE UNIQUE INDEX golden_cases_pkey ON tracelab.golden_cases USING btree (id)",
    "table": "golden_cases"
@@ -7246,6 +7330,10 @@
   "ix_tl_batches_org_time": {
    "def": "CREATE INDEX ix_tl_batches_org_time ON tracelab.sample_batches USING btree (organization_id, created_at DESC)",
    "table": "sample_batches"
+  },
+  "ix_tl_expected_flags_trace": {
+   "def": "CREATE INDEX ix_tl_expected_flags_trace ON tracelab.expected_flags USING btree (trace_id, created_at DESC)",
+   "table": "expected_flags"
   },
   "ix_tl_items_turn_only": {
    "def": "CREATE INDEX ix_tl_items_turn_only ON tracelab.sample_items USING btree (turn_id)",
@@ -7784,6 +7872,7 @@
   "eval_cases",
   "evidence_spans",
   "evidence_turns",
+  "expected_flags",
   "golden_cases",
   "golden_results",
   "golden_reveals",
@@ -7841,6 +7930,8 @@
   "evidence_spans.evidence_spans_truncate": "CREATE TRIGGER evidence_spans_truncate BEFORE TRUNCATE ON tracelab.evidence_spans FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "evidence_turns.evidence_turns_rows": "CREATE TRIGGER evidence_turns_rows BEFORE DELETE OR UPDATE ON tracelab.evidence_turns FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "evidence_turns.evidence_turns_truncate": "CREATE TRIGGER evidence_turns_truncate BEFORE TRUNCATE ON tracelab.evidence_turns FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "expected_flags.expected_flags_append_only": "CREATE TRIGGER expected_flags_append_only BEFORE DELETE OR UPDATE ON tracelab.expected_flags FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "expected_flags.expected_flags_no_truncate": "CREATE TRIGGER expected_flags_no_truncate BEFORE TRUNCATE ON tracelab.expected_flags FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "golden_cases.golden_cases_rows": "CREATE TRIGGER golden_cases_rows BEFORE DELETE OR UPDATE ON tracelab.golden_cases FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "golden_cases.golden_cases_truncate": "CREATE TRIGGER golden_cases_truncate BEFORE TRUNCATE ON tracelab.golden_cases FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
   "golden_reveals.golden_reveals_rows": "CREATE TRIGGER golden_reveals_rows BEFORE DELETE OR UPDATE ON tracelab.golden_reveals FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
@@ -7915,5 +8006,5 @@
   "traces.traces_append_only": "CREATE TRIGGER traces_append_only BEFORE DELETE OR UPDATE ON tracelab.traces FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
   "traces.traces_no_truncate": "CREATE TRIGGER traces_no_truncate BEFORE TRUNCATE ON tracelab.traces FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()"
  },
- "version": 15
+ "version": 16
 }

@@ -59,7 +59,7 @@ async def test_catalog_snapshot_matches_the_files(lab_scratch):
                                    "lab_reviews", "lab_spec_versions", "lab_corrections", "lab_regression_runs",
                                    "lab_frontend_events",
                                    "run_tags", "spec_sections", "scenarios", "sessions", "traces", "observations",
-                                   "scores", "sync_log", "trace_label_cells"}
+                                   "scores", "sync_log", "trace_label_cells", "expected_flags"}
     assert set(live["functions"]) == {"refuse_change()", "supersede_only()", "judge_splits_guard()", "judges_guard()",
                                       "judges_examples_from_train()", "judge_predictions_guard()",
                                       "judge_runs_guard()", "monitor_verdicts_guard()", "question_id(code text)"}

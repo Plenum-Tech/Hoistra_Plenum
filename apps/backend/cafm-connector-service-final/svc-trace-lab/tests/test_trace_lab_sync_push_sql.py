@@ -18,7 +18,7 @@ from sqlalchemy.pool import NullPool
 
 from eval_fixtures import T0, member, seed_score, seed_session
 from tl_scratch import SCRATCH_URL, lab_scratch, requires_scratch  # noqa: F401
-from trace_lab import migrate, runs, scenario_file, scenario_gen, sync_push, trace_labels
+from trace_lab import expected_flags, migrate, runs, scenario_file, scenario_gen, sync_push, trace_labels
 
 pytestmark = requires_scratch
 
@@ -211,7 +211,7 @@ async def test_a_database_on_another_migration_is_refused_and_says_which(lab_scr
     with pytest.raises(sync_push.Refused) as e:
         await sync_push.push()
     assert e.value.reason == "schema_version"
-    assert e.value.error == "The dev database is on schema 13 and this one is on 15. Apply the same migrations to both, then push again."
+    assert e.value.error == "The dev database is on schema 13 and this one is on 16. Apply the same migrations to both, then push again."
 
 
 async def test_the_address_and_its_password_are_never_written_or_returned(lab_scratch, dest):
@@ -312,3 +312,14 @@ async def test_failure_mode_labels_on_traces_are_not_pushed_until_their_modes_tr
     assert "label" not in sync_push.summary_line(out)
     async with dest.connect() as c:
         assert (await c.execute(text("SELECT count(*) FROM tracelab.trace_label_cells"))).scalar_one() == 0
+
+
+async def test_expected_outcome_flags_are_pushed_with_their_traces(lab_scratch, dest):
+    await _seed(lab_scratch)
+    await expected_flags.set_flag(member(), "turn-1", flagged=True, comment="The expected list is wrong.")
+    out = await sync_push.push()
+    assert out["status"] == "done" and out["pushed"]["expected_flags"] == 1, out["error"]
+    assert "1 expected-outcome flag" in sync_push.summary_line(out)
+    async with dest.connect() as c:
+        got = (await c.execute(text("SELECT trace_id, flagged, comment FROM tracelab.expected_flags"))).all()
+    assert [tuple(r) for r in got] == [("turn-1", True, "The expected list is wrong.")]

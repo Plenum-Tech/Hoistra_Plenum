@@ -17,6 +17,22 @@ export const FAILURE_TEXT = Object.freeze({ partial_failure: 'Partial failure', 
   not_recorded: 'Not recorded', unavailable: 'Unavailable', tool_failed: 'Tool failed' });
 const VERDICT_TEXT = Object.freeze({ pass: 'Pass', fail: 'Fail', not_evaluated: 'Not evaluated' });
 
+// Why a turn failed (13 Nov 2026): how the turn ended when it did not end well, then each step of its trace that failed
+// with the reason recorded for it. Only the reason: never an expected or "proper" answer. Empty when nothing failed.
+const REASON_MAX = 300;
+export function failureReasons(trace, nodes) {
+  const out = [];
+  const status = trace && trace.status;
+  if (status && status !== 'ok') out.push({ step: null, reason: 'The turn ended: ' + (TRACE_STATUS_TEXT[status] || status) });
+  (Array.isArray(nodes) ? nodes : []).forEach((n) => {
+    if (!n || n.ok !== false) return;
+    const said = String(n.error || '').trim();
+    out.push({ step: n.name || n.kind || 'A step',
+      reason: !said ? 'Failed, no reason recorded.' : said.length > REASON_MAX ? said.slice(0, REASON_MAX) + '…' : said });
+  });
+  return out;
+}
+
 const plural = (n, one, many) => (Number(n) || 0) + ' ' + (Number(n) === 1 ? one : many);
 
 export function verdictText(v) {
@@ -41,7 +57,8 @@ export function sessionQuery(filters) {
 export function turnTabs(traces) {
   return (Array.isArray(traces) ? traces.slice() : [])
     .sort((a, b) => (Number(a.turn_index) || 0) - (Number(b.turn_index) || 0))
-    .map((t) => ({ key: 'turn-' + t.turn_index, label: 'Turn ' + t.turn_index, traceId: t.id, status: t.status || 'ok' }));
+    .map((t) => ({ key: 'turn-' + t.turn_index, label: 'Turn ' + t.turn_index, traceId: t.id, status: t.status || 'ok',
+      flagged: !!(t.expected_flag && t.expected_flag.flagged) }));
 }
 
 const at = (row) => Date.parse((row && row.created_at) || '') || 0;
@@ -84,6 +101,7 @@ export function sessionRow(s) {
     id: x.id, title: sessionTitle(x), runTag: x.run_tag || '', origin: x.origin || '', attempt: Number(x.attempt) || 1,
     type: TYPE_TEXT[x.type] || '—', turns: plural(x.turns, 'turn', 'turns'),
     status: STATUS_TEXT[x.status] || '—', failed: x.status === 'failed', when: x.started_at || null,
+    expectedFlagged: Number(x.expected_flagged) || 0,
     levels: LEVELS.map((key) => {
       const sc = scores[key] || null;
       return { key, name: LEVEL_TEXT[key], verdict: sc ? sc.verdict : null, text: verdictText(sc && sc.verdict), source: sc ? sc.source : null };
@@ -142,7 +160,8 @@ export function scoreLines(level, score) {
 
 // ── two run tags side by side ─────────────────────────────────────────────────────────────────────────────
 
-export const CHANGE_TEXT = Object.freeze({ fixed: 'Fixed', regressed: 'Regressed', same: 'Same', changed: 'Changed', new: 'New', missing: 'Not asked' });
+export const CHANGE_TEXT = Object.freeze({ fixed: 'Fixed', regressed: 'Regressed', same: 'Same', changed: 'Changed', new: 'New', missing: 'Not asked',
+  not_counted: 'Not counted (expected outcome flagged)' });
 
 export function compareView(out) {
   if (!out || !out.summary) return { summary: [], rows: [] };
@@ -151,7 +170,8 @@ export function compareView(out) {
   const summary = LEVELS.map((level) => {
     const c = s[level] || {};
     return LEVEL_TEXT[level] + ': ' + n(c.fixed) + ' fixed, ' + n(c.regressed) + ' regressed, ' + n(c.same) + ' the same'
-      + (n(c.changed) ? ', ' + n(c.changed) + ' changed in another way' : '');
+      + (n(c.changed) ? ', ' + n(c.changed) + ' changed in another way' : '')
+      + (n(c.not_counted) ? ', ' + n(c.not_counted) + ' not counted (expected outcome flagged)' : '');
   });
   const words = s.answer_words || {};
   const count = s.sessions || {};
@@ -179,7 +199,8 @@ export function scenarioRow(s) {
   return { id: x.scenario_id, version: x.version, type: TYPE_TEXT[x.type] || '—', sections: Array.isArray(x.spec_sections) ? x.spec_sections : [],
     status: SCENARIO_STATUS[x.status] || '—', turns: plural(Array.isArray(x.turns) ? x.turns.length : 0, 'turn', 'turns'),
     stale: stale.length > 0, staleText: stale.length ? 'Out of date: ' + stale.join(', ') + ' changed' : '',
-    opening: Array.isArray(x.turns) && x.turns[0] ? x.turns[0].message || '' : '' };
+    opening: Array.isArray(x.turns) && x.turns[0] ? x.turns[0].message || '' : '',
+    expectedFlagged: Number(x.expected_flagged) || 0 };
 }
 
 // Which levels a person may evaluate. The user-experience and domain judges call a model and cost money, so they are

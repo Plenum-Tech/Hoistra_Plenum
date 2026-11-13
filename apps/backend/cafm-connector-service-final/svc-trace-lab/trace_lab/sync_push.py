@@ -50,12 +50,14 @@ ENV = "DEV_DB_URL"
 #: Failure-mode labels on traces (trace_label_cells, migration 0015) are NOT pushed: a label names its mode by lineage,
 #: and the modes themselves (lab_failure_modes) are numbered per database and not pushed, so on the dev database a
 #: pushed label would point at a mode it does not have and never show. They join this list when the modes travel too.
-TABLES = ("run_tags", "spec_sections", "scenarios", "sessions", "traces", "observations", "scores")
+TABLES = ("run_tags", "spec_sections", "scenarios", "sessions", "traces", "observations", "scores", "expected_flags")
 PKS = {"run_tags": ("tag",), "spec_sections": ("spec_version", "section_id"), "scenarios": ("scenario_id", "version"),
-       "sessions": ("id",), "traces": ("id",), "observations": ("trace_id", "id"), "scores": ("id",)}
+       "sessions": ("id",), "traces": ("id",), "observations": ("trace_id", "id"), "scores": ("id",),
+       "expected_flags": ("id",)}
 #: What a person calls each table's rows, in the order the summary names them. Observations are "spans".
 LABELS = (("sessions", "session", "sessions"), ("traces", "trace", "traces"), ("observations", "span", "spans"),
-          ("scores", "score", "scores"), ("scenarios", "scenario", "scenarios"), ("run_tags", "run tag", "run tags"),
+          ("scores", "score", "scores"), ("expected_flags", "expected-outcome flag", "expected-outcome flags"),
+          ("scenarios", "scenario", "scenarios"), ("run_tags", "run tag", "run tags"),
           ("spec_sections", "spec section", "spec sections"))
 #: Columns that only say when a row was made and by which machine or person. The same row made on two machines
 #: differs in these and in nothing else, so they are left out when two rows are compared.
@@ -71,6 +73,7 @@ PARENTS: dict[str, tuple[tuple[tuple[str, ...], str, tuple[str, ...]], ...]] = {
     "traces": ((("session_id",), "sessions", ("id",)),),
     "observations": ((("trace_id",), "traces", ("id",)),),
     "scores": ((("trace_id",), "traces", ("id",)), (("session_id",), "sessions", ("id",))),
+    "expected_flags": ((("trace_id",), "traces", ("id",)),),
 }
 BATCH = 500
 BATCH_BYTES = 4_000_000

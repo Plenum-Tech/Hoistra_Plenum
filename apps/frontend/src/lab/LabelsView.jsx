@@ -172,10 +172,46 @@ function Cell({ q, mode, c, busy, onCell }) {
   );
 }
 
+// What is labelled (13 Nov 2026): a run tag's sessions, a row per turn (GET /eval/labels, the session labels the
+// session page used to set), or a run's questions as before (the run is picked in the top bar).
+export const SOURCES = [['sessions', 'Sessions'], ['runs', 'Runs']];
+export function LabelsSource({ source, tags, tag, onSource, onTag }) {
+  return (
+    <div className="lab-row lab-lv-source">
+      <div className="lab-row" role="group" aria-label="What to label">
+        {SOURCES.map(([key, text]) => (
+          <button key={key} type="button" className={'lab-btn lab-btn-sm' + (source === key ? '' : ' lab-btn-quiet')}
+            aria-pressed={source === key ? 'true' : 'false'} onClick={() => onSource && onSource(key)}>{text}</button>
+        ))}
+      </div>
+      {source === 'sessions' && tags && tags.length ? (
+        <label className="lab-lv-tag">
+          <span className="lab-qp-label">{'Run tag'}</span>
+          <select value={tag || ''} onChange={(e) => onTag && onTag(e.target.value)}>
+            {tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag + ' (' + (Number(t.sessions) || 0) + ')'}</option>)}
+          </select>
+        </label>
+      ) : null}
+      {source === 'sessions' && tags && !tags.length ? <span className="lab-small">{'No sessions yet: ask scenarios first, then label their turns here.'}</span> : null}
+    </div>
+  );
+}
+
+// Saves the caller's value for one cell and returns the service's time: on the turn for a session row (the session
+// label, PUT /eval/traces/{id}/labels/{mode}), on the question for a run row (PUT /lab/q/{code}/cells).
+export async function saveCell(api, source, q, lineage, value) {
+  if (source === 'sessions') {
+    const out = await api.evalSetTraceLabel(q.id, lineage, value);
+    return (out && out.label && out.label.at) || null;
+  }
+  const out = await api.setCell(q.code, lineage, value);
+  return (out && out.cell && out.cell.at) || null;
+}
+
 // The page for one run, from what the service returned (GET /lab/runs/{code}/labels). Nothing here reads the service:
 // LabelsView does, and hands the clicks back through onCell and the onAddMode / onEditMode / onRetireMode promises.
 export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, onOpenQuestion, onAddMode, onEditMode, onRetireMode,
-  onRetry, waiting, onOpenLoop }) {
+  onRetry, waiting, onOpenLoop, picker }) {
   const [form, setForm] = React.useState(null);        // null, { add: true }, or { mode } while one column is edited
   const [asking, setAsking] = React.useState(null);    // the column whose retirement is being confirmed
   const [modeBusy, setModeBusy] = React.useState(false);
@@ -185,7 +221,7 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
   if (!run) {
     return (
       <div className="lab-page-body lab-page-full">
-        <div className="lab-page-head"><h1>{'Labels'}</h1></div>
+        <div className="lab-page-head"><div><h1>{'Labels'}</h1>{picker || null}</div></div>
         <Empty title="Pick a run">{'Choose a run to label its questions against the failure modes.'}</Empty>
       </div>
     );
@@ -199,6 +235,7 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
         <h1>{'Labels'}</h1>
         <p className="lab-small lab-big">{'Failure modes for ' + r.code + (r.title ? ' · ' + r.title : '')
           + '. Positive means the failure is in the question’s answer; negative means it is not.'}</p>
+        {picker || null}
       </div>
       {canEdit && modes.length && !form ? (
         <button type="button" className="lab-btn lab-btn-sm" onClick={() => { setAsking(null); setForm({ add: true }); }}>{'Add failure mode'}</button>
@@ -308,7 +345,24 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
 
 // Reads the run's labels, sets the caller's cells (shown at once, put back with the reason if refused) and, for the
 // platform team and the consultant, adds, edits and retires failure modes, reading the matrix again after each.
-export default function LabelsView({ me, run, onOpenQuestion, onOpenLoop }) {
+const SOURCE_KEY = 'tracelab.labels.source';
+const readSource = () => { try { return window.localStorage.getItem(SOURCE_KEY) === 'runs' ? 'runs' : 'sessions'; } catch (e) { return 'sessions'; } };
+
+export default function LabelsView({ me, run: pickedRun, onOpenQuestion, onOpenSession, onOpenLoop }) {
+  // Sessions (a run tag's turns) or Runs (the run picked in the top bar); the choice is kept in this browser.
+  const [source, setSource] = React.useState(readSource);
+  const [tags, setTags] = React.useState(null);
+  const [tag, setTag] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    labApi.evalRunTags().then((out) => { if (live) setTags((out && out.run_tags) || []); }, () => { if (live) setTags([]); });
+    return () => { live = false; };
+  }, []);
+  React.useEffect(() => {
+    if (tags && tags.length && !tags.some((t) => t.tag === tag)) setTag(tags[0].tag);
+  }, [tags, tag]);
+  const pickSource = (key) => { setSource(key); try { window.localStorage.setItem(SOURCE_KEY, key); } catch (e) { /* a convenience */ } };
+  const run = source === 'sessions' ? tag : pickedRun;
   const [res, setRes] = React.useState({ data: null, loading: !!run, error: '' });
   const [waiting, setWaiting] = React.useState(0);
   React.useEffect(() => {
@@ -327,15 +381,16 @@ export default function LabelsView({ me, run, onOpenQuestion, onOpenLoop }) {
     const mine = (ask.current += 1);
     if (!run) { setRes({ data: null, loading: false, error: '' }); return; }
     const wanted = String(run).toUpperCase();
-    setRes((p) => ({ data: p.data && p.data.run && String(p.data.run.code).toUpperCase() === wanted ? p.data : null,
-      loading: true, error: quiet ? p.error : '' }));
+    const sessions = source === 'sessions';
+    setRes((p) => ({ data: p.data && p.data.run && String(p.data.run.code).toUpperCase() === wanted
+      && (p.data.run.kind === 'sessions') === sessions ? p.data : null, loading: true, error: quiet ? p.error : '' }));
     try {
-      const out = await labApi.runLabels(run);
+      const out = sessions ? await labApi.evalTagLabels(run) : await labApi.runLabels(run);
       if (mine === ask.current) setRes({ data: out || null, loading: false, error: '' });
     } catch (e) {
       if (mine === ask.current) setRes((p) => Object.assign({}, p, { loading: false, error: errText(e) }));
     }
-  }, [run]);
+  }, [run, source]);
   React.useEffect(() => { inflight.current = {}; setSaving({}); setCellError(''); load(false); }, [load]);
 
   // One cell at a time per cell: the click shows at once; the service's time replaces ours, a refusal puts it back.
@@ -355,8 +410,7 @@ export default function LabelsView({ me, run, onOpenQuestion, onOpenLoop }) {
     setSaving((p) => Object.assign({}, p, { [key]: true }));
     setCellError('');
     try {
-      const out = await labApi.setCell(q.code, mode.lineage_id, value);
-      const at = out && out.cell && out.cell.at;
+      const at = await saveCell(labApi, data.run && data.run.kind === 'sessions' ? 'sessions' : 'runs', q, mode.lineage_id, value);
       if (at) put(next ? Object.assign({}, next, { at }) : null, { last_updated: at });
     } catch (e) {
       put(before);
@@ -371,9 +425,14 @@ export default function LabelsView({ me, run, onOpenQuestion, onOpenLoop }) {
   const onEditMode = async (mode, body) => { await labApi.editMode(mode.lineage_id, body); await load(true); };
   const onRetireMode = async (mode) => { await labApi.retireMode(mode.lineage_id); await load(true); };
 
+  // A session row opens its session; a run row its question, as before.
+  const openRow = source === 'sessions'
+    ? (onOpenSession ? (code) => { const q = ((res.data && res.data.questions) || []).find((x) => x.code === code); if (q) onOpenSession(q.session_id); } : undefined)
+    : onOpenQuestion;
   return (
     <LabelsMatrix run={run} data={res.data} me={me} loading={res.loading} error={cellError || res.error} saving={saving} onCell={onCell}
-      onOpenQuestion={onOpenQuestion} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
-      waiting={waiting} onOpenLoop={onOpenLoop} />
+      onOpenQuestion={openRow} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
+      waiting={waiting} onOpenLoop={onOpenLoop}
+      picker={<LabelsSource source={source} tags={tags} tag={tag} onSource={pickSource} onTag={setTag} />} />
   );
 }

@@ -173,6 +173,7 @@ export function SessionsTable({ rows, runTag, onOpen }) {
                   <div className="lab-small lab-mono">{r.id}</div>
                   {r.origin ? <div className="lab-small">{'asked on ' + r.origin + (r.attempt > 1 ? ' · attempt ' + r.attempt : '')}</div> : null}
                   {raw.stale ? <div className="lab-small">{'Expected outcome is out of date'}</div> : null}
+                  {r.expectedFlagged ? <span className="lab-chip lab-ses-bad">{'Expected outcome flagged on ' + plural(r.expectedFlagged, 'turn', 'turns')}</span> : null}
                 </td>
                 <td>{r.runTag ? <span className="lab-chip lab-chip-synth">{r.runTag}</span> : '—'}</td>
                 <td>{r.type}</td>

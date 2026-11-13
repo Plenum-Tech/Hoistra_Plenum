@@ -134,6 +134,11 @@ export const labApi = {
   evalTraceNotes: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/notes'),
   evalTraceLabels: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/labels'),
   evalSetTraceLabel: (traceId, mode, value) => call('PUT', '/eval/traces/' + enc(traceId) + '/labels/' + enc(mode), { body: { value } }),
+  // The Labels page for a run tag's sessions: a row per turn, the failure modes as columns (13 Nov 2026).
+  evalTagLabels: (runTag) => call('GET', '/eval/labels', { query: { run_tag: runTag } }),
+  // A reviewer flags a turn's expected outcome as wrong (12 Nov 2026).
+  evalTraceExpectedFlag: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/expected-flag'),
+  evalSetTraceExpectedFlag: (traceId, flagged, comment) => call('PUT', '/eval/traces/' + enc(traceId) + '/expected-flag', { body: { flagged, comment: comment || null } }),
   evalCompare: (base, head) => call('GET', '/eval/compare', { query: { base, head }, timeoutMs: 60000 }),
   evalSpec: () => call('GET', '/eval/spec'),
   evalReloadSpec: () => call('POST', '/eval/spec/reload'),

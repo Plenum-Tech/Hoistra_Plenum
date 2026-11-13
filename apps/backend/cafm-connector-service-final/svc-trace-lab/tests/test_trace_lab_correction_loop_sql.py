@@ -30,15 +30,15 @@ NOW = datetime.now(timezone.utc).replace(microsecond=0)
 ANSWER = "Bishopsgate Tower has 18 floors and 13 open work orders, and no vendor is blocked there at the moment."
 
 
-async def _turn(main, tid, *, org, uid, email, at, question, answer=ANSWER):
+async def _turn(main, tid, *, org, uid, email, at, question, answer=ANSWER, session="s-1"):
     async with main.begin() as conn:
         await conn.execute(text("""
             INSERT INTO plenum_cafm.agent_trace_turns
                 (turn_id, session_id, organization_id, user_id, email, question, answer, route, started_at, ended_at,
                  latency_ms, llm_calls, tool_calls, input_tokens, output_tokens, models, tools, ok)
-            VALUES (:tid, 's-1', CAST(:org AS uuid), CAST(:uid AS uuid), :email, :q, :a, 'single:wo_engine',
+            VALUES (:tid, :sid, CAST(:org AS uuid), CAST(:uid AS uuid), :email, :q, :a, 'single:wo_engine',
                     :at, :at, 1000, 1, 0, 10, 10, CAST('["m"]' AS jsonb), CAST('[]' AS jsonb), true)"""),
-            {"tid": tid, "org": org, "uid": uid, "email": email, "q": question, "a": answer, "at": at})
+            {"tid": tid, "sid": session, "org": org, "uid": uid, "email": email, "q": question, "a": answer, "at": at})
 
 
 async def _count(lab, table):
@@ -270,3 +270,75 @@ async def test_frontend_events_are_bounded_and_need_no_lab_membership(lab_scratc
         row = (await conn.execute(text("SELECT ms_first_text, char_length(question) AS n FROM tracelab.lab_frontend_events "
                                        "LIMIT 1"))).mappings().one()
     assert row["ms_first_text"] is None and row["n"] == 4000
+
+
+# ── sessions are synced too (13 Nov 2026): the automatic sync files scenario sessions; live runs keep only what people
+#    ask by hand ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def _sd1() -> dict:
+    expected = {"plan": [{"call_id": "c1", "domain": "compliance", "tool": None, "params": {}, "depends_on": []}],
+                "failure_handling": None, "answer_format": "success", "must_include": [], "must_not_include": [],
+                "answer": "A list."}
+    return {"scenario_id": "SD-1", "type": "single_domain", "spec_sections": ["output_format"],
+            "role": "compliance_officer", "space": "comp", "scope": {}, "domain_rules": [],
+            "turns": [{"message": "Which certificates are due?", "expected": expected}]}
+
+
+async def _asked_both_ways(main, uid):
+    """One scenario question (its session id names run tag auto_v0) and one question typed by hand."""
+    from eval_fixtures import member
+    from trace_lab import scenario_file
+    await scenario_file.save_scenarios(member(org=ORG), [_sd1()], source="import")
+    await _turn(main, "turn-s1", org=ORG, uid=uid, email="ann@a.test", at=NOW - timedelta(minutes=30),
+                question="Which certificates are due?", session="scn__auto_v0__SD-1__1")
+    await _turn(main, "turn-h1", org=ORG, uid=uid, email="ann@a.test", at=NOW - timedelta(minutes=20),
+                question="How many floors does Bishopsgate Tower have?")
+
+
+async def test_a_scenario_session_is_filed_by_itself_and_listed_under_its_run_tag_not_the_askers_day(main_scratch, lab_scratch):  # noqa: F811
+    await _asked_both_ways(main_scratch, str(uuid.uuid4()))
+    out = await autosync.tick()
+    assert out["last_ok"] is True and out["last_new_questions"] == 1, "only what was asked by hand is a live question"
+    assert out["last_new_scenario_sessions"] == 1 and out["scenario_sessions_error"] is None
+    assert out["last_session_questions"] == 1, "the session's turn is a question of its run tag's run in the same round"
+    boss, _admin = await _people()
+    day = (await runs.list_runs(boss, kind="production"))["runs"]
+    assert len(day) == 1
+    assert [q["question"] for q in (await runs.list_questions(boss, day[0]["code"]))["questions"]] == [
+        "How many floors does Bishopsgate Tower have?"]
+    tagged = (await runs.list_runs(boss, kind="sessions"))["runs"]
+    assert [r["title"] for r in tagged] == ["Sessions · auto_v0"]
+    assert [q["question"] for q in (await runs.list_questions(boss, tagged[0]["code"]))["questions"]] == [
+        "Which certificates are due?"]
+    async with lab_scratch.connect() as conn:
+        filed = (await conn.execute(text("SELECT id, run_tag, scenario_id FROM tracelab.sessions"))).all()
+    assert [tuple(r) for r in filed] == [("scn__auto_v0__SD-1__1", "auto_v0", "SD-1")]
+    again = await autosync.tick()
+    assert (again["last_new_scenario_sessions"], again["last_new_questions"], again["last_session_questions"]) == (0, 0, 0),         "each is taken once"
+
+
+async def test_the_scenario_sync_can_be_turned_off_and_the_button_still_reads_them(main_scratch, lab_scratch, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TRACE_LAB_AUTO_SYNC_SCENARIO_SESSIONS", "0")
+    await _asked_both_ways(main_scratch, str(uuid.uuid4()))
+    out = await autosync.tick()
+    assert out["last_new_questions"] == 1 and out["last_new_scenario_sessions"] == 0
+    assert await _count(lab_scratch, "sessions") == 0, "left to Read new sessions"
+    from trace_lab import eval_store
+    read = await eval_store.ingest_from_main(since=NOW - timedelta(days=1))
+    assert read["sessions"] == 1
+
+
+async def test_a_failed_session_read_is_reported_and_the_live_sync_still_counts(main_scratch, lab_scratch, monkeypatch):  # noqa: F811
+    from trace_lab import eval_store
+
+    async def broken(**_kw):
+        raise RuntimeError("the chat database is unavailable")
+
+    monkeypatch.setattr(eval_store, "ingest_from_main", broken)
+    await _turn(main_scratch, "turn-h2", org=ORG, uid=str(uuid.uuid4()), email="bo@a.test", at=NOW - timedelta(minutes=9),
+                question="Which vendors are blocked?")
+    out = await autosync.tick()
+    assert out["last_ok"] is True and out["last_new_questions"] == 1
+    assert out["scenario_sessions_ok"] is False and out["last_new_scenario_sessions"] == 0
+    assert "unavailable" in out["scenario_sessions_error"] and "unavailable" in out["sessions_error"]

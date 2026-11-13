@@ -9,7 +9,8 @@ from trace_lab import sync_push
 
 
 def test_the_tables_go_in_an_order_that_never_breaks_a_reference():
-    assert sync_push.TABLES == ("run_tags", "spec_sections", "scenarios", "sessions", "traces", "observations", "scores")
+    assert sync_push.TABLES == ("run_tags", "spec_sections", "scenarios", "sessions", "traces", "observations", "scores",
+                                "expected_flags")
 
 
 def test_peer_name_is_the_host_and_database_and_nothing_else():
@@ -50,7 +51,7 @@ def test_the_line_a_person_reads_after_a_push():
            "pushed": {"run_tags": 1, "spec_sections": 0, "scenarios": 250, "sessions": 250, "traces": 312,
                       "observations": 9804, "scores": 0}}
     assert sync_push.summary_line(out) == ("Pushed to db.example.com/hoist_tracelab: 250 sessions, 312 traces, "
-                                           "9,804 spans, 0 scores, 250 scenarios, 1 run tag, 0 spec sections.")
+                                           "9,804 spans, 0 scores, 0 expected-outcome flags, 250 scenarios, 1 run tag, 0 spec sections.")
     dry = sync_push.summary_line({**out, "dry_run": True})
     assert dry.startswith("Would push to db.example.com/hoist_tracelab: 250 sessions")
     failed = sync_push.summary_line({**out, "status": "failed", "error": "traces: connection lost"})

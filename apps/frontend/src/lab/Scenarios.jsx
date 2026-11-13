@@ -65,6 +65,7 @@ export function ScenariosTable({ rows, selected, onToggle }) {
                   <strong>{r.id}</strong>
                   {r.opening ? <div className="lab-small">{r.opening}</div> : null}
                   {r.stale ? <div className="lab-small lab-ses-stale">{r.staleText}</div> : null}
+                  {r.expectedFlagged ? <div className="lab-small lab-ses-stale">{'Expected outcome flagged as wrong on ' + plural(r.expectedFlagged, 'turn', 'turns') + ': needs correcting'}</div> : null}
                 </td>
                 <td>{r.type}</td>
                 <td><div className="lab-chips">{r.sections.map((s) => <span key={s} className="lab-chip">{s}</span>)}</div></td>

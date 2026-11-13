@@ -7,8 +7,11 @@
     GET    /eval/sessions/{session_id}        one session: its scenario, its traces in turn order, their scores
     GET    /eval/traces/{trace_id}/tree       one trace as the tree view reads it
     GET    /eval/traces/{trace_id}/notes      the chat record and everyone's notes on a trace's spans
+    GET    /eval/labels?run_tag=              a run tag's sessions as the Labels grid: a row per turn (13 Nov 2026)
     GET    /eval/traces/{trace_id}/labels     the failure modes and everyone's label on a trace
     PUT    /eval/traces/{trace_id}/labels/{mode}  the caller's label: positive, negative or null to clear
+    GET    /eval/traces/{trace_id}/expected-flag      who says this turn's expected outcome is wrong
+    PUT    /eval/traces/{trace_id}/expected-flag      the caller's flag: {"flagged": true|false, "comment"}
     POST   /eval/scenarios/import             a scenario file, taken whole or refused with its lines     (curators)
     GET    /eval/scenarios                    the current version of every scenario
     GET    /eval/scenarios/export             the same, as a file that imports back unchanged
@@ -35,8 +38,7 @@ from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import (db, eval_judges, eval_store, labelling, runs, scenario_file, scenario_gen, scores, spec_doc, sync_push,
-               trace_tree, trace_labels)
+from . import (db, eval_judges, eval_store, expected_flags, labelling, runs, scenario_file, scenario_gen, scores, spec_doc, sync_push, trace_labels, trace_tree)
 from .review_errors import Forbidden
 from .routes_labelling import _call
 from .routes_runs import _wide
@@ -81,6 +83,12 @@ class EvaluateIn(BaseModel):
     limit: int = Field(25, ge=1, le=eval_judges.PASS_MAX)
     #: Traces to pass over: those whose judge call failed earlier in the same run, so the pass moves on.
     skip: list[str] = Field(default_factory=list, max_length=5000)
+
+
+class ExpectedFlagIn(BaseModel):
+    #: True: the turn's expected outcome is wrong (the scenario needs correcting); False clears the caller's flag.
+    flagged: bool
+    comment: str | None = Field(None, max_length=2000)
 
 
 class TraceLabelIn(BaseModel):
@@ -235,6 +243,27 @@ async def eval_evaluate(body: EvaluateIn, m: labelling.Member = Depends(_wide)) 
 async def eval_trace_notes(trace_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
     """The chat's record of a trace's turn and everyone's notes on its spans, for the session page."""
     return {"ok": True, **await _call(eval_store.trace_notes(m, trace_id))}
+
+
+@router.get("/eval/traces/{trace_id}/expected-flag")
+async def eval_trace_expected_flag(trace_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """Who says this turn's expected outcome is wrong."""
+    return {"ok": True, **await _call(expected_flags.flags_of(m, trace_id))}
+
+
+@router.put("/eval/traces/{trace_id}/expected-flag")
+async def eval_set_trace_expected_flag(trace_id: str, body: ExpectedFlagIn,
+                                       m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """The caller's flag on this turn's expected outcome."""
+    return {"ok": True, "flag": await _call(expected_flags.set_flag(m, trace_id, flagged=body.flagged,
+                                                                    comment=body.comment))}
+
+
+@router.get("/eval/labels")
+async def eval_tag_labels(run_tag: str = Query(..., min_length=1, max_length=40),
+                          m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """The Labels page for a run tag's sessions: a row per turn, the failure modes as columns (13 Nov 2026)."""
+    return {"ok": True, **await _call(trace_labels.tag_matrix(m, run_tag))}
 
 
 @router.get("/eval/traces/{trace_id}/labels")

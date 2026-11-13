@@ -22,11 +22,31 @@ Trace Lab  ◄── 3. file those conversations as sessions   4. score them   5
 4. Run the logic evaluation (free). The model judges are optional and cost money.
 5. Read the verdicts back, then open Trace Lab → **Sessions** → filter by the run tag.
 
+## Where you ask and where it shows up
+
+Trace Lab files a conversation from the chat records in **its own Hoistra's database**. The hosted Hoistra
+(`https://hoistra-frontend.gentlesmoke-fd81e91e.uaenorth.azurecontainerapps.io`) and its Trace Lab use the shared test database
+`hoistra_test` (checked 12 Nov 2026). Any Hoistra stack on that database writes where the hosted Trace Lab reads.
+
+| You ask on | Set | Where the sessions show up |
+|---|---|---|
+| **The hosted Hoistra** (simplest) | `HOISTRA_URL` = the hosted address | the hosted Trace Lab |
+| **Your own machine's stack, using the shared env file** (database `hoistra_test`) | `HOISTRA_URL` = your local address, e.g. `http://localhost:3001`; `TRACE_LAB_URL` = the hosted address | the hosted Trace Lab: your local stack writes the turns into `hoistra_test`, the hosted Trace Lab reads them from there |
+| A stack on **any other database** | `HOISTRA_URL` = that stack; `TRACE_LAB_URL` = that stack's Trace Lab | only that stack's Trace Lab. To get them to the hosted one, its Trace Lab pushes with **Sync to dev** (`DEV_DB_URL` = the hosted Trace Lab database, an insert-only login; sessions, traces, spans and scores travel, notes and labels do not). |
+
+The script signs in to each address it uses (a sign-in token is only valid on the Hoistra that issued it), with the
+same account: the account must exist on both, which it does when both use `hoistra_test`.
+
+Questions asked on `hoistra_test` are visible to everyone using the hosted Hoistra, and the hosted Trace Lab's auto-sync
+also lists them as a live run under **Runs**.
+
 ## Before you start
 
 You need:
 
-- `HOISTRA_URL`: the Hoistra address, e.g. `https://<hoistra host>` (deployed) or `http://localhost:3001` (local gateway).
+- `HOISTRA_URL`: the Hoistra the questions are asked on, e.g. the hosted address or `http://localhost:3001` (local gateway).
+- `TRACE_LAB_URL` (optional): the Hoistra whose Trace Lab files and scores the sessions; `HOISTRA_URL` when not set.
+  See "Where you ask and where it shows up" above.
 - `HOISTRA_EMAIL` and `HOISTRA_PASSWORD`: a Hoistra account on that environment. Read them from environment variables.
   **Never write them to a file, a log, a commit or a message.**
 - That account needs a **Trace Lab curator role** (company admin, platform team or consultant) to import scenarios,
@@ -91,8 +111,9 @@ which engine must be called, and what must never appear. Multi-turn: say what mu
 
 ## The calls
 
-All under `HOISTRA_URL`. `LAB = /backend/trace-lab/api/trace-lab`. Every call after sign-in sends
-`Authorization: Bearer <access token>`.
+Sign-in and asking are under `HOISTRA_URL`; the Trace Lab calls under `TRACE_LAB_URL` (default `HOISTRA_URL`),
+`LAB = /backend/trace-lab/api/trace-lab`. Every call after sign-in sends `Authorization: Bearer <access token>`, the
+token from signing in to that same address.
 
 | Step | Call | Notes |
 |---|---|---|
@@ -109,11 +130,13 @@ All under `HOISTRA_URL`. `LAB = /backend/trace-lab/api/trace-lab`. Every call af
 
 ```python
 """Ask a scenario file to Hoistra and file it in Trace Lab.
-Env: HOISTRA_URL, HOISTRA_EMAIL, HOISTRA_PASSWORD. Usage: python ask_scenarios.py <scenarios.jsonl> <run_tag> [attempt]"""
+Env: HOISTRA_URL (where to ask), TRACE_LAB_URL (whose Trace Lab files the sessions; default HOISTRA_URL), HOISTRA_EMAIL,
+HOISTRA_PASSWORD. Usage: python ask_scenarios.py <scenarios.jsonl> <run_tag> [attempt]"""
 import json, os, sys, time, urllib.error, urllib.request, uuid
 
 BASE = os.environ["HOISTRA_URL"].rstrip("/")
-LAB = BASE + "/backend/trace-lab/api/trace-lab"
+LAB_BASE = (os.environ.get("TRACE_LAB_URL") or BASE).rstrip("/")
+LAB = LAB_BASE + "/backend/trace-lab/api/trace-lab"
 FILE, RUN_TAG = sys.argv[1], sys.argv[2]
 ORG = os.environ.get("HOISTRA_ORGANIZATION_ID", "").strip()   # the company asked about (superadmin accounts)
 ATTEMPT = int(sys.argv[3]) if len(sys.argv) > 3 else 1
@@ -141,21 +164,27 @@ def must(step, st, out):
     return out
 
 
-st, out = http("POST", BASE + "/backend/ops-intelligence/api/auth/login",
-               body={"email": os.environ["HOISTRA_EMAIL"], "password": os.environ["HOISTRA_PASSWORD"]})
-token = (out.get("tokens") or {}).get("access_token")
-if st != 200 or not token:
-    raise SystemExit(f"sign-in failed: HTTP {st} (202 = verification code needed; 401 = wrong login, do not retry)")
+def sign_in(base):
+    st, out = http("POST", base + "/backend/ops-intelligence/api/auth/login",
+                   body={"email": os.environ["HOISTRA_EMAIL"], "password": os.environ["HOISTRA_PASSWORD"]})
+    tok = (out.get("tokens") or {}).get("access_token")
+    if st != 200 or not tok:
+        raise SystemExit(f"sign-in to {base} failed: HTTP {st} (202 = verification code needed; 401 = wrong login, do not retry)")
+    return tok
+
+
+token = sign_in(BASE)                                           # asking
+lab_token = token if LAB_BASE == BASE else sign_in(LAB_BASE)    # filing and scoring
 print("signed in")
 
-spec = must("spec", *http("POST", LAB + "/eval/spec/reload", token))
+spec = must("spec", *http("POST", LAB + "/eval/spec/reload", lab_token))
 print("specification", spec.get("spec_version"), "-", spec.get("sections"), "sections")
 
 data = open(FILE, "rb").read()
 b = "----" + uuid.uuid4().hex
 form = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"scenarios.jsonl\"\r\n"
         f"Content-Type: application/x-ndjson\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
-imp = must("import", *http("POST", LAB + "/eval/scenarios/import", token, raw=form, ctype=f"multipart/form-data; boundary={b}"))
+imp = must("import", *http("POST", LAB + "/eval/scenarios/import", lab_token, raw=form, ctype=f"multipart/form-data; boundary={b}"))
 print("imported", imp.get("scenarios"), "scenarios: new", imp.get("added"), "updated", imp.get("new_versions"))
 
 scenarios = [json.loads(line) for line in data.decode().splitlines() if line.strip()]
@@ -175,19 +204,19 @@ for s in scenarios:
         if st >= 400:
             break                       # a broken turn: do not ask the follow-ups without it
 
-ing = must("ingest", *http("POST", LAB + "/eval/ingest", token, body={"run_tag": RUN_TAG, "sessions": named}, timeout=300))
+ing = must("ingest", *http("POST", LAB + "/eval/ingest", lab_token, body={"run_tag": RUN_TAG, "sessions": named}, timeout=300))
 print("filed:", ing.get("sessions"), "sessions,", ing.get("traces"), "traces; waiting", ing.get("waiting"), "failed", ing.get("failed"))
 
 skip = []
 for _ in range(100):
-    ev = must("evaluate", *http("POST", LAB + "/eval/evaluate", token,
+    ev = must("evaluate", *http("POST", LAB + "/eval/evaluate", lab_token,
                                 body={"run_tag": RUN_TAG, "levels": ["logic"], "skip": skip}, timeout=300))
     skip += [t for t in ev.get("failed_traces") or [] if t not in skip]
     left = (ev.get("remaining") or 0) - (ev.get("left_for_later") or 0)
     if left <= 0 or ev.get("capped") or (not ev.get("traces") and not ev.get("failed_traces")):
         break
 
-listed = must("sessions", *http("GET", LAB + f"/eval/sessions?run_tag={RUN_TAG}&limit=200", token))
+listed = must("sessions", *http("GET", LAB + f"/eval/sessions?run_tag={RUN_TAG}&limit=200", lab_token))
 for sess in listed.get("sessions") or []:
     print(sess.get("scenario_id"), "logic:", ((sess.get("scores") or {}).get("logic") or {}).get("verdict"))
 json.dump(replies, open(f"replies_{RUN_TAG}.json", "w"), indent=2)
@@ -197,7 +226,8 @@ print(f"saved replies_{RUN_TAG}.json. Open Trace Lab > Sessions and filter run t
 Run it:
 
 ```sh
-export HOISTRA_URL=https://<hoistra host>
+export HOISTRA_URL=https://<hoistra host>        # or http://localhost:3001 to ask on your own stack
+export TRACE_LAB_URL=https://<hosted hoistra>    # only when the sessions should be filed by another Hoistra's Trace Lab
 export HOISTRA_EMAIL=<account email>
 read -rs 'HOISTRA_PASSWORD?Password: '; export HOISTRA_PASSWORD; echo    # zsh; in bash: read -rsp 'Password: ' HOISTRA_PASSWORD
 python3 ask_scenarios.py scenarios.jsonl baseline_v0

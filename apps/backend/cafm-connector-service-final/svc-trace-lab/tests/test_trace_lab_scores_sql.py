@@ -169,7 +169,8 @@ async def test_two_run_tags_are_compared_scenario_by_scenario(lab_scratch):
     out = await scores.compare(member(), b, h)
     change = {r["scenario_id"]: r["change"]["logic"] for r in out["rows"]}
     assert change == {"SD-001": "fixed", "SD-002": "regressed", "SD-003": "same", "SD-004": "missing"}
-    assert out["summary"]["logic"] == {"fixed": 1, "regressed": 1, "same": 1, "changed": 0, "new": 0, "missing": 1}
+    assert out["summary"]["logic"] == {"fixed": 1, "regressed": 1, "same": 1, "changed": 0, "new": 0, "missing": 1,
+                                       "not_counted": 0}
     assert out["summary"]["sessions"] == {"base": 4, "head": 3}
     row = next(r for r in out["rows"] if r["scenario_id"] == "SD-001")
     assert row["base"]["session_id"] == "scn__baseline_v0__SD-001__1" and row["head"]["verdicts"]["logic"] == "pass"

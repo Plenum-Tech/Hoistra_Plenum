@@ -16,7 +16,7 @@ import { labApi } from './labApi.js';
 import { errText } from './logic/labelling.js';
 import { TraceView } from './TraceTab.jsx';
 import { FAILURE_TEXT, FORMAT_TEXT, LEVELS, LEVEL_TEXT, TRACE_STATUS_TEXT, TYPE_TEXT, canScoreDomain, modeRows, needsRead, planLines,
-  scoreLines, sessionTitle, turnTabs, verdictText } from './logic/sessions.js';
+  scoreLines, sessionTitle, turnTabs, verdictText, failureReasons } from './logic/sessions.js';
 import { fmtWhen } from './logic/format.js';
 import { NextStep } from './NextStep.jsx';
 import { useTraceNotes } from './TraceNotes.jsx';
@@ -36,15 +36,39 @@ function Expected({ expected }) {
         <dt>{'Plan'}</dt>
         <dd>{plan.length ? <ol className="lab-ses-plan">{plan.map((line) => <li key={line}><code className="lab-mono">{line}</code></li>)}</ol>
           : 'No calls expected.'}</dd>
-        <dt>{'Answer format'}</dt>
-        <dd>{FORMAT_TEXT[e.answer_format] || '—'}</dd>
-        {fh ? <><dt>{'Failure handling'}</dt>
+        {SHOW_FAILURE_ROWS ? <><dt>{'Answer format'}</dt>
+          <dd>{FORMAT_TEXT[e.answer_format] || '—'}</dd></> : null}
+        {SHOW_FAILURE_ROWS && fh ? <><dt>{'Failure handling'}</dt>
           <dd>{(FAILURE_TEXT[fh.state] || fh.state) + (fh.failed && fh.failed.length ? ' · the answer must say that ' + fh.failed.join(', ') + ' failed' : '')}</dd></> : null}
         {must.length ? <><dt>{'Must include'}</dt><dd>{must.join(' · ')}</dd></> : null}
         {never.length ? <><dt>{'Must not include'}</dt><dd>{never.join(' · ')}</dd></> : null}
         {e.answer ? <><dt>{'Expected answer'}</dt><dd className="lab-ses-pre">{e.answer}</dd></> : null}
       </dl>
     </div>
+  );
+}
+
+// The specification sections a scenario names (e.g. missing_evidence) are hidden on the session page (13 Nov 2026,
+// Hussain): most have no rule written behind them yet. Set to true to show them again.
+const SHOW_SECTION_TAGS = false;
+
+// Failure wording only when Hoistra failed (13 Nov 2026, Hussain). Hidden: the expected outcome's "Answer format" and
+// "Failure handling" rows, and the scenario type "Failure" (it reads like a verdict). A turn that failed shows why it
+// failed instead (WhyFailed). Set to true to show them again.
+const SHOW_FAILURE_ROWS = false;
+const typeText = (type) => (!SHOW_FAILURE_ROWS && type === 'failure' ? null : TYPE_TEXT[type] || type || null);
+
+// Why a turn failed: how it ended and each failed step with its reason. Only the reason, never an expected answer.
+function WhyFailed({ trace, nodes }) {
+  const reasons = failureReasons(trace, nodes);
+  if (!reasons.length) return null;
+  return (
+    <section className="lab-ses-why" aria-label="Why it failed">
+      <span className="lab-qp-label">{'Why it failed'}</span>
+      <ul className="lab-ses-lines">
+        {reasons.map((r, i) => <li key={i} className="lab-ses-line">{r.step ? <><strong>{r.step}</strong>{': ' + r.reason}</> : r.reason}</li>)}
+      </ul>
+    </section>
   );
 }
 
@@ -60,9 +84,9 @@ function Scenario({ scenario }) {
   const stale = Array.isArray(scenario.stale) ? scenario.stale : [];
   return (
     <section className="lab-qp-card" aria-label="Scenario">
-      <div className="lab-qp-meta">{['Scenario', scenario.scenario_id, 'version ' + scenario.version, TYPE_TEXT[scenario.type]].filter(Boolean).join(' · ')}</div>
+      <div className="lab-qp-meta">{['Scenario', scenario.scenario_id, 'version ' + scenario.version, typeText(scenario.type)].filter(Boolean).join(' · ')}</div>
       <div className="lab-chips">
-        {(scenario.spec_sections || []).map((s) => <span key={s} className="lab-chip" title="Section of the specification this scenario tests">{s}</span>)}
+        {(SHOW_SECTION_TAGS ? scenario.spec_sections || [] : []).map((s) => <span key={s} className="lab-chip" title="Section of the specification this scenario tests">{s}</span>)}
         {scenario.status === 'draft' ? <span className="lab-chip lab-ses-warn">{'Expected outcome not approved yet'}</span> : null}
         {stale.length ? <span className="lab-chip lab-ses-warn" title={'Changed since this version was written: ' + stale.join(', ')}>{'Expected outcome is out of date'}</span> : null}
       </div>
@@ -213,11 +237,54 @@ export function FailureModes({ data, busy, error, onSet }) {
   );
 }
 
+// Is this turn's expected outcome wrong? Expected outcomes are checked while reviewing (12 Nov 2026): a reviewer who
+// thinks the expected outcome itself is wrong flags it, with an optional reason, and the turn is not counted against
+// Hoistra until the scenario is corrected. `data` is GET /eval/traces/{id}/expected-flag (null while reading);
+// `onSet(flagged, comment)`.
+export function ExpectedFlag({ data, busy, error, onSet }) {
+  const [open, setOpen] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const d = data || null;
+  const set = onSet || (() => {});
+  const flags = d && Array.isArray(d.flags) ? d.flags : [];
+  return (
+    <section className="lab-ses-flag" aria-label="Expected outcome check">
+      <span className="lab-qp-label">{'Is the expected outcome for this turn wrong?'}</span>
+      {error ? <div role="alert" className="lab-error">{error}</div> : null}
+      {d == null ? <p className="lab-small" role="status">{'Reading the expected outcome flags…'}</p> : null}
+      {flags.length ? (
+        <ul className="lab-ses-lines">
+          {flags.map((f, i) => (
+            <li key={i} className="lab-ses-line lab-ses-line-bad">
+              {(f.mine ? 'You flagged the expected outcome as wrong' : 'Flagged as wrong by ' + (f.author_email || 'someone'))
+                + (f.comment ? ': ' + f.comment : '.')}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {flags.length ? <p className="lab-small">{'While it is flagged, this turn is not counted against Hoistra: it is not scored and compare leaves it out until the scenario is corrected.'}</p> : null}
+      {d && d.mine ? (
+        <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" disabled={!!busy} onClick={() => set(false, null)}>{'Clear my flag'}</button>
+      ) : d && open ? (
+        <div className="lab-row">
+          <textarea className="lab-note" rows={2} maxLength={2000} value={text} disabled={!!busy} aria-label="What is wrong with the expected outcome"
+            placeholder="What is wrong with the expected outcome (optional)" onChange={(e) => setText(e.target.value)} />
+          <button type="button" className="lab-btn lab-btn-sm" disabled={!!busy} onClick={() => { set(true, text.trim() || null); setOpen(false); setText(''); }}>{busy ? 'Saving…' : 'Flag it'}</button>
+          <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" disabled={!!busy} onClick={() => { setOpen(false); setText(''); }}>{'Cancel'}</button>
+        </div>
+      ) : d ? (
+        <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" disabled={!!busy} onClick={() => setOpen(true)}>{'Expected outcome is wrong'}</button>
+      ) : null}
+    </section>
+  );
+}
+
 // One turn: its trace header, the comment box for the turn, its failure modes, its input and output, and its tree with
 // notes on every span. `notes` is GET /eval/traces/{id}/notes ({record, labels, organization_id}) or null while reading;
 // `labels` GET /eval/traces/{id}/labels; `onLabel(mode, value)` sets the reader's label; `onNoted(step)` offers the next
 // step after a note is saved.
-function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel, onNoted, onScore, saving, scoreError }) {
+function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel, onNoted, onScore, saving, scoreError, flag,
+  flagBusy, flagError, onFlag }) {
   const t = tree || null;
   const n = notes || null;
   const nodes = t && t.tree && Array.isArray(t.tree.nodes) ? t.tree.nodes : [];
@@ -240,8 +307,14 @@ function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel,
         <div><span className="lab-qp-label">{'Input'}</span><p className="lab-qp-said">{trace.input || '—'}</p></div>
         <div><span className="lab-qp-label">{'Output'}</span><p className="lab-qp-said">{trace.output || '—'}</p></div>
       </div>
+      <WhyFailed trace={trace} nodes={nodes} />
+      <ExpectedFlag data={flag && !flag.loading && !flag.error ? flag : null} busy={flagBusy}
+        error={(flag && flag.error) || flagError || ''} onSet={onFlag} />
+      {/* Hidden for now (Hussain, 13 Nov 2026): the failure modes with their Present / Absent buttons. FailureModes is
+          kept as it is; put these two lines back to show it again.
       <FailureModes data={labels && !labels.loading && !labels.error ? labels : null} busy={labelBusy}
         error={(labels && labels.error) || labelError || ''} onSet={onLabel} />
+      */}
       {!n || n.loading ? <p className="lab-small" role="status">{'Reading the notes…'}</p> : null}
       {n && n.error ? <div role="alert" className="lab-error">{'Could not read the notes: ' + n.error}</div> : null}
       {ready && n.record ? noted.comment : null}
@@ -256,7 +329,7 @@ function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel,
 
 // The page's body from what the service sent. `active` is the trace in view; `trees`, `notes` and `labels` hold each
 // opened trace's tree, notes and failure-mode labels ({...} | {error} | {loading}) by trace id.
-export function SessionBody({ data, active, trees, notes, labels, onTab, me, label, onLabel, onNoted, onScore,
+export function SessionBody({ data, active, trees, notes, labels, flags, flagState, onFlag, onTab, me, label, onLabel, onNoted, onScore,
   saving, scoreError }) {
   const d = data || {};
   const s = d.session || {};
@@ -273,7 +346,7 @@ export function SessionBody({ data, active, trees, notes, labels, onTab, me, lab
           <code className="lab-mono" title="Session id">{s.id}</code>
           {s.run_tag ? <span className="lab-chip lab-chip-synth" title="Run tag">{s.run_tag}</span> : null}
           {s.scenario_id ? <span className="lab-chip" title="Scenario and the version it was asked with">{s.scenario_id + ' · version ' + s.scenario_version}</span> : null}
-          {s.type ? <span className="lab-chip">{TYPE_TEXT[s.type] || s.type}</span> : null}
+          {typeText(s.type) ? <span className="lab-chip">{typeText(s.type)}</span> : null}
           {s.role ? <span className="lab-chip" title="Role the scenario is asked as">{s.role}</span> : null}
           {s.origin ? <span className="lab-chip" title="Where it was asked">{s.origin}</span> : null}
           {Number(s.attempt) > 1 ? <span className="lab-chip">{'attempt ' + s.attempt}</span> : null}
@@ -287,7 +360,7 @@ export function SessionBody({ data, active, trees, notes, labels, onTab, me, lab
               <button key={t.key} type="button" role="tab" aria-selected={t.traceId === active ? 'true' : 'false'}
                 aria-controls="lab-ses-panel" id={'lab-ses-' + t.key} title={TRACE_STATUS_TEXT[t.status] || t.status}
                 className={'lab-turn' + (t.traceId === active ? ' lab-on' : '') + (t.status !== 'ok' ? ' lab-ses-tab-bad' : '')}
-                onClick={() => pick(t.traceId)}>{t.label}</button>
+                onClick={() => pick(t.traceId)}>{t.label}{t.flagged ? <span className="lab-ses-flagmark" title="Expected outcome flagged as wrong" aria-label="expected outcome flagged">{' ⚑'}</span> : null}</button>
             ))}
           </div>
           <div role="tabpanel" id="lab-ses-panel" aria-label={current ? 'Turn ' + current.turn_index : 'Turn'}>
@@ -297,7 +370,10 @@ export function SessionBody({ data, active, trees, notes, labels, onTab, me, lab
               labels={(labels || {})[current.id] || null} labelBusy={label && label.traceId === current.id ? label.busy : null}
               labelError={label && label.traceId === current.id ? label.error : ''}
               onLabel={(mode, value) => onLabel && onLabel(current.id, mode, value)} onNoted={onNoted}
-              onScore={onScore} saving={saving} scoreError={scoreError} />
+              onScore={onScore} saving={saving} scoreError={scoreError} flag={(flags || {})[current.id] || null}
+              flagBusy={flagState && flagState.traceId === current.id ? flagState.busy : false}
+              flagError={flagState && flagState.traceId === current.id ? flagState.error : ''}
+              onFlag={(flagged, comment) => onFlag && onFlag(current.id, flagged, comment)} />
               : <p className="lab-small">{'Choose a turn.'}</p>}
           </div>
         </>
@@ -313,6 +389,8 @@ export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoo
   const [trees, setTrees] = React.useState({});
   const [notes, setNotes] = React.useState({});
   const [labels, setLabels] = React.useState({});
+  const [flags, setFlags] = React.useState({});
+  const [flagState, setFlagState] = React.useState({ traceId: null, busy: false, error: '' });
   // The label being saved and the last error, on the turn they belong to.
   const [label, setLabel] = React.useState({ traceId: null, busy: null, error: '' });
   const labelAsk = React.useRef(0);
@@ -323,7 +401,7 @@ export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoo
 
   React.useEffect(() => {
     const mine = (ask.current += 1);
-    setData(null); setError(''); setActive(null); setTrees({}); setNotes({}); setLabels({}); setLabel({ traceId: null, busy: null, error: '' });
+    setData(null); setError(''); setActive(null); setTrees({}); setNotes({}); setLabels({}); setFlags({}); setLabel({ traceId: null, busy: null, error: '' });
     labApi.evalSession(sessionId)
       .then((out) => {
         if (mine !== ask.current) return;
@@ -350,6 +428,7 @@ export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoo
     if (needsRead(trees[id])) readInto(trees[id], setTrees, labApi.evalTraceTree, 'tree');
     if (needsRead(notes[id], true)) readInto(notes[id], setNotes, labApi.evalTraceNotes, null);
     if (needsRead(labels[id])) readInto(labels[id], setLabels, labApi.evalTraceLabels, null);
+    if (needsRead(flags[id], true)) readInto(flags[id], setFlags, labApi.evalTraceExpectedFlag, null);
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Saving a score reads the session again, so the page shows what is stored (the scores panel is hidden for now).
@@ -364,6 +443,21 @@ export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoo
 
   // Setting a label reads the trace's labels again, so the page shows what is stored.
   // Only the newest click's answer is shown, so a slow earlier one never puts back an older value.
+  // Flagging a turn's expected outcome reads the flags and the session again: the tab marker and the list come from it.
+  const onFlag = (traceId, flagged, comment) => {
+    const mine = ask.current;
+    setFlagState({ traceId, busy: true, error: '' });
+    labApi.evalSetTraceExpectedFlag(traceId, flagged, comment)
+      .then(() => Promise.all([labApi.evalTraceExpectedFlag(traceId), labApi.evalSession(sessionId)]))
+      .then(([f, s]) => {
+        if (mine !== ask.current) return;
+        setFlags((old) => ({ ...old, [traceId]: f || {} }));
+        if (s) setData(s);
+        setFlagState({ traceId, busy: false, error: '' });
+      })
+      .catch((e) => { if (mine === ask.current) setFlagState({ traceId, busy: false, error: errText(e) }); });
+  };
+
   const onLabel = (traceId, mode, value) => {
     const mine = ask.current;
     const seq = (labelAsk.current += 1);
@@ -383,7 +477,7 @@ export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoo
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
       {!data && !error ? <p className="lab-small" role="status">{'Reading the session…'}</p> : null}
       {data ? <SessionBody data={data} active={active} trees={trees} notes={notes} labels={labels} onTab={setActive} me={me}
-        label={label} onLabel={onLabel} onNoted={setNext} onScore={onScore} saving={score.saving}
+        flags={flags} flagState={flagState} onFlag={onFlag} label={label} onLabel={onLabel} onNoted={setNext} onScore={onScore} saving={score.saving}
         scoreError={score.error} /> : null}
       <NextStep step={onOpenLoop ? next : null} onClose={() => setNext(null)}
         onAct={(a) => { if (a === 'open_loop' && onOpenLoop) onOpenLoop(); }} />

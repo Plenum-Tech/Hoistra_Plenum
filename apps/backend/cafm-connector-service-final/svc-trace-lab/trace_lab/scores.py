@@ -28,7 +28,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from . import conversations, db, labelling, runs
+from . import conversations, db, expected_flags, labelling, runs
 from .review_errors import Forbidden, Invalid, NotFound
 
 LEVELS = ("logic", "ux", "domain")
@@ -36,7 +36,7 @@ VERDICTS = ("pass", "fail")
 LIST_VERDICTS = ("pass", "fail", "not_evaluated")
 DOMAIN_ROLES = ("domain_expert", "platform", "consultant")
 COMMENT_MAX = 4000
-CHANGES = ("fixed", "regressed", "same", "changed", "new", "missing")
+CHANGES = ("fixed", "regressed", "same", "changed", "new", "missing", "not_counted")
 COMPARE_MAX = 5000
 #: The newest score a person gave first, then the newest automatic one: the first row per (trace, level) is current.
 CURRENT_ORDER = "(k.source = 'ANNOTATION') DESC, k.created_at DESC, k.id DESC"
@@ -192,6 +192,7 @@ async def _side(conn: Any, m: labelling.Member, tag: str) -> dict[str, dict[str,
         " WHERE t.session_id = ANY(CAST(:ids AS text[])) ORDER BY t.session_id, t.turn_index"),
         {"ids": ids})).mappings().all() if ids else []
     current = await current_scores(conn, [t["id"] for t in traces])
+    flagged = set(await expected_flags.flagged_traces(conn, [t["id"] for t in traces]))
     by_session: dict[str, list[Mapping[str, Any]]] = {}
     for t in traces:
         by_session.setdefault(t["session_id"], []).append(t)
@@ -204,7 +205,8 @@ async def _side(conn: Any, m: labelling.Member, tag: str) -> dict[str, dict[str,
             "status": "failed" if any(t["status"] != "ok" for t in mine) else "ok",
             "answer_words": sum(int(t["words"] or 0) for t in mine),
             "latency_ms": int(sum(float(t["latency"] or 0) for t in mine)),
-            "verdicts": {level: (per_level[level] or {}).get("verdict", "not_evaluated") for level in LEVELS}}
+            "verdicts": {level: (per_level[level] or {}).get("verdict", "not_evaluated") for level in LEVELS},
+            "expected_flagged": any(t["id"] in flagged for t in mine)}
     return out
 
 
@@ -223,12 +225,15 @@ async def compare(m: labelling.Member, base: str, head: str) -> dict[str, Any]:
     summary: dict[str, Any] = {level: {c: 0 for c in CHANGES} for level in LEVELS}
     for scenario_id in sorted(set(left) | set(right)):
         b, h = left.get(scenario_id), right.get(scenario_id)
+        # A scenario whose expected outcome a reviewer flagged as wrong, on either side, is not counted either way.
+        disputed = bool((b and b["expected_flagged"]) or (h and h["expected_flagged"]))
         change = {}
         for level in LEVELS:
-            change[level] = "new" if b is None else "missing" if h is None else _change(
+            change[level] = "new" if b is None else "missing" if h is None else "not_counted" if disputed else _change(
                 b["verdicts"][level], h["verdicts"][level])
             summary[level][change[level]] += 1
-        rows.append({"scenario_id": scenario_id, "type": (h or b)["type"], "base": b, "head": h, "change": change})
+        rows.append({"scenario_id": scenario_id, "type": (h or b)["type"], "base": b, "head": h, "change": change,
+                     "expected_flagged": disputed})
     words = {side: [s["answer_words"] for s in data.values() if s["answer_words"]]
              for side, data in (("base", left), ("head", right))}
     summary["sessions"] = {"base": len(left), "head": len(right)}

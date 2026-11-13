@@ -14,7 +14,9 @@ import './runs.css';
 const PAGE = 50;
 const QUESTIONS_MAX = 2000;
 const QUESTION_MAX = 4000;
-const KINDS = [['', 'All'], ['synthetic', 'Synthetic'], ['production', 'Live']];
+// Sessions in place of Synthetic (13 Nov 2026, Hussain): All shows every run; Sessions the runs the service makes from
+// a run tag's sessions ("Sessions · <tag>", runs.sync_sessions); Live the runs synced from what people ask by hand.
+export const KINDS = [['', 'All'], ['sessions', 'Sessions'], ['production', 'Live']];
 export const SOURCE_TEXT = Object.freeze({ coding_agent: 'coding agent', excel: 'Excel', manual: 'manual', sync: 'synced' });
 
 // One run as its card says it.
@@ -24,7 +26,9 @@ export function runView(r) {
   const n = (k) => Number(x[k]) || 0;
   return {
     code: x.code || (x.run_no ? 'R' + x.run_no : '—'), title: x.title || '', live,
-    kindText: live ? ['live', x.owner_email || 'unknown person', fmtDay(x.run_day)].filter(Boolean).join(' · ') : 'synthetic',
+    // A run made from a run tag's sessions is the one synthetic run the sync itself makes: say "sessions", not "synthetic".
+    kindText: live ? ['live', x.owner_email || 'unknown person', fmtDay(x.run_day)].filter(Boolean).join(' · ')
+      : (x.kind === 'synthetic' && x.source === 'sync' ? 'sessions' : 'synthetic'),
     source: SOURCE_TEXT[x.source] || x.source || '',
     range: fmtRange(x.first_at, x.last_at) || (x.created_at ? 'Created ' + fmtWhen(x.created_at) : ''),
     counts: [plural(n('n_questions'), 'question', 'questions'), n('n_traced') + ' with answers', n('n_expected') + ' with expected',
@@ -289,7 +293,7 @@ function RunsHome({ me, onRun }) {
       <div className="lab-page-head lab-head-row">
         <div>
           <h1>{'Runs'}</h1>
-          <p className="lab-small lab-big">{'Synthetic batches of questions, and each person’s live questions by day. Open a run to review its questions.'}</p>
+          <p className="lab-small lab-big">{'Sessions by run tag, and each person’s live questions by day. Open one to review its questions.'}</p>
         </div>
         <div className="lab-row lab-runs-actions">
           <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={runSync} disabled={sync.busy}>{sync.busy ? 'Syncing…' : 'Sync now'}</button>

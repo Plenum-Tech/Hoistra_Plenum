@@ -31,6 +31,8 @@ from .review_errors import Forbidden, Invalid, NotFound
 RUN_CODE = re.compile(r"^\s*R(\d{1,9})\s*$", re.I)
 QUESTION_CODE = re.compile(r"^\s*R(\d{1,9})-(\d{1,9})\s*$", re.I)
 KINDS = ("synthetic", "production")
+#: A filter of the runs list, not a kind a run is stored with (13 Nov 2026): the runs made from sessions.
+SESSIONS_KIND = "sessions"
 CELL_VALUES = ("positive", "negative")
 SYNC_DAYS = 90
 SYNC_BATCH = 2000
@@ -157,9 +159,12 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
                     limit: int = 100, offset: int = 0) -> dict[str, Any]:
     labelling.require_active(m)
     where, p = _scope(m, "r", company)
-    if kind:
+    if kind == SESSIONS_KIND:
+        # The runs made from a run tag's sessions (sync_sessions): the only synthetic runs the sync itself makes.
+        where += " AND r.kind = 'synthetic' AND r.source = 'sync'"
+    elif kind:
         if kind not in KINDS:
-            raise Invalid("bad_kind", "Choose synthetic or production.")
+            raise Invalid("bad_kind", "Choose synthetic, production or sessions.")
         where += " AND r.kind = :kind"
         p["kind"] = kind
     if q:
@@ -300,7 +305,10 @@ async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str
             + ("" if org is None else " AND organization_id = CAST(:org AS uuid)")), {"org": org})).scalar_one()
     floor = now - timedelta(days=SYNC_DAYS)
     since = max(floor, (last - timedelta(hours=1)) if last else floor)
-    where = ["tt.started_at >= :since", "tt.user_id IS NOT NULL", f"({provenance.INFERRED_CHANNEL_SQL}) <> 'golden'"]
+    # A scenario session's turns (session id scn__<tag>__<scenario>__<attempt>) are filed as sessions, never as live
+    # questions (13 Nov 2026, Hussain): live runs keep only what people ask by hand.
+    where = ["tt.started_at >= :since", "tt.user_id IS NOT NULL", f"({provenance.INFERRED_CHANNEL_SQL}) <> 'golden'",
+             "coalesce(tt.session_id, '') NOT LIKE 'scn\\_\\_%'"]
     p: dict[str, Any] = {"since": since, "lim": SYNC_BATCH}
     if org is not None:
         where.append("tt.organization_id = CAST(:org AS uuid)")
@@ -392,7 +400,7 @@ async def sync_sessions(org: str | None = None, *, now: datetime | None = None) 
         p["org"] = org
     async with db.lab_engine().connect() as conn:
         rows = [dict(r) for r in (await conn.execute(text(
-            "SELECT t.id AS turn_id, t.organization_id::text AS org, t.input AS q, t.turn_index, "
+            "SELECT t.id AS turn_id, t.session_id, t.organization_id::text AS org, t.input AS q, t.turn_index, "
             "coalesce(t.started_at, s.started_at) AS at, s.run_tag, s.scenario_id, s.role "
             "FROM tracelab.traces t JOIN tracelab.sessions s ON s.id = t.session_id "
             f"WHERE {' AND '.join(where)} ORDER BY s.started_at, s.id, t.turn_index LIMIT :lim"), p)).mappings().all()]
@@ -402,8 +410,10 @@ async def sync_sessions(org: str | None = None, *, now: datetime | None = None) 
         here = {r[0]: r[1] for r in (await conn.execute(text(
             f"SELECT tt.turn_id, tt.started_at FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"),
             {"ids": [r["turn_id"] for r in rows]})).all()}
-    todo = [r for r in rows if not (r["turn_id"] in here and here[r["turn_id"]] is not None
-                                    and here[r["turn_id"]] >= now - LIVE_GRACE)]
+    # A scenario session's turn (scn__<tag>__<scenario>__<n>) is never sync_live's (13 Nov 2026: live runs keep only
+    # what people ask by hand), so it is taken at once; any other turn the chat here just recorded is left to it.
+    todo = [r for r in rows if str(r.get("session_id") or "").startswith("scn__")
+            or not (r["turn_id"] in here and here[r["turn_id"]] is not None and here[r["turn_id"]] >= now - LIVE_GRACE)]
     new_q = new_r = 0
     if todo:
         async with db.lab_engine().begin() as conn:
