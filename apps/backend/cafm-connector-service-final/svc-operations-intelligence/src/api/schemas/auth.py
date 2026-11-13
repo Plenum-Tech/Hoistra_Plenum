@@ -99,6 +99,14 @@ class PublicUser(BaseModel):
     role: str = "user"
     role_label: str | None = None
     last_login_at: str | None = None
+    # The access role an administrator gave a plain user, and the pages that go with it
+    # (engines/auth/pages.py). ``pages`` null = every page. They are only meaningful when
+    # ``pages_known`` is true: the sign-in routes set it, so a client can decide what to show
+    # the moment it is signed in; where it is false the client reads GET /api/auth/me.
+    access_role: str | None = None
+    access_role_label: str | None = None
+    pages: list[str] | None = None
+    pages_known: bool = False
 
 
 class TokenBundle(BaseModel):

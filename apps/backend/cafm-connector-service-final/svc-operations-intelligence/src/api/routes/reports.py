@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db import get_session
 from ...engines.auth import access
 from ...engines.reports import cards as card_svc
+from ...shared import page_filter
 from .auth import scope
 
 router = APIRouter(prefix="/api/reports", tags=["reports"], dependencies=[Depends(scope)])
@@ -78,6 +79,14 @@ class CardPatch(BaseModel):
     report_id: UUID | None = None
 
 
+def _shown(s: access.Scope, runs: list[Any]) -> list[Any]:
+    """A card's runs, for this caller. Cards are already their owner's alone; a caller whose
+    pages were narrowed does not see the answers stored before that, which may hold data from
+    a page they no longer have (shared/page_filter.since_narrowing)."""
+    return page_filter.since_narrowing(runs, s.pages, s.access_narrowed_at,
+                                       when=lambda r: r.ran_at)
+
+
 # ── reports ──────────────────────────────────────────────────────────────────
 
 @router.get("")
@@ -92,7 +101,8 @@ async def list_reports(
     by_card = await card_svc.latest_runs(session, [c.id for c in cards], per_card=runs) if runs else {}
     grouped: dict[UUID, list[dict[str, Any]]] = {}
     for c in cards:
-        grouped.setdefault(c.report_id, []).append(card_svc.card_to_dict(c, by_card.get(c.id, []) if runs else None))
+        grouped.setdefault(c.report_id, []).append(
+            card_svc.card_to_dict(c, _shown(s, by_card.get(c.id, [])) if runs else None))
     out = [card_svc.report_to_dict(r, grouped.get(r.id, [])) for r in reports]
     return {"ok": True, "count": len(out), "reports": out}
 
@@ -154,7 +164,7 @@ async def add_card(body: CardBody, session: AsyncSession = Depends(get_session),
     except LookupError:
         raise _not_found("report") from None
     await session.commit()
-    runs = await card_svc.card_runs(session, card.id)
+    runs = _shown(s, await card_svc.card_runs(session, card.id))
     return {"ok": True, "report": card_svc.report_to_dict(report), "card": card_svc.card_to_dict(card, runs)}
 
 
@@ -164,7 +174,7 @@ async def get_card(card_id: UUID, runs: int = Query(card_svc.DEFAULT_RUNS_RETURN
     card = await card_svc.get_card(session, owner_id=s.user_id, card_id=card_id)
     if card is None:
         raise _not_found("card")
-    history = await card_svc.card_runs(session, card.id, limit=runs) if runs else []
+    history = _shown(s, await card_svc.card_runs(session, card.id, limit=runs)) if runs else []
     return {"ok": True, "card": card_svc.card_to_dict(card, history)}
 
 
@@ -221,5 +231,5 @@ async def list_runs(card_id: UUID, limit: int = Query(card_svc.DEFAULT_RUNS_RETU
     card = await card_svc.get_card(session, owner_id=s.user_id, card_id=card_id)
     if card is None:
         raise _not_found("card")
-    runs = await card_svc.card_runs(session, card.id, limit=limit)
+    runs = _shown(s, await card_svc.card_runs(session, card.id, limit=limit))
     return {"ok": True, "card_id": str(card_id), "count": len(runs), "runs": [card_svc.run_to_dict(r) for r in runs]}

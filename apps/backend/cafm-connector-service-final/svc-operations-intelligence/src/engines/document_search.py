@@ -309,7 +309,8 @@ async def search(session: AsyncSession, *, question: str, organization_id: UUID 
                  building_ids: tuple[UUID, ...] | None = None, vendor: str | None = None, contract_ref: str | None = None,
                  building_id: UUID | None = None, doc_type: str | None = None,
                  document_ids: list[str] | None = None, asset: str | None = None,
-                 include_personal: bool = False, user_id: UUID | None = None) -> dict[str, Any]:
+                 include_personal: bool = False, user_id: UUID | None = None,
+                 pages: frozenset[str] | None = None) -> dict[str, Any]:
     about = {k: v for k, v in {"vendor": vendor, "contract_ref": contract_ref, "asset": asset,
                                "building_id": str(building_id) if building_id else None,
                                "doc_type": doc_type, "document_ids": document_ids}.items() if v}
@@ -322,6 +323,11 @@ async def search(session: AsyncSession, *, question: str, organization_id: UUID 
                                   limit=MAX_COMPANY_DOCUMENTS if company_wide else MAX_DOCUMENTS)
     if isinstance(docs, dict):
         return {"ok": False, "about": about, "error": docs.get("error")}
+    # A caller held to some pages searches only the documents those pages own — dropped here,
+    # before a passage is read, so nothing from an unheld document can be quoted.
+    if pages is not None:
+        from ..shared import page_filter
+        docs = page_filter.documents(docs, pages)
     indexed = [d for d in docs if int(d["chunks"] or 0) > 0]
     out: dict[str, Any] = {
         "ok": True, "question": question, "about": about or {"scope": "your company's indexed documents"},

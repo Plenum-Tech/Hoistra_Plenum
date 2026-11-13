@@ -10,6 +10,7 @@ from ...db import get_session
 from ...engines import value_ledger as value_svc
 from ...engines import value_savings as savings_svc
 from ...engines.auth import access
+from ...shared import page_filter
 from .auth import scope
 
 router = APIRouter(prefix="/api/value", tags=["value"],
@@ -35,12 +36,14 @@ async def value_summary(
     engines/value_ledger.py states what each figure means and what is deliberately
     not claimed."""
     org_id = access.organization_for(s, organization_id)
-    return await value_svc.read_value_summary(
+    out = await value_svc.read_value_summary(
         session,
         organization_id=org_id,
         building_ids=s.building_ids,
         year=year,
     )
+    # A caller held to some pages gets only their modules, with the totals recomputed.
+    return page_filter.value_summary(out, s.pages)
 
 
 @router.get("/savings")
@@ -57,6 +60,9 @@ async def savings(
     The value ledger (detected vs saved), open jobs with money at stake, repeat-failure assets
     against their replacement value, invoice overcharges, reactive vs planned spend, and the
     figures to check before quoting them. Reads only (engines/value_savings.py)."""
+    # One read across work orders, energy findings, asset value and invoices. It cannot be
+    # given in part, so a caller held to some pages needs every page it draws on.
+    access.assert_pages_all(s, "ops", "energy", "assets", "vendors")
     org_id = access.organization_for(s, organization_id)
     ids = (access.assert_building(s, building_id, action="read"),) if building_id else s.building_ids
     return await savings_svc.read_savings(session, organization_id=org_id, building_ids=ids, period=period)

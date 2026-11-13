@@ -39,6 +39,7 @@ from ...core.logging import get_logger
 from ...shared.approvals import send_platform_email
 from ...shared.email_template import wrap_html
 from . import otp as otp_engine
+from . import pages as page_engine
 from . import roles as role_engine
 from .otp import EMAIL_VERIFICATION, PASSWORD_RESET, normalise_email
 from .passwords import WeakPassword, burn_time, hash_password, validate, verify_password
@@ -947,6 +948,23 @@ def _token_payload(pair: token_engine.TokenPair) -> dict[str, Any]:
 # ── roles ────────────────────────────────────────────────────────────────────────────
 
 
+async def clear_access_role(session: AsyncSession, user_id: Any) -> None:
+    """Drop an account's access role, pages and narrowing time (engines/auth/pages.py).
+
+    For an account that has just been made an administrator: an admin opens every page, and a
+    role left on the row would come back, with a stale narrowing time, the day they are made
+    a plain user again - a restriction nobody chose. Nothing is asked of a database that does
+    not have the columns."""
+    if not await page_engine.columns_ready(session):
+        return
+    await session.execute(
+        text("""UPDATE plenum_cafm.users
+                   SET access_role = NULL, allowed_pages = NULL, access_narrowed_at = NULL
+                 WHERE id = :i"""),
+        {"i": await keys.user_key(session, user_id)},
+    )
+
+
 async def set_role(
     session: AsyncSession, *, actor: Any, target_user_id: UUID, new_role: str,
     reason: str | None = None, request_ip: str | None = None,
@@ -1018,6 +1036,10 @@ async def set_role(
         session, user_id=row["id"], from_role=current, to_role=wanted,
         changed_by=actor.user_id, reason=reason, request_ip=request_ip,
     )
+    # An administrator opens every page: the access role and pages a plain user held go with
+    # the promotion, so they cannot come back unasked on a later demotion.
+    if role_engine.is_admin(wanted):
+        await clear_access_role(session, row["id"])
 
     # Their existing tokens still CLAIM the old role. That claim is not what any decision
     # reads — principal_from_token reads the row — but ending the sessions makes a

@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services import ingest_batch_service as batch_svc
+from ...services.principal import current_principal
 from ...workers.ingest_batch_worker import mark_batch_cancelled
 
 log = structlog.get_logger(__name__)
-router = APIRouter(prefix="/api/ingest/batches", tags=["Ingest Batches"])
+# Every route here answered anybody with no token. A batch is an upload in progress: it is
+# for a signed-in caller.
+router = APIRouter(prefix="/api/ingest/batches", tags=["Ingest Batches"],
+                   dependencies=[Depends(current_principal)])
 
 
 @router.get("")

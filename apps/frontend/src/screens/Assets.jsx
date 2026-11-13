@@ -277,13 +277,13 @@ export default function Assets({ vals }) {
                                       <div style={{ display: "flex", flexDirection: "column", gap: "6px", flex: "0 0 auto", alignItems: "stretch" }}>
                                         {r.woPrimary ? (
                                           <>
-                                            <div onClick={r.wo} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                            <div onClick={r.wo} style={{ display: r.actShow || "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer", whiteSpace: "nowrap" }}>
                                               <i className="ph ph-wrench" style={{ fontSize: "11px" }}></i>
                                               <span>
                                                 {"Raise work order"}
                                               </span>
                                             </div>
-                                            <div className="hv4" onClick={r.inspect} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                            <div className="hv4" onClick={r.inspect} style={{ display: r.actShow || "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)", cursor: "pointer", whiteSpace: "nowrap" }}>
                                               <i className="ph ph-clipboard-text" style={{ fontSize: "11px" }}></i>
                                               <span>
                                                 {"Request inspection"}
@@ -293,13 +293,13 @@ export default function Assets({ vals }) {
                                         ) : null}
                                         {r.inspectPrimary ? (
                                           <>
-                                            <div onClick={r.inspect} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                            <div onClick={r.inspect} style={{ display: r.actShow || "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer", whiteSpace: "nowrap" }}>
                                               <i className="ph ph-clipboard-text" style={{ fontSize: "11px" }}></i>
                                               <span>
                                                 {"Request inspection"}
                                               </span>
                                             </div>
-                                            <div className="hv4" onClick={r.wo} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                            <div className="hv4" onClick={r.wo} style={{ display: r.actShow || "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "11px", padding: "6px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)", cursor: "pointer", whiteSpace: "nowrap" }}>
                                               <i className="ph ph-wrench" style={{ fontSize: "11px" }}></i>
                                               <span>
                                                 {"Raise work order"}

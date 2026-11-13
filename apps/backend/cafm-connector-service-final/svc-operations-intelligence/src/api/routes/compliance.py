@@ -75,6 +75,7 @@ from ..schemas.compliance import (
 
 from ...engines import ingest_gate
 from ...engines.auth import access
+from ...shared import page_filter
 from ...engines.compliance import epc_rating as epc_svc
 from ...engines.compliance import filings as filings_svc
 from ...engines.energy import ratings_position as position_svc
@@ -1058,6 +1059,7 @@ async def decide_approval(
     item_id: UUID,
     body: QueueDecisionRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     return await approvals_svc.decide_queue_item(
         session,
@@ -1067,6 +1069,7 @@ async def decide_approval(
         edited_payload=body.edited_payload,
         decided_by=body.decided_by,
         prepare_email_handoff=body.prepare_email_handoff,
+        scope=s,
     )
 
 
@@ -1301,13 +1304,14 @@ async def coverage_vendors(
 ):
     """Per-vendor CountryPack coverage % (optional trade filter)."""
     organization_id = access.organization_for(s, organization_id)
-    return await coverage_svc.vendor_coverage(
+    out = await coverage_svc.vendor_coverage(
         session,
         organization_id=organization_id,
         country_code=country_code,
         trade_category=trade_category,
         building_ids=s.building_ids,
     )
+    return page_filter.vendor_block_states(out, access.pages_of(s))
 
 
 @router.get("/evidence-pack")

@@ -295,6 +295,15 @@ def _visible_sql(p: Principal, org: str | None, *, include_pending: bool = False
           if include_pending else " AND status = 'active'")
     if include_pending:
         params["admin"] = bool(p.is_admin)
+    # A caller held to some pages (agents/page_access.py) recalls, and is listed, only what
+    # they taught themselves - a company-wide memory has no page, and may have been learned
+    # from one they do not hold - and only since their pages were last narrowed.
+    if getattr(p, "pages", None) is not None:
+        st += " AND created_by = CAST(:uid AS uuid)"
+        cut = getattr(p, "access_narrowed_at", None)
+        if cut is not None:
+            st += " AND created_at > CAST(:cut AS timestamptz)"
+            params["cut"] = cut
     if org:
         params["org"] = org
         return ("organization_id = CAST(:org AS uuid) AND deleted_at IS NULL"

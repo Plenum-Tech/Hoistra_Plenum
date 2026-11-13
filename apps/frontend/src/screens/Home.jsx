@@ -33,7 +33,7 @@ export default function Home({ vals }) {
           </div>
           ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "0", padding: "22px 0 0", borderTop: "1px solid var(--color-divider)", borderBottom: "1px solid var(--color-divider)", marginTop: "8px" }}>
-            <div style={{ padding: "14px 22px 15px 0", display: "flex", flexDirection: "column", minWidth: "0" }}>
+            <div style={{ padding: "14px 22px 15px 0", display: vals.homeTiles && vals.homeTiles.score === false ? "none" : "flex", flexDirection: "column", minWidth: "0" }}>
               <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                 {"Hoist Score"}
               </span>
@@ -69,7 +69,7 @@ export default function Home({ vals }) {
                 {vals.hoistScoreNote}
               </div>
             </div>
-            <div style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: "0" }}>
+            <div style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: vals.homeTiles && vals.homeTiles.pnl === false ? "none" : "flex", flexDirection: "column", minWidth: "0" }}>
               <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                 {"Portfolio P&L · YTD"}
               </span>
@@ -165,7 +165,7 @@ export default function Home({ vals }) {
                 </div>
               )}
             </div>
-            <div className="hv19" onClick={vals.pvOpen} style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: "0", cursor: "pointer" }}>
+            <div className="hv19" onClick={vals.pvOpen} style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: vals.homeTiles && vals.homeTiles.value === false ? "none" : "flex", flexDirection: "column", minWidth: "0", cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                   {vals.pvTitle}

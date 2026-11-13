@@ -129,6 +129,7 @@ async def send_email_draft(
         cc_address=body.cc,
         queue_item_id=body.queue_item_id,
         organization_id=org_id,
+        pages=s.pages,
     ))
 
 
@@ -137,6 +138,7 @@ async def decide_any_approval(
     item_id: UUID,
     body: QueueDecisionRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Approve | Edit | Dismiss — same contract for A/B/C. 409 when approving an item about a
     deleted vendor; it can still be dismissed."""
@@ -148,4 +150,5 @@ async def decide_any_approval(
         edited_payload=body.edited_payload,
         decided_by=body.decided_by,
         prepare_email_handoff=body.prepare_email_handoff,
+        scope=s,
     ))

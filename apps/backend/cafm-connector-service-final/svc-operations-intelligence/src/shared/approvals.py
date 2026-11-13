@@ -25,6 +25,7 @@ from ..models import (
     OpsEmailLog,
 )
 from ..models.base import SCHEMA
+from . import page_filter
 from .email_graph import send_via_microsoft_graph
 from .email_transport import email_transport
 from .vendor_identity import deleted_vendor_ids_sql, is_deleted_vendor, live_vendor_sql
@@ -317,6 +318,23 @@ def _subject_on_record() -> Any:
     return and_(subject_there, payload_vendor_live)
 
 
+#: How many rows are read for a caller held to some pages, before the unheld ones are dropped.
+_PAGE_FILTER_READ = 500
+
+
+def _refuse_unheld_item(pages: Any, item: Any) -> None:
+    """403 when a queue item belongs to a page the caller does not hold. Deciding an item, or
+    sending the draft about it, is acting on that page's register."""
+    if page_filter.approval_allowed(pages, item):
+        return
+    from fastapi import HTTPException  # local: this module is otherwise framework-free
+
+    owners = page_filter.approval_pages(getattr(item, "source_feature", None),
+                                        getattr(item, "related_entity_type", None))
+    raise HTTPException(status_code=403,
+                        detail=page_filter.refusal_detail(owners[0] if owners else None))
+
+
 async def list_queue(
     session: AsyncSession,
     *,
@@ -326,8 +344,13 @@ async def list_queue(
     limit: int = 100,
     scope: Any | None = None,
 ) -> list[ApprovalsQueueItem]:
+    # A caller held to some pages keeps only the rows those pages own (shared/page_filter.py).
+    # The cut to `limit` is made after that, from a wider read, so held rows that sit behind
+    # unheld ones are not lost. A caller with every page reads exactly what they always did.
+    pages = getattr(scope, "pages", None) if scope is not None else None
+    read = limit if pages is None else max(int(limit), _PAGE_FILTER_READ)
     q = (select(ApprovalsQueueItem).where(_subject_on_record())
-         .order_by(ApprovalsQueueItem.created_at.desc()).limit(limit))
+         .order_by(ApprovalsQueueItem.created_at.desc()).limit(read))
     if organization_id:
         q = q.where(ApprovalsQueueItem.organization_id == organization_id)
     if status:
@@ -337,6 +360,8 @@ async def list_queue(
     items = list((await session.execute(q)).scalars().all())
     if scope is not None and getattr(scope, "restricted", False):
         items = await _restrict_queue_by_building(session, items, scope)
+    if pages is not None:
+        items = page_filter.approvals(items, pages)[:limit]
     return items
 
 
@@ -470,10 +495,15 @@ async def decide_queue_item(
     edited_payload: dict[str, Any] | None = None,
     decided_by: UUID | None = None,
     prepare_email_handoff: bool = True,
+    scope: Any | None = None,
 ) -> dict[str, Any]:
     item = await session.get(ApprovalsQueueItem, item_id)
     if not item:
         return {"ok": False, "error": "queue item not found"}
+    # The four decide routes all arrive here with an item id and nothing else, so this is the
+    # one place that can tell a compliance holder from deciding an energy item by its id.
+    if scope is not None:
+        _refuse_unheld_item(getattr(scope, "pages", None), item)
 
     decision_l = decision.lower()
     if decision_l not in {"approve", "edit", "dismiss"}:
@@ -1066,6 +1096,7 @@ async def send_approval_email_draft(
     cc_address: str | None = None,
     queue_item_id: UUID | None = None,
     organization_id: UUID | None = None,
+    pages: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Send (or dry-run) a compliance alert draft to a PM email entered in the UI."""
     to_addr = (to_address or "").strip()
@@ -1088,6 +1119,8 @@ async def send_approval_email_draft(
         if (item is not None and org_id is not None
                 and str(item.organization_id or "") != str(org_id)):
             return {"ok": False, "error": "That queue item is not in your company."}
+        if item is not None:
+            _refuse_unheld_item(pages, item)
         # Before the recipient is written onto the item: a draft about a deleted vendor is not
         # sent, handed off or recorded (Hussain, 12 Oct 2026).
         if item is not None:

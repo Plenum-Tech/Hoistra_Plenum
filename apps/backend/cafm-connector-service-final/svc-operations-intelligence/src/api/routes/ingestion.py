@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...engines.auth import access
+from ...shared import page_filter
 from ...engines.auth import ingestion_audit
 from ...engines.ingestion import ontology as onto
 from ...engines.ingestion import document_facts as facts_svc
@@ -116,6 +117,10 @@ async def _case_or_404(session: AsyncSession, case_id: UUID, s: access.Scope) ->
         if case.get(key):
             access.assert_building(s, case[key], action="act on")
             break
+    # A held document of a type the caller's pages do not own does not exist for them.
+    if not page_filter.document_allowed(access.pages_of(s), case.get("doc_type")):
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "No such case.",
+                                                     "reason": "case_not_found"})
     return case
 
 
@@ -163,6 +168,11 @@ async def list_cases(
         ids = [building_id]
     rows = await val.list_cases(session, organization_id=s.organization_id, building_ids=ids,
                                 status=status, open_only=open_only, limit=limit)
+    # A held document belongs to the page that owns its type; a caller held to some pages is
+    # given only those (shared/page_filter.py).
+    pages = access.pages_of(s)
+    if pages is not None:
+        rows = [r for r in rows if page_filter.document_allowed(pages, r.get("doc_type"))]
     return {"ok": True, "count": len(rows), "cases": rows,
             "open": sum(1 for r in rows if r.get("open"))}
 
@@ -375,7 +385,7 @@ async def building_ontology(
     if o is None:
         raise HTTPException(status_code=404, detail={"ok": False, "error": "No such building.",
                                                      "reason": "building_not_found"})
-    return {"ok": True, "ontology": o.as_dict()}
+    return {"ok": True, "ontology": page_filter.ontology(o.as_dict(), access.pages_of(s))}
 
 
 @router.get("/audit")
@@ -404,4 +414,13 @@ async def ingestion_trail(
         out["entries"] = [e for e in out["entries"]
                           if str((e.get("detail") or {}).get("case_id") or "") == str(case_id)]
         out["count"] = len(out["entries"])
+    if access.pages_of(s) is not None:
+        # The trail names every document anybody filed, of every page. A caller held to some
+        # pages sees what they filed themselves, and the tallies are of that.
+        mine = [e for e in out.get("entries") or [] if str(e.get("actor_user_id") or "") == str(s.user_id)]
+        tally: dict[str, int] = {}
+        for e in mine:
+            tally[str(e.get("outcome"))] = tally.get(str(e.get("outcome")), 0) + 1
+        out = dict(out, entries=mine, count=len(mine), by_outcome=tally,
+                   actors=[a for a in out.get("actors") or [] if str(a.get("user_id") or "") == str(s.user_id)])
     return out

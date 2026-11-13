@@ -8,6 +8,7 @@ import { authApi } from '../api/auth.js';
 import { adminApi } from '../api/admin.js';
 import { ApiError, configureAuth, getActingOrg, setActingOrg } from '../api/client.js';
 import { usesInstances } from './instances.js';
+import { roleReports } from './accessRoles.js';
 import { forgetIssuedToken, forgetSharedSession, isSupersededToken, issuedTokenKey, latestIssuedRecord, loadSharedSession, recordIssuedToken, SESSION_KEY } from './session.js';
 
 // Resolves on the next storage event for this account's session slot or token record, or
@@ -176,13 +177,7 @@ export const authMethods = {
     // it is for setting up the invited account, so the gate shows that form first.
     this.authInviteFromUrl();
     if (typeof this.cpLinkFromUrl === 'function') this.cpLinkFromUrl();
-    configureAuth({
-      getToken: () => this.state.accessToken,
-      refresh: () => this.authRefresh(),
-      // The refresh in flight, if any — a read with no token yet waits for it (client.js).
-      pending: () => this._refreshing || null,
-      onTerminal: (reason, message) => this.authSignedOut(message)
-    });
+    configureAuth(this.authHooks());
     this._authStorage = (e) => this.authStorageChanged(e);
     window.addEventListener('storage', this._authStorage);
     if (!this.state.refreshToken) {
@@ -397,6 +392,9 @@ export const authMethods = {
       if (this._ccAbort) this._ccAbort.abort();
       clearInterval(this._orchTick);
     }
+    // The pages this tab holds for the person now (accessRoles.js), to tell below whether a
+    // silent refresh brought different ones.
+    const pagesBefore = JSON.stringify(roleReports(this.state.account));
     this.setState((p) => ({
       // The reply's user carries identity and role, never the building scope or can_ingest
       // (public_user() in tokens.py — only GET /me adds those, via authLoadScope below). On
@@ -431,6 +429,12 @@ export const authMethods = {
     // compliance rows and the rest until whatever retry/refresh timer they happened
     // to have armed eventually comes back around.
     if (!o.keepView) {
+      if (typeof this.resetLiveData === 'function') this.resetLiveData();
+      if (typeof this.loadLiveData === 'function') this.loadLiveData();
+    } else if (JSON.stringify(roleReports(this.state.account)) !== pagesBefore) {
+      // A silent refresh that brought different pages - an admin ticked or unticked one. What
+      // was read for the old set is not this person's to keep, and what the new set adds has
+      // not been read; the later /me read finds nothing changed, so it is done here.
       if (typeof this.resetLiveData === 'function') this.resetLiveData();
       if (typeof this.loadLiveData === 'function') this.loadLiveData();
     }
@@ -470,6 +474,31 @@ export const authMethods = {
   // Best-effort and silent: called on every sign-in/refresh and after every building
   // switch, so a transient failure here is invisible rather than a flashed error on top of
   // whatever else just succeeded.
+  // What api/client.js asks the controller for (configureAuth).
+  authHooks() {
+    return {
+      getToken: () => this.state.accessToken,
+      refresh: () => this.authRefresh(),
+      // The refresh in flight, if any — a read with no token yet waits for it (client.js).
+      pending: () => this._refreshing || null,
+      onTerminal: (reason, message) => this.authSignedOut(message),
+      // The pages the person holds ride on the account (accessRoles.js): a request for a page
+      // they do not hold is not sent, and a refusal from the server re-reads the account.
+      getAccount: () => this.state.account,
+      onPageRefused: () => this.authPageRefused()
+    };
+  },
+
+  // The server refused a page this client thought was held: an admin has changed the
+  // person's pages since they were last read. Re-read them - once for a burst of refusals -
+  // and say nothing: what is no longer theirs simply goes (authLoadScope clears it).
+  authPageRefused() {
+    if (this._pagesReread) return;
+    this._pagesReread = true;
+    const done = () => { setTimeout(() => { this._pagesReread = false; }, 5000); };
+    Promise.resolve(this.authLoadScope()).then(done, done);
+  },
+
   authLoadScope() {
     // The company the list is read for, stamped on it as buildingsOrg: the Ingest tray's
     // picker re-reads a list stamped for another company rather than offer its buildings.
@@ -493,6 +522,9 @@ export const authMethods = {
       const buildings = unrestrictedNeedsCompanyList
         ? adminApi.listBuildings().then((br) => (br && Array.isArray(br.buildings) ? br.buildings : [])).catch(() => null)
         : Promise.resolve(Array.isArray(u.buildings) ? u.buildings : []);
+      // The person's pages as this tab holds them now, to tell afterwards whether they moved.
+      const held = this.state.account;
+      const before = held && held.id === u.id ? JSON.stringify(roleReports(held)) : null;
       return buildings.then((list) => {
         // Guarded by id, not just "an account is signed in": this fires from authEnter and
         // from authSelectBuilding as a fire-and-forget request, so a slow reply can still be
@@ -511,9 +543,26 @@ export const authMethods = {
             all_buildings: u.all_buildings === true,
             selected_building_id: u.selected_building_id || null,
             buildings: list === null ? (Array.isArray(p.account.buildings) ? p.account.buildings : []) : list,
-            buildingsOrg: list === null ? (p.account.buildingsOrg || null) : org
+            buildingsOrg: list === null ? (p.account.buildingsOrg || null) : org,
+            // The access role an admin gave this person and the pages that go with it
+            // (accessRoles.js). This read is the authority on them. Left alone when the answer
+            // does not carry the key, so an older build cannot silently lift a restriction.
+            access_role: u.access_role === undefined ? p.account.access_role : (u.access_role || null),
+            access_role_label: u.access_role_label === undefined ? p.account.access_role_label : (u.access_role_label || null),
+            pages: u.pages === undefined ? p.account.pages : (Array.isArray(u.pages) ? u.pages : null),
+            pages_known: u.pages === undefined ? p.account.pages_known : true
           })
-        } : {}));
+        } : {}), () => {
+          // The pages changed under a signed-in session - a role given, taken away, a page
+          // ticked or unticked. What was read for the old set is not this person's to keep
+          // seeing, and what the new set adds has not been read: start the registers again.
+          const now = this.state.account;
+          const after = JSON.stringify(roleReports(now && now.id === u.id ? now : null));
+          if (before !== null && after !== before) {
+            if (typeof this.resetLiveData === 'function') this.resetLiveData();
+            if (typeof this.loadLiveData === 'function') this.loadLiveData();
+          }
+        });
       });
     }).catch(() => {});
   },

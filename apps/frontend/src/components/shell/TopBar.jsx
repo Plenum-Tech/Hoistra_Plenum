@@ -39,7 +39,7 @@ export default function TopBar({ vals }) {
         {/* The instance picked at sign-in (logic/instances.js). Pressing it goes back to the
             picker. Shown in the user view and the admin view alike. */}
         {vals.instShow ? (
-          <div className="hv4" role="button" tabIndex={0} onClick={vals.instSwitch} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vals.instSwitch(); } }} title="Switch instance"
+          <div className="hv4" role="button" tabIndex={0} onClick={vals.instSwitch} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vals.instSwitch(); } }} title={vals.instStatic ? "Your role" : "Switch instance"}
             style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap", flexShrink: "1", minWidth: "0", maxWidth: "200px", overflow: "hidden", fontSize: "11px", padding: "4px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)", cursor: "pointer" }}>
             <i className="ph ph-squares-four" style={{ fontSize: "12px", flexShrink: "0" }}></i>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>

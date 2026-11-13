@@ -7,7 +7,9 @@ Import and include in app.py:
     app.include_router(plenum_router, prefix="/api/v1/plenum")
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from cafm_connector.api.page_access import page_gate
 
 from cafm_connector.api.routes.plenum_cafm.org_users import router as org_users_router
 from cafm_connector.api.routes.plenum_cafm.rbac import router as rbac_router
@@ -16,7 +18,9 @@ from cafm_connector.api.routes.plenum_cafm.maintenance_vendors import router as 
 from cafm_connector.api.routes.plenum_cafm.work_orders import router as wo_router
 from cafm_connector.api.routes.plenum_cafm.inventory_notifications import router as inv_router
 
-plenum_router = APIRouter()
+# Every resource here is held to the pages its caller was given (api/page_access.py). The
+# gate does nothing for a caller with every page, which is everyone without an access role.
+plenum_router = APIRouter(dependencies=[Depends(page_gate)])
 
 plenum_router.include_router(org_users_router)
 plenum_router.include_router(rbac_router)

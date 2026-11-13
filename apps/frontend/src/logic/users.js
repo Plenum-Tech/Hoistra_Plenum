@@ -5,6 +5,24 @@
 // revert-on-error); a pure-seed row keeps the local-only behaviour so the demo still
 // works offline. Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { AX_BUILDINGS } from '../data/hoistra-access.js';
+import { ACCESS_ROLES, PAGE_OPTIONS, cleanPages, togglePage } from './accessRoles.js';
+
+// A chip, drawn the way the building chips are.
+const chipLook = (on) => ({
+  bg: on ? "var(--color-accent-900)" : "var(--color-surface)",
+  fg: on ? "var(--color-accent)" : "var(--color-neutral-400)",
+  edge: on ? "var(--color-accent)" : "var(--color-divider)",
+  tick: on ? "ph-check-square" : "ph-square"
+});
+const NO_ROLE = "No role — normal user";
+const NEEDS_A_PAGE = "Tick at least one page for this role.";
+// The role choice: no role first, then the four. A role is a label; it ticks nothing.
+const roleChips = (current, pick) => [{ key: "", label: NO_ROLE }].concat(ACCESS_ROLES).map((r) => Object.assign(
+  { key: r.key, label: r.label, on: (current || "") === r.key, pick: () => pick(r.key) }, chipLook((current || "") === r.key)));
+// The six pages, named as the navigator names them, with the space's name where it differs.
+const pageChips = (ticked, pick) => PAGE_OPTIONS.map((p) => Object.assign(
+  { key: p.key, label: p.label, hint: p.hint || "", on: ticked.indexOf(p.key) > -1, pick: () => pick(p.key) },
+  chipLook(ticked.indexOf(p.key) > -1)));
 
 export const usersMethods = {
   usSetU(id, fn) {
@@ -24,6 +42,24 @@ export const usersMethods = {
   usDisarm() {
     clearTimeout(this._usArmTimer);
     this.setState({ usArmed: null });
+  },
+
+  // A role change made on a user's row (the chips under their building allocation). It is
+  // saved the moment it can be: choosing No role saves at once; a role is saved with its
+  // pages, so it waits until one page is ticked - a role with no page would let the person
+  // open nothing, and the server refuses it. Until then the choice is kept here, unsaved.
+  usAccessSet(u, role, pages) {
+    const next = { role: role || "", pages: role ? cleanPages(pages) : [] };
+    this.setState((p) => ({ usAccess: Object.assign({}, p.usAccess, { [u.id]: next }) }));
+    if (!next.role) {
+      if (u.accessRole) return this.usLiveSetAccess(u, null, null);
+      return this.usAccessDrop(u.id);
+    }
+    if (!next.pages.length) return undefined;
+    return this.usLiveSetAccess(u, next.role, next.pages);
+  },
+  usAccessDrop(id) {
+    this.setState((p) => { const m = Object.assign({}, p.usAccess); delete m[id]; return { usAccess: m }; });
   },
 
   usersVals(s) {
@@ -84,6 +120,15 @@ export const usersMethods = {
         fg: s.usBlds.includes(b) ? "var(--color-accent)" : "var(--color-neutral-400)",
         edge: s.usBlds.includes(b) ? "var(--color-accent)" : "var(--color-divider)"
       })),
+      // The role, and the pages that go with it. No role is a normal user, who opens every
+      // page. Choosing a role shows the six pages with none ticked: the admin ticks each one.
+      usRoleOn: !!s.usRole,
+      usRoleChips: roleChips(s.usRole, (key) => this.setState({ usRole: key, usPages: [] })),
+      usPageChips: pageChips(s.usPages || [], (key) => this.setState((p) => ({ usPages: togglePage(p.usPages, key) }))),
+      usRoleNote: !s.usRole ? "A normal user opens every page, for the buildings above."
+        : (s.usPages || []).length ? "This user will open only the ticked pages, and only their data — in the app and in the chat."
+        : NEEDS_A_PAGE,
+      usSendOff: !!s.usRole && !(s.usPages || []).length,
       usIngestOn: s.usIngest,
       usToggleIngestForm: () => this.setState((p) => ({ usIngest: !p.usIngest })),
       usFormTgBg: s.usIngest ? "var(--color-accent)" : "var(--color-divider)",
@@ -96,11 +141,13 @@ export const usersMethods = {
         // admin. usLiveInvite()/the offline demo row below both already carry an empty
         // list through correctly; only this validation used to block it.
         if (!this.state.usName.trim() || !this.state.usEmail.trim()) return this.flash("Name and email are required.");
+        // A role with no page would let the person open nothing; the server refuses it too.
+        if (this.state.usRole && !(this.state.usPages || []).length) return this.flash(NEEDS_A_PAGE);
         // Live page → the real invitation (usersLive.js appends the server's row);
         // until then the local demo row keeps the flow working offline.
         if (this.state.usLiveLoadedAt && typeof this.usLiveInvite === "function") return this.usLiveInvite();
         const u = { id: "u" + this.state.users.length + "-" + this.state.usEmail, name: this.state.usName, email: this.state.usEmail, title: "Invited user", buildings: this.state.usBlds.slice(), ingest: this.state.usIngest, status: "Invited", queries: 0, ingests: 0, last: "—" };
-        this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false }));
+        this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false, usRole: "", usPages: [] }));
         this.flash(u.buildings.length
           ? "Invitation sent to " + u.email + " — they activate the account and set a password from the email."
           : "Invitation sent to " + u.email + " — no buildings allocated, so they'll see no data until some are.");
@@ -109,8 +156,25 @@ export const usersMethods = {
         const isMe = !!meEmail && (u.email || "").toLowerCase() === meEmail;
         const suspKey = "susp:" + u.id, delKey = "del:" + u.id;
         const suspArmed = s.usArmed === suspKey, delArmed = s.usArmed === delKey;
+        // The role this person holds, or the change being made on their row that is not
+        // saved yet. Only a live, plain user has one: an admin opens every page, and a sample
+        // row has no server behind it to save to.
+        const draft = (s.usAccess || {})[u.id];
+        const accRole = draft ? draft.role : (u.accessRole || "");
+        const accPages = draft ? draft.pages : cleanPages(u.pages);
+        const accEditable = !!u.live && !u.allB && u.role !== "admin" && u.role !== "superadmin";
+        const roleName = (ACCESS_ROLES.find((r) => r.key === u.accessRole) || {}).label || u.accessRoleLabel || u.accessRole || "";
         return {
+          id: u.id,
           name: u.name, email: u.email, title: u.title, isMe,
+          roleTag: accEditable ? roleName : "", roleTagShow: accEditable && roleName ? "inline-block" : "none",
+          accessShow: accEditable ? "flex" : "none",
+          roleChips: roleChips(accRole, (key) => this.usAccessSet(u, key, key ? accPages : [])),
+          pageChips: pageChips(accPages, (key) => this.usAccessSet(u, accRole, togglePage(accPages, key))),
+          pagesShow: accRole ? "flex" : "none",
+          accessNote: !accRole ? u.name + " is a normal user and opens every page."
+            : accPages.length ? u.name + " opens only the ticked pages, and only their data — in the app and in the chat."
+            : NEEDS_A_PAGE + " Nothing is saved until then.",
           labUser: u.live && !isMe ? { id: u.id, email: u.email, role: u.role } : null,
           // An admin row (live) carries buildings [] BY DESIGN — all_buildings rides along
           // so it does not render as "0 buildings" against the person who administers them.

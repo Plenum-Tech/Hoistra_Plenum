@@ -8,9 +8,11 @@ from urllib.parse import urlparse
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from .api.routes.auth import page_gate
 
 from .api.routes import (
     admin_router,
@@ -199,18 +201,23 @@ async def metrics():
     return {"service": settings.service_name, "uptime_probe": True}
 
 
-app.include_router(approvals_router)
-app.include_router(replacement_candidates_router)
+# Every domain router is held to the pages its caller was given (engines/auth/page_map.py).
+# The gate does nothing for a caller with every page, which is everyone without an access
+# role. The identity and administrator routers are not gated: their routes are public,
+# shared or administrator-only, and a restricted caller is a plain user.
+_PAGES = [Depends(page_gate)]
+app.include_router(approvals_router, dependencies=_PAGES)
+app.include_router(replacement_candidates_router, dependencies=_PAGES)
 app.include_router(auth_router)
 app.include_router(superadmin_router)
 app.include_router(admin_router)
-app.include_router(compliance_router)
-app.include_router(contract_performance_router)
-app.include_router(crons_router)
-app.include_router(document_search_router)
-app.include_router(energy_router)
-app.include_router(ingestion_router)
-app.include_router(maintenance_watch_router)
-app.include_router(reports_router)
-app.include_router(value_router)
-app.include_router(work_order_blockers_router)
+app.include_router(compliance_router, dependencies=_PAGES)
+app.include_router(contract_performance_router, dependencies=_PAGES)
+app.include_router(crons_router, dependencies=_PAGES)
+app.include_router(document_search_router, dependencies=_PAGES)
+app.include_router(energy_router, dependencies=_PAGES)
+app.include_router(ingestion_router, dependencies=_PAGES)
+app.include_router(maintenance_watch_router, dependencies=_PAGES)
+app.include_router(reports_router, dependencies=_PAGES)
+app.include_router(value_router, dependencies=_PAGES)
+app.include_router(work_order_blockers_router, dependencies=_PAGES)

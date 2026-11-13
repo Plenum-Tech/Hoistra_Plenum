@@ -194,9 +194,39 @@ def _scope_sql(building_ids: list[UUID] | None, column: str) -> tuple[str, dict[
 
 # ── decisions ────────────────────────────────────────────────────────────────────────
 
+#: The page that owns an approvals item, by the module that raised it (SOURCE_OF's words).
+#: A work order is this page's own row whatever it is attributed to, so it is not listed.
+_SOURCE_PAGE = {"Energy": "energy", "Compliance": "compliance", "Vendors": "vendors",
+                "Assets": "assets", "Maintenance": "ops"}
+
+
+def held_decisions(rows: list[dict[str, Any]], pages: frozenset[str] | None) -> list[dict[str, Any]]:
+    """The decisions a caller held to some pages may see (services/page_access.py).
+
+    A work order is the maintenance page's own row and stays. A decision that has no work
+    order yet is an approvals item another module raised — a lapsed certificate, an energy
+    finding — and is that module's page's to show. A caller with every page gets the list
+    untouched. This runs before anything is counted, so every tally below is over what the
+    caller can actually see.
+    """
+    if pages is None:
+        return rows
+    return [d for d in rows
+            if d.get("work_order") or _SOURCE_PAGE.get(str(d.get("source"))) in pages]
+
+
+def held_sources(labels: list[str], pages: frozenset[str] | None) -> list[str]:
+    """The source chips for this caller. Vendors stays with the maintenance page: a blocked or
+    late work order with a vendor on it is filed under it."""
+    if pages is None:
+        return labels
+    return [s for s in labels if s == "Vendors" or _SOURCE_PAGE.get(s) in pages]
+
+
 async def decisions(
     session: AsyncSession, *, building_ids: list[UUID] | None, limit: int = 200,
     state: str | None = None, source: str | None = None, group_by: str | None = None,
+    pages: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Every decision the property manager owes, across both places one can arrive from.
 
@@ -317,6 +347,7 @@ async def decisions(
             })
 
     out.extend(await _decisions_from_approvals(session, building_ids=building_ids, limit=fetch))
+    out = held_decisions(out, pages)
     out.sort(key=lambda d: (STATE_ORDER.get(d["state"], 9), str(d.get("building") or "")))
 
     # Counted over everything in scope, so the tallies do not change when a filter narrows
@@ -366,7 +397,7 @@ async def decisions(
         # instead of dropping its rows out of the filter row entirely.
         "available": {
             "state": list(STATE_ORDER),
-            "source": sorted(set(SOURCE_LABELS) | set(by_source)),
+            "source": held_sources(sorted(set(SOURCE_LABELS) | set(by_source)), pages),
             "group_by": list(GROUP_KEYS),
         },
         "group_by": group_by,
@@ -1365,13 +1396,17 @@ async def mark_statutory(session: AsyncSession, rows: list[dict[str, Any]], *,
 
 async def overview(
     session: AsyncSession, *, building_ids: list[UUID] | None,
+    pages: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """The four cards across the top of the Maintenance screen, in one call.
 
     Each card returns the sub-counts printed underneath it, not just the headline number —
     "2 blocked · 4 to raise · 2 deviating" is the part that tells somebody what to do next.
     """
-    dec = await decisions(session, building_ids=building_ids, limit=1000)
+    # Named only for a caller held to some pages, so a caller with every page makes the call
+    # this always made.
+    held = {"pages": pages} if pages is not None else {}
+    dec = await decisions(session, building_ids=building_ids, limit=1000, **held)
     # decisions() marks each row statutory or not (mark_statutory), so the chip and the card
     # agree by construction rather than by two counts happening to match.
     marked = sum(1 for d in dec.get("decisions", []) if d.get("statutory"))

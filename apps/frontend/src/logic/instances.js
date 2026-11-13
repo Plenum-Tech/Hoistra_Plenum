@@ -26,6 +26,7 @@
 // The pure shapers here are tested in test/instances.test.mjs; the methods are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { setActiveSpace } from '../api/client.js';
+import { isRoleUser, roleHome, roleLabel, roleReports } from './accessRoles.js';
 import { money } from './homeLive.js';
 import { t } from './constants.js';
 
@@ -119,13 +120,22 @@ export function instanceOf(key) { return INSTANCES.find((i) => i.key === key) ||
 // engine — names one of them; a label that names none (Platform, Documents, Migration, the
 // Orchestrator) belongs to every instance. The orchestrator applies the same rule to answers
 // (svc-deepagents agents/spaces.py).
-const MODULE_REPORT = { Compliance: 'compliance', Vendors: 'vendors', Energy: 'energy', Maintenance: 'ops', 'Work orders': 'ops', Assets: 'assets' };
+// Buildings is in every instance, so naming it here changes nothing for one; a user with an
+// access role (accessRoles.js) may hold pages without it.
+const MODULE_REPORT = { Compliance: 'compliance', Vendors: 'vendors', Energy: 'energy', Maintenance: 'ops', 'Work orders': 'ops', Assets: 'assets', Buildings: 'buildings' };
 // The page a session was raised on (core.js ctxLabel) → its report. Buildings is every instance's.
-const PAGE_REPORT = { Compliance: 'compliance', 'Compliance Graph': 'graph', Vendors: 'vendors', 'Hoist vendors': 'vendors', Energy: 'energy', Assets: 'assets', Maintenance: 'ops', 'Inspection reports': 'ops' };
+const PAGE_REPORT = { Compliance: 'compliance', 'Compliance Graph': 'graph', Vendors: 'vendors', 'Hoist vendors': 'vendors', Energy: 'energy', Assets: 'assets', Maintenance: 'ops', 'Inspection reports': 'ops', Buildings: 'buildings' };
 
 // The reports of the instance in view, or null when nothing is narrowed (admin view, superadmin,
 // full platform, none picked yet) — scopedInstance's rule.
+//
+// A user with an access role (accessRoles.js) has no instance: their reports are the pages an
+// admin ticked for them, in every view. Everything that narrows by an instance's reports -
+// the navigator, the queue, the sessions, the crons, a module's own screens - narrows by
+// those, so their pages behave as an instance of their own.
 export function instanceReports(s) {
+  const mine = roleReports(s && s.account);
+  if (mine) return mine;
   const c = scopedInstance(s);
   return c ? c.reports : null;
 }
@@ -152,6 +162,9 @@ export function instanceShowsSession(reports, rec) {
 // is the full platform, as it always was.
 export function usesInstances(account, viewOrgId) {
   if (!account) return false;
+  // A user with an access role is never asked to pick one (Hussain, 12 Nov 2026): what they
+  // see is the pages they were given.
+  if (isRoleUser(account)) return false;
   if (account.role === 'user' || account.role === 'admin') return true;
   return account.role === 'superadmin' && !!viewOrgId;
 }
@@ -353,10 +366,30 @@ export const instancesMethods = {
       instName: chosen ? chosen.name : '',
       instLine: chosen ? chosen.name + ' · ' + chosen.icp : '',
       instSwitch: () => this.instSwitch(),
+      // True when the chip only names something and switches nothing (a user's access role).
+      instStatic: false,
       isInstHome: !!c,
       navReportAdd: !c,
       homePh: c ? c.placeholder : 'Which buildings put me at risk this month?'
     };
+    // A user with an access role: the chip names the role and switches nothing, and the
+    // navigator lists the pages they were given. Home stays the full platform's, drawn from
+    // the same pages (renderVals), not one of the three instance homes.
+    const mine = roleReports(a);
+    if (mine) {
+      out.instShow = true;
+      out.instName = roleLabel(a) || '';
+      out.instLine = out.instName;
+      out.instStatic = true;
+      out.instSwitch = () => {};
+      out.navSections = (vals.navSections || []).filter((n) => mine.indexOf(NAV_REPORT[n.key]) > -1);
+      if (mine.indexOf('graph') > -1) {
+        const at = out.navSections.findIndex((n) => n.key === 'buildings_user');
+        out.navSections.splice(at + 1, 0, this.hgNavItem(s));
+      }
+      // Home's tiles, bars, line and pinned questions, less what an unticked page feeds.
+      return Object.assign(out, roleHome(a, vals, hm.hero));
+    }
     // The Compliance Engine's admin view keeps everything it had and adds its Compliance Graph
     // (Hussain, 12 Oct 2026). The admin view lists no other user-view report.
     if (on && !userView && chosen && chosen.reports.indexOf('graph') > -1) out.navSections = [this.hgNavItem(s)];

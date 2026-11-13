@@ -35,6 +35,7 @@ from .skills import (
     spec_text,
 )
 from . import llm_cost
+from . import page_access
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
@@ -405,6 +406,11 @@ class _TaskRunner:
             compact_context,
         ]
 
+        #: Each sub-agent's tools and prompt as it was first built, so a caller held to some
+        #: pages can be given the same agent over only their tools (_runner_for_pages).
+        self._specs: dict[str, tuple[list, Any]] = {}
+        self._page_runners: dict[tuple[str, tuple[str, ...] | None], Any] = {}
+
         def _sub(name: str, *, tools: list, prompt: Any) -> Any:
             """Every sub-agent manages its own context (agents/context_budget.py): it gets the
             compact_context tool and the budget hook. Until 6 Oct 2026 only the orchestrator and
@@ -412,6 +418,8 @@ class _TaskRunner:
             registers - the per-question compliance agent, energy, vendors - never compacted:
             the first Skill lab Measure recorded 0 compactions on 6 questions."""
             tools = list(tools)
+            self._specs.setdefault(name, (list(tools), prompt))
+            page_access.guard_tools(tools)
             if compact_context not in tools:
                 tools.append(compact_context)
             return create_react_agent(llm, tools=tools, prompt=prompt,
@@ -489,6 +497,19 @@ class _TaskRunner:
             ),
         }
 
+    def _runner_for_pages(self, agent: str) -> Any:
+        """This sub-agent for a caller held to some pages: the same agent over only the tools
+        their pages own, built once per set of pages. None when nothing of it is left - an
+        engine whose page they do not hold, or the table and document-index agents, whose
+        tools can read anything - and for an agent nobody registered."""
+        key = (agent, page_access.pages_key(page_access.current()))
+        if key not in self._page_runners:
+            spec = self._specs.get(agent)
+            kept = ([t for t in page_access.filter_tools(spec[0]) if t is not compact_context]
+                    if spec else [])
+            self._page_runners[key] = self._sub(agent, tools=kept, prompt=spec[1]) if kept else None
+        return self._page_runners[key]
+
     async def run(self, agent: str, prompt: str) -> str:
         answer, _ = await self.run_verbose(agent, prompt)
         return answer
@@ -519,6 +540,13 @@ class _TaskRunner:
         """
         runner = self._agents.get(agent)
         selection: dict[str, Any] | None = None
+        # A caller held to some pages runs the sub-agent over only their tools, or not at all
+        # (agents/page_access.py). A caller with every page takes the path below unchanged.
+        held_to_pages = page_access.current() is not None
+        if held_to_pages and runner is not None:
+            runner = self._runner_for_pages(agent)
+            if runner is None:
+                return json.dumps({"error": page_access.OUTSIDE_PAGES}), []
         if agent == "compliance" and selective_loading_enabled():
             # The contract is chosen from the question, so it cannot be built at startup.
             question = prompt.split("# User request", 1)[-1].strip() or prompt
@@ -532,7 +560,8 @@ class _TaskRunner:
                 system = "\n\n---\n\n".join(
                     [p for p in ((skill_body(shared) if shared else ""), spec_text(), contract) if p]
                 )
-                runner = self._sub("compliance", tools=self._compliance_tools, prompt=system)
+                runner = self._sub("compliance", tools=page_access.filter_tools(self._compliance_tools),
+                                   prompt=system)
             log.info(
                 "compliance.skills.selected",
                 source=selection.get("source"),
@@ -770,7 +799,7 @@ async def write_file(path: str, content: str) -> str:
     Returns:
         Confirmation with the byte count and path, or an error dict on failure.
     """
-    session = _session_ctx.get()
+    session = page_access.thread_key(_session_ctx.get())
     full_path = _in_session(session, path)
     if full_path is None:
         return json.dumps({"error": _OUTSIDE_SESSION})
@@ -798,7 +827,7 @@ async def read_file(path: str) -> str:
     Returns:
         File contents as a string, or an error dict if the file is not found.
     """
-    session = _session_ctx.get()
+    session = page_access.thread_key(_session_ctx.get())
     full_path = _in_session(session, path)
     if full_path is None:
         return json.dumps({"error": _OUTSIDE_SESSION})
@@ -829,7 +858,7 @@ async def memory_set(key: str, value: str) -> str:
     Returns:
         Confirmation that the value was stored under the given key.
     """
-    session = _session_ctx.get()
+    session = page_access.thread_key(_session_ctx.get())
     if session not in _MEMORY:
         _MEMORY[session] = {}
     _MEMORY[session][key] = value
@@ -850,7 +879,7 @@ async def memory_get(key: str) -> str:
     Returns:
         The stored value as a string, or an error dict if the key is not found.
     """
-    session = _session_ctx.get()
+    session = page_access.thread_key(_session_ctx.get())
     value = _MEMORY.get(session, {}).get(key)
     if value is None:
         return json.dumps({"error": f"Key '{key}' not found in session memory. Use memory_set first."})

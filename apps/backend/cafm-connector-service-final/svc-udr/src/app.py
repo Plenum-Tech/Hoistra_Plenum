@@ -19,6 +19,7 @@ from fastapi import Depends
 from .core.logging import configure_logging, get_logger
 from .api.routes import agent, catalog, tables, runs, spaces
 from .services.principal import current_principal, require_admin
+from .services.page_access import PageNotAllowed, page_gate, page_not_allowed_handler
 from .api.schemas.database import ErrorDetail, ErrorResponse
 from .db import ensure_udr_tables
 
@@ -115,6 +116,10 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     )
 
 
+# More specific than HTTPException, so it is chosen first for this one refusal.
+app.add_exception_handler(PageNotAllowed, page_not_allowed_handler)
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     detail = exc.detail
@@ -177,8 +182,11 @@ app.include_router(agent.router,  prefix="/api/agent",  tags=["Agent"],
                    dependencies=[Depends(require_admin)])
 app.include_router(tables.router, prefix="/api/tables", tags=["Tables", "CRUD"],
                    dependencies=[Depends(require_admin)])
+# The run history keeps the rows each run returned, from whichever table that was, so a
+# caller held to some pages is held out of it (services/page_access.py). The gate does
+# nothing for a caller with every page.
 app.include_router(runs.router,   prefix="/api/udr",    tags=["UDR Runs"],
-                   dependencies=[Depends(current_principal)])
+                   dependencies=[Depends(current_principal), Depends(page_gate)])
 app.include_router(spaces.router, prefix="/api/spaces", tags=["Saved Spaces"],
                    dependencies=[Depends(current_principal)])
 

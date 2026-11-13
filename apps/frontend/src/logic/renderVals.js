@@ -461,6 +461,9 @@ export const renderValsMethods = {
           ]
         : [D.portfolio.buildings + " buildings hoisted", D.portfolio.area, "UK, US, Singapore, UAE"],
       heroLive: heroLive,
+      // Home's four tiles. All drawn, except for a user with an access role, whose tiles with
+      // nothing of theirs in them are left out (accessRoles.js roleHome, via instVals).
+      homeTiles: { score: true, pnl: true, value: true },
       // A compliance page reached in an instance without Compliance (an old link, a stored view)
       // shows Home rather than the console or a blank page (ccBlocked).
       isHome: s.signedIn && (s.view === "home" || ccBlocked), isAnswer: s.signedIn && s.view === "answer", isModule: s.signedIn && s.view === "module" && !ccBlocked,
@@ -703,7 +706,7 @@ export const renderValsMethods = {
         : { value: "78", band: "Supervised autonomy", gap: "Meter consent lowest at 71% — the gap to delegated autonomy", note: "Ingestion coverage across the Hoist Graph. At 85 the agents move from supervised to delegated dispatch on L3 assets." },
       hoistBars: hmScore
         ? hm.score.bars.map((b) => ({
-            label: b.label, short: b.short, val: b.val, note: b.note,
+            key: b.key, label: b.label, short: b.short, val: b.val, note: b.note,
             pct: (b.pct === null ? 0 : b.pct) + "%",
             color: b.tone === "none" ? "var(--color-neutral-600)" : t(b.tone).color
           }))

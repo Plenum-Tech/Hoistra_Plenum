@@ -34,6 +34,7 @@ import { maintenanceLiveMethods } from './maintenanceLive.js';
 import { graphLiveMethods } from './graphLive.js';
 import { chatMethods } from './chat.js';
 import { loadSession, saveSession } from './session.js';
+import { guardLoaders, viewOffLimits } from './accessRoles.js';
 import { loadSessions, saveSessions, sessionsMethods } from './sessions.js';
 import { spacesMethods } from './spacesLive.js';
 import { FALLBACK_PRESETS, reportsMethods } from './reports.js';
@@ -238,6 +239,9 @@ export class HoistraLogic extends Controller {
     // usersLive fills the seed on a failed read, where the pill is the whole story.
     users: [], usOpen: null, usInviteOpen: false,
     usName: "", usEmail: "", usBlds: [], usIngest: false, usArmed: null,
+    // Users & access: the invite form's role and ticked pages, and - per user id - a role
+    // change that is being made on a row but is not saved yet (accessRoles.js, users.js).
+    usRole: "", usPages: [], usAccess: {},
     // The live read behind them (logic/usersLive.js): the /api/admin/users summary object
     // (drives the header tiles) and the company's canonical live buildings list
     // [{id, name, building_code}] every admin domain resolves names against — usersLive
@@ -397,8 +401,13 @@ export class HoistraLogic extends Controller {
     // and the key is removed exactly once, on the way out. `prev` lets saveSession tell,
     // on that way out, whether the SHARED slot still belongs to this tab's own account.
     if (this.state.signedIn || prev.signedIn) saveSession(this.state, prev);
-    if (toHome) this.setState({ view: "home" });
+    // A user with an access role is never left on a view whose page they do not hold, nor on
+    // the instance picker (accessRoles.js): either is Home for them.
+    if (toHome || viewOffLimits(st.account, st.view, st.module)) this.setState({ view: "home" });
   }
 }
 
 Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, skillLabMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsQueueMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, supportMethods, instancesMethods, vendorHoistMethods, vendorMasterMethods, vendorDeleteMethods, hoistGraphMethods, vendorBuildingsMethods, migrationMethods, emailHistoryMethods, renderValsMethods);
+// Each page's register loader runs only for an account that holds its page (accessRoles.js).
+// Done here, once every loader is on the prototype, so it holds for every caller of one.
+guardLoaders(HoistraLogic.prototype);

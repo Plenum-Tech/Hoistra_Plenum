@@ -710,6 +710,7 @@ async def decide_approval(
     item_id: UUID,
     body: QueueDecisionRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     out = await approvals_svc.decide_queue_item(
         session,
@@ -717,6 +718,7 @@ async def decide_approval(
         decision=body.decision,
         pm_notes=body.pm_notes,
         prepare_email_handoff=body.prepare_email_handoff,
+        scope=s,
     )
     # Approving an item about a deleted vendor is refused (it can still be dismissed): a conflict
     # with the vendor's state, answered as /api/approvals answers it.

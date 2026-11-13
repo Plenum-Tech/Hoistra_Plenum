@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from contextvars import ContextVar
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -46,6 +47,17 @@ class Principal:
     building_ids: tuple[UUID, ...] | None
     buildings: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
+    #: The pages this caller may open, or None for every page (services/page_access.py).
+    #: An empty set is a real answer: held to no page at all.
+    pages: "frozenset[str] | None" = None
+    #: The access role's key, for wording only; and when the pages last got narrower —
+    #: conversation turns made before it are not shown to this caller.
+    access_role: "str | None" = None
+    access_narrowed_at: "datetime | None" = None
+
+    def allows_page(self, page: str) -> bool:
+        return self.pages is None or page in self.pages
+
     @property
     def is_admin(self) -> bool:
         return self.role in ("admin", "superadmin")
@@ -69,6 +81,48 @@ def _unauthorized(error: str, reason: str) -> HTTPException:
     )
 
 
+#: The pages an administrator can tick for a user (the identity service owns the list:
+#: svc-operations-intelligence engines/auth/pages.py).
+_PAGES = frozenset({"buildings", "compliance", "energy", "vendors", "ops", "assets"})
+
+
+def _pages_from(user: dict) -> "frozenset[str] | None":
+    """The pages the identity service says this caller holds.
+
+    Absent or null is a caller with every page — and an identity service that predates the
+    field. A list is a caller held to those pages; anything in it this service does not know
+    is dropped. Any other shape holds nothing: an answer that cannot be read is never read
+    as "every page".
+    """
+    raw = user.get("pages")
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(p).strip().lower() for p in raw if isinstance(p, str)) & _PAGES
+
+
+def _when(value: Any) -> "datetime | None":
+    """An ISO timestamp from the identity service, as an aware datetime; None if unreadable."""
+    if not value:
+        return None
+    try:
+        at = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def _cut(user: dict[str, Any]) -> "datetime | None":
+    """When this caller's pages last got narrower. One that is sent but cannot be read is the
+    end of time, for a caller held to pages: everything earlier is hidden, rather than nothing."""
+    raw = user.get("access_narrowed_at")
+    at = _when(raw)
+    if at is None and raw and _pages_from(user) is not None:
+        return datetime.max.replace(tzinfo=timezone.utc)
+    return at
+
+
 def _from_me(body: dict[str, Any]) -> Principal:
     u = body.get("user") or {}
     raw_ids = u.get("building_ids")
@@ -85,6 +139,9 @@ def _from_me(body: dict[str, Any]) -> Principal:
         can_ingest=bool(u.get("can_ingest")),
         building_ids=ids,
         buildings=tuple(u.get("buildings") or ()),
+        pages=_pages_from(u),
+        access_role=str(u["access_role"]) if u.get("access_role") else None,
+        access_narrowed_at=_cut(u),
     )
 
 

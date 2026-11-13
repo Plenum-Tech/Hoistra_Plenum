@@ -58,6 +58,7 @@ import { energyApi } from '../api/energy.js';
 import { complianceApi } from '../api/compliance.js';
 import { isStaleScope } from '../api/client.js';
 import { t } from './constants.js';
+import { assetChain, canAct } from './accessRoles.js';
 import { actionCtx, actionSteps, mailDraft, investigationQuestion as shapeQuery, investigationSteps, shapeInvestigation, investigationError,
   datasetOf, datasetFailure, summaryBody, summaryReply } from './assetsActions.js';
 import { deepAgentsApi } from '../api/deepAgents.js';
@@ -928,6 +929,9 @@ export const assetsConditionMethods = {
         wo: (e) => { if (e && e.stopPropagation) e.stopPropagation(); return this.asCondAction(x, 'wo'); },
         inspect: (e) => { if (e && e.stopPropagation) e.stopPropagation(); return this.asCondAction(x, 'inspect'); },
         woLabel: 'Raise work order', inspectLabel: 'Request inspection',
+        // Both raise work for the maintenance register. A user with an access role who does
+        // not hold that page is not offered them (accessRoles.js canAct).
+        actShow: canAct(this.state.account, 'assetWorkOrder') ? 'inline-flex' : 'none',
         openWorkOrders: nWo,
         locName: loc ? (loc.name || [loc.floor, loc.zone].filter(Boolean).join(' · ') || 'Unnamed location') : 'Location not set',
         open: () => this.asCondOpenAsset(x, loc, nWo),
@@ -1320,16 +1324,25 @@ export const assetsConditionMethods = {
       detailFields: [], detailActions: []
     });
     this._asCondDetailId = a.asset_id;
+    // Certificates are the compliance register's. A user with an access role who does not
+    // hold that page gets the drawer without those two lines, and nothing is asked for.
+    const certLines = assetChain(this.state.account, [{ a: 'certificates' }]).length > 0;
+    if (!certLines) {
+      this.setState((p) => p.detail && p.detail.title === a.asset_name
+        ? { detail: Object.assign({}, p.detail, { chain: assetChain(this.state.account, p.detail.chain) }) } : {});
+    }
     // The asset's own certificates, and its vendor's - by name, which is what the condition
     // read carries for the asset; the register matches vendor_name exactly.
     const patch = (key, text) => this.setState((p) => p.detail && p.detail.title === a.asset_name
       ? { detail: Object.assign({}, p.detail, { chain: p.detail.chain.map((c) => c.a === key ? { a: c.a, t: text } : c) }) } : {});
     const vendorName = ((this.state.asCondBands || []).find((r) => r && String(r.asset_id) === String(a.asset_id)) || {}).vendor || null;
-    complianceApi.listCertificates({ asset_id: a.asset_id }).then((res) => {
+    if (certLines) complianceApi.listCertificates({ asset_id: a.asset_id }).then((res) => {
       if (this._asCondDetailId !== a.asset_id) return;
       patch('certificates', assetCertificatesLine((res && (res.certificates || res.items)) || (Array.isArray(res) ? res : [])));
     }).catch((e) => { if (this._asCondDetailId === a.asset_id) patch('certificates', 'Unreachable — ' + ((e && e.message) || e)); });
-    if (vendorName) {
+    if (!certLines) {
+      // nothing to read: the lines are not in the drawer
+    } else if (vendorName) {
       complianceApi.listCertificates({ cert_scope: 'Vendor', vendor_name: vendorName }).then((res) => {
         if (this._asCondDetailId !== a.asset_id) return;
         patch('vendor accreditation', vendorName + ' — ' + vendorAccreditationLine((res && (res.certificates || res.items)) || (Array.isArray(res) ? res : [])));
@@ -1416,6 +1429,9 @@ export const assetsConditionMethods = {
   // investigation's task and returning to it once the email has gone.
   async asCondAction(x, kind, opts) {
     const o = opts || {};
+    // Not offered to a user with an access role who does not hold the maintenance page; and
+    // not done for one either, however it was reached (accessRoles.js canAct).
+    if (!canAct(this.state.account, kind === 'wo' ? 'assetWorkOrder' : 'assetInspection')) return;
     // From an investigation the vendor and its address came back with the answer, so the
     // draft opens at once; from the row, the per-asset read is what names them.
     if (!o.fromInv) await this.asCondLoadIntel(x.a.asset_id);

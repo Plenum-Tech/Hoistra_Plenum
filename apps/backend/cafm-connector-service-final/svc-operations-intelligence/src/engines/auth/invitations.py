@@ -28,6 +28,7 @@ from ...shared.approvals import send_platform_email
 from ...shared.email_template import wrap_html
 from . import accounts as account_engine
 from . import otp as otp_engine
+from . import pages as page_engine
 from . import passwords as password_engine
 from . import roles as role_engine
 
@@ -106,6 +107,8 @@ async def create(
     invited_by: UUID | None,
     inviter_name: str | None = None,
     job_title: str | None = None,
+    access_role: str | None = None,
+    pages: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create the pending account and the invitation, and send the email.
 
@@ -113,16 +116,28 @@ async def create(
     open issues a fresh link and expires the old one, rather than creating a second account.
     An email that already belongs to an ACTIVE account is refused — that person exists and
     should be edited, not re-invited.
+
+    ``access_role`` and ``pages`` (already validated by pages.validate_assignment) are written
+    on the user row only, not on the invitation: the invite already writes that row, and
+    re-applying them from the invitation at acceptance would undo an edit an administrator
+    made in between.
     """
     addr = (email or "").strip().lower()
     if not addr or "@" not in addr:
         raise InvitationError("bad_email", "A valid email address is required.")
     if role not in role_engine.ROLES:
         raise InvitationError("bad_role", f"Unknown role {role!r}.")
+    # Named only once the columns exist; until then an invitation without a role runs the
+    # statements it always ran, and one with a role is refused rather than half-applied.
+    has_pages = await page_engine.columns_ready(session)
+    if access_role and not has_pages:
+        raise InvitationError("access_roles_not_set_up", page_engine.NOT_SET_UP, 409)
 
     existing = (
         await session.execute(
-            text("""SELECT id, organization_id, status FROM plenum_cafm.users
+            text(f"""SELECT id, organization_id, status
+                            {', platform_role, access_role, allowed_pages' if has_pages else ''}
+                       FROM plenum_cafm.users
                      WHERE lower(email) = :e"""),
             {"e": addr},
         )
@@ -174,6 +189,26 @@ async def create(
                  "r": role, "ci": bool(can_ingest), "jt": job_title, "by": invited_by},
             )
         ).scalar()
+
+    if has_pages:
+        # A re-invitation replaces whatever role the row held, including with none. It is
+        # stamped as a narrowing only when an account that already existed loses a page: a
+        # new account has no earlier history to hide.
+        after = frozenset(pages or ()) if access_role else None
+        before = (
+            page_engine.resolve(existing["platform_role"], existing["access_role"],
+                                existing["allowed_pages"])[1]
+            if existing else after
+        )
+        await session.execute(
+            text("""UPDATE plenum_cafm.users
+                       SET access_role = :ar, allowed_pages = CAST(:ap AS text[]),
+                           access_narrowed_at = CASE WHEN CAST(:narrowed AS boolean)
+                                                     THEN now() ELSE access_narrowed_at END
+                     WHERE id = :i"""),
+            {"ar": access_role or None, "ap": list(pages) if access_role else None,
+             "narrowed": page_engine.narrowed(before, after), "i": user_id},
+        )
 
     # Any earlier open invitation for this address is superseded.
     await session.execute(
@@ -229,6 +264,8 @@ async def create(
         "ok": True, "invitation_id": str(invitation_id), "user_id": str(user_id),
         "email": addr, "role": role, "can_ingest": bool(can_ingest),
         "building_ids": [str(b) for b in building_ids],
+        "access_role": access_role or None,
+        "pages": list(pages) if access_role else None,
         "expires_at": expires.isoformat(), "email_sent": sent, "delivered": delivered,
     }
     if not delivered:

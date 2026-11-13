@@ -29,6 +29,7 @@
 // HoistraLogic.prototype and `this` is the controller.
 import { adminApi } from '../api/admin.js';
 import { AX_USERS } from '../data/hoistra-access.js';
+import { ACCESS_ROLES, PAGE_OPTIONS, cleanPages } from './accessRoles.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -76,7 +77,7 @@ export function statusLabel(raw) {
 // "0 buildings" against them).
 export function shapeLiveUser(u, bldNameById, now) {
   const usage = u.usage || {};
-  return {
+  const row = {
     id: String(u.id),
     name: u.full_name || u.email || "—",
     email: u.email || "",
@@ -98,6 +99,13 @@ export function shapeLiveUser(u, bldNameById, now) {
     last: lastActiveLabel(usage.last_active, now),
     live: true
   };
+  // The access role an admin gave this person and the pages that go with it (accessRoles.js).
+  // Carried when the server sends them, so a row from a build that does not is the shape it was.
+  return "access_role" in u || "pages" in u ? Object.assign(row, {
+    accessRole: u.access_role || null,
+    accessRoleLabel: u.access_role_label || null,
+    pages: Array.isArray(u.pages) ? u.pages : null
+  }) : row;
 }
 
 // ── controller methods ──────────────────────────────────────────────────
@@ -197,6 +205,9 @@ export const usersLiveMethods = {
       building_ids: names.map((n) => this.usBldIdOf(n)).filter(Boolean),
       can_ingest: !!s.usIngest
     };
+    // A role and its ticked pages, only when one was chosen: without them the person is a
+    // normal user, and the invitation is the one it always was.
+    if (s.usRole) { body.access_role = s.usRole; body.pages = cleanPages(s.usPages); }
     // The API accepts building_ids: [] — a picked name that cannot resolve to a live id
     // would be silently dropped, inviting a user who "will see no data" while the row
     // shows buildings the server never allocated. Refuse the lossy invite instead.
@@ -210,9 +221,12 @@ export const usersLiveMethods = {
         id: String(r.user_id), name: body.full_name, email: r.email || body.email, title: "Invited user",
         // Only server-confirmed buildings — never the picked names the server may not hold.
         buildings: (r.buildings || []).map((b) => b.name),
-        ingest: !!r.can_ingest, status: "Invited", queries: 0, ingests: 0, last: "—", live: true
+        ingest: !!r.can_ingest, status: "Invited", queries: 0, ingests: 0, last: "—", live: true,
+        role: "user",
+        // What the server recorded, not what the form held.
+        accessRole: r.access_role || null, accessRoleLabel: null, pages: Array.isArray(r.pages) ? r.pages : null
       };
-      this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false }));
+      this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false, usRole: "", usPages: [] }));
       // accept_url only rides back when the email was not delivered (dry-run/undelivered)
       // — then the link is the only way in, so the admin is told to share it. note rides
       // back instead when zero buildings were allocated (engines/auth's own wording) —
@@ -229,6 +243,36 @@ export const usersLiveMethods = {
     } finally {
       this._usInviteBusy = false;
     }
+  },
+
+  // The role and pages of one user: PATCH {access_role, pages}, or {access_role: null} to
+  // make them a normal user again. The row changes only when the server has taken it - this
+  // decides what a person may see, so it is never shown as done before it is - and a refusal
+  // drops the unsaved choice, leaving the row as the server holds it, with the reason said.
+  usLiveSetAccess(u, role, pages) {
+    const pend = this.usPendOf(u.id, "access");
+    const body = role ? { access_role: role, pages: cleanPages(pages) } : { access_role: null };
+    const seq = ++pend.seq;
+    const send = () => adminApi.patchUser(u.id, body).then(() => {
+      // The server took this change, so the row says so - even when a newer change is already
+      // on its way: if that one is refused, the row must show what the server holds, which
+      // is this. Only the newest change clears the unsaved choice and speaks.
+      const label = role ? ((ACCESS_ROLES.find((r) => r.key === role) || {}).label || role) : null;
+      this.usSetU(u.id, (x) => ({ ...x, accessRole: role || null, accessRoleLabel: label, pages: role ? body.pages : null }));
+      if (seq !== pend.seq) return;
+      pend.done = seq;
+      this.usAccessDrop(u.id);
+      this.flash(role
+        ? u.name + " now opens only: " + body.pages.map((k) => (PAGE_OPTIONS.find((p) => p.key === k) || {}).label || k).join(", ") + "."
+        : u.name + " is a normal user again and opens every page.");
+    }).catch((e) => {
+      if (seq !== pend.seq) return;
+      pend.done = seq;
+      this.usAccessDrop(u.id);
+      this.flash("Role not saved for " + u.name + " — " + ((e && e.message) || String(e)));
+    });
+    // Serialised, like the other row edits: the server applies PATCHes in arrival order.
+    return (pend.chain = (pend.chain || Promise.resolve()).then(send, send));
   },
 
   // Optimistic flip; the newest settled call decides, a stale one is ignored, and a

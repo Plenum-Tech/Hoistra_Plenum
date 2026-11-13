@@ -27,6 +27,7 @@ from ...db import get_session
 from ...engines.auth import access
 from ...engines.crons import jobs as cron_svc
 from ...engines.reports import cards as card_svc
+from ...shared import page_filter
 from .auth import scope
 
 router = APIRouter(prefix="/api/crons", tags=["crons"], dependencies=[Depends(scope)])
@@ -78,9 +79,22 @@ class CronPatch(BaseModel):
     building_id: UUID | None = Field(None, description="Limit the job to this building; null = company-wide.")
 
 
+def _held(s: access.Scope, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The jobs a caller held to some pages may see: those of the pages they hold. The
+    free-form question job is asked and answered with an administrator's reach, so it and its
+    answers are shown to nobody held to pages (shared/page_filter.py)."""
+    if s.pages is None:
+        return jobs
+    return [j for j in jobs if page_filter.cron_allowed(s.pages, j.get("module"))]
+
+
+def _no_job() -> HTTPException:
+    return HTTPException(status_code=404, detail={"ok": False, "error": "No such job.", "reason": "job_not_found"})
+
+
 @router.get("/catalogue")
-async def catalogue() -> dict[str, Any]:
-    return {"jobs": cron_svc.catalogue(),
+async def catalogue(s: access.Scope = Depends(scope)) -> dict[str, Any]:
+    return {"jobs": _held(s, cron_svc.catalogue()),
             "refresh_presets": [{k: v for k, v in p.items()} for p in card_svc.PRESETS],
             "min_every_minutes": card_svc.MIN_EVERY_MINUTES}
 
@@ -91,18 +105,31 @@ async def list_jobs(organization_id: UUID | None = None, runs: int = Query(3, ge
                     session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
     org = _org(s, organization_id)
     jobs = await cron_svc.list_jobs(session, org, runs=runs)
-    return {"jobs": jobs, "recent_runs": await cron_svc.recent_runs(session, org, limit=20),
-            "stats": await cron_svc.stats(session, org, tz=tz), "can_manage": s.is_admin}
+    recent = await cron_svc.recent_runs(session, org, limit=20)
+    stats = await cron_svc.stats(session, org, tz=tz)
+    if s.pages is not None:
+        jobs = _held(s, jobs)
+        mine = {j["id"] for j in jobs}
+        recent = [r for r in recent if r.get("job_id") in mine]
+        # The tiles count every job's runs. A count over jobs this caller cannot see is not
+        # theirs to read, so the figures are withheld rather than shown in part.
+        stats = {k: (v if k == "timezone" else None) for k, v in stats.items()}
+    return {"jobs": jobs, "recent_runs": recent, "stats": stats, "can_manage": s.is_admin}
 
 
 @router.get("/daily")
 async def daily(organization_id: UUID | None = None, days: int = Query(14, ge=1, le=cron_svc.RUN_HISTORY_DAYS),
                 tz: str = Query("UTC", max_length=64), job_id: UUID | None = None,
                 session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
+    org = _org(s, organization_id)
     try:
-        return await cron_svc.daily_status(session, _org(s, organization_id), days=days, tz=tz, job_id=job_id)
+        out = await cron_svc.daily_status(session, org, days=days, tz=tz, job_id=job_id)
     except cron_svc.CronError as exc:
         raise _bad(exc) from None
+    if s.pages is not None:
+        mine = {j["id"] for j in _held(s, await cron_svc.list_jobs(session, org, runs=0))}
+        out = dict(out, jobs=[j for j in out.get("jobs") or [] if j.get("job_id") in mine])
+    return out
 
 
 @router.get("/{job_id}/runs")
@@ -110,8 +137,8 @@ async def runs(job_id: UUID, organization_id: UUID | None = None, limit: int = Q
                session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
     org = _org(s, organization_id)
     job = await cron_svc.get_job(session, org, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail={"ok": False, "error": "No such job.", "reason": "job_not_found"})
+    if job is None or not _held(s, [job]):
+        raise _no_job()
     return {"job": job, "runs": await cron_svc.job_runs(session, org, job_id, limit=limit)}
 
 
@@ -119,6 +146,10 @@ async def runs(job_id: UUID, organization_id: UUID | None = None, limit: int = Q
 async def events(job_id: UUID, organization_id: UUID | None = None, limit: int = Query(50, ge=1, le=500),
                  session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
     org = _org(s, organization_id)
+    if s.pages is not None:
+        job = await cron_svc.get_job(session, org, job_id)
+        if job is None or not _held(s, [job]):
+            raise _no_job()
     return {"events": await cron_svc.job_events(session, org, job_id, limit=limit)}
 
 

@@ -12,7 +12,7 @@ acting for. Nothing here is public.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -36,6 +36,46 @@ def _act(principal: Principal, organization_id: str | None) -> str | None:
     return org
 
 
+def _cut(principal: Principal) -> datetime | None:
+    """When this caller's pages last got narrower, for a caller held to some pages; else None.
+    A trace keeps a turn's prompts and answers, so what was traced before then is not shown
+    to them again (services/chat_threads._narrowed_at is the same rule for the turns)."""
+    if getattr(principal, "pages", None) is None:
+        return None
+    return getattr(principal, "access_narrowed_at", None)
+
+
+def _floor(principal: Principal, since: datetime | None) -> datetime | None:
+    """The earliest moment this caller may read traces from."""
+    cut = _cut(principal)
+    if cut is None:
+        return since
+    if since is None:
+        return cut
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    return max(since, cut)
+
+
+def _hidden(principal: Principal, turn: dict[str, Any]) -> bool:
+    """Whether one traced turn is from before the cut. One with no time on it cannot be shown
+    to be recent."""
+    cut = _cut(principal)
+    if cut is None:
+        return False
+    at = turn.get("started_at")
+    if isinstance(at, str):
+        try:
+            at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        except ValueError:
+            at = None
+    if at is None:
+        return True
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return at <= cut
+
+
 @router.get("/turns")
 async def list_turns(since: datetime | None = Query(None), until: datetime | None = Query(None),
                      q: str | None = Query(None, max_length=200), status: str | None = Query(None, pattern="^(ok|error)$"),
@@ -45,7 +85,7 @@ async def list_turns(since: datetime | None = Query(None), until: datetime | Non
                      organization_id: str | None = Query(None),
                      principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     org = _act(principal, organization_id)
-    rows = await trace.list_turns(principal, org, since=since, until=until, q=q, status=status, model=model, user=user,
+    rows = await trace.list_turns(principal, org, since=_floor(principal, since), until=until, q=q, status=status, model=model, user=user,
                                   session_id=session_id, limit=limit, offset=offset)
     return {"ok": True, "available": trace.ready(), "turns": rows, "can_manage": principal.is_admin}
 
@@ -55,7 +95,7 @@ async def get_turn(turn_id: str, organization_id: str | None = Query(None),
                    principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     org = _act(principal, organization_id)
     t = await trace.get_turn(principal, org, turn_id)
-    if t is None:
+    if t is None or _hidden(principal, t):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     return {"ok": True, "turn": t}
 
@@ -65,7 +105,7 @@ async def get_stats(since: datetime | None = Query(None), until: datetime | None
                     organization_id: str | None = Query(None),
                     principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     org = _act(principal, organization_id)
-    return await trace.stats(principal, org, since=since, until=until)
+    return await trace.stats(principal, org, since=_floor(principal, since), until=until)
 
 
 class Feedback(BaseModel):
@@ -115,7 +155,7 @@ async def rerun_turn(turn_id: str, body: RerunBody, request: Request, organizati
     org = _act(principal, organization_id)
     caller_authorization.set(request.headers.get("authorization"))
     turn = await trace.get_turn(principal, org, turn_id)
-    if turn is None:
+    if turn is None or _hidden(principal, turn):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     if not body.corrections:
         raise HTTPException(status_code=422, detail={"ok": False, "error": "Say what to correct first."})

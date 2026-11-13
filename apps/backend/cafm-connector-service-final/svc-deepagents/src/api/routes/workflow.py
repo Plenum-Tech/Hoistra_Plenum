@@ -12,6 +12,7 @@ Endpoints:
 import json
 import os
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ from ...agents.single_door_flow import (
 from ...limiter import limiter
 from ..deps import get_orchestrator
 from ...agents import activity_log
-from ...services import building_binding, usage_events
+from ...services import building_binding, chat_threads, usage_events
 from ...services import ingestion_validation as validation_gate
 from ...services.principal import (
     WS_AUTH_SUBPROTOCOL,
@@ -934,10 +935,61 @@ async def run_stateful_workflow_with_files(
                 remove_files(saved_paths)
 
 
+async def _session_guard(session_id: str, principal: Principal, *, unknown_ok: bool = False) -> None:
+    """404 unless this conversation is the caller's to read.
+
+    These routes are handed a session id and nothing else, and answered whoever asked. A
+    conversation is its owner's; their company's admin may read it, as they may read its
+    traces; a superadmin may read any. One with no record has no owner to check: its workspace
+    and status are polled before the first question is recorded, so those let it through
+    (``unknown_ok``); its activity is nobody's to read, since nothing shows whose it is.
+    """
+    if principal.role == "superadmin":
+        return
+    owner = await chat_threads.session_owner(session_id)
+    if owner is None:
+        if unknown_ok:
+            return
+    else:
+        mine = str(owner.get("user_id") or "") == str(principal.user_id)
+        same_company = bool(owner.get("organization_id") and principal.organization_id
+                            and str(owner["organization_id"]) == str(principal.organization_id))
+        if mine or (principal.is_admin and same_company):
+            return
+    raise HTTPException(status_code=404, detail={"ok": False, "error": "No such session.",
+                                                 "reason": "not_found"})
+
+
+def _since_cut(principal: Principal, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Activity rows a caller held to some pages may see: those recorded after their pages
+    were last narrowed (services/chat_threads._narrowed_at is the same rule for the turns).
+    The same list for everyone else."""
+    cut = getattr(principal, "access_narrowed_at", None)
+    if getattr(principal, "pages", None) is None or cut is None:
+        return rows
+    kept = []
+    for row in rows:
+        at = row.get("created_at")
+        if isinstance(at, str):
+            try:
+                at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+            except ValueError:
+                at = None
+        if at is None:
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        if at > cut:
+            kept.append(row)
+    return kept
+
+
 @router.post("/resume/{session_id}", response_model=WorkflowResponse)
 async def resume_workflow(
     session_id: str,
     body: ResumeRequest,
+    request: Request,
+    principal: Principal = Depends(current_principal),
     orchestrator=Depends(get_orchestrator),
 ) -> WorkflowResponse:
     """
@@ -954,6 +1006,12 @@ async def resume_workflow(
         {"confirmed": true}   ← proceeds with the destructive rollback
         {"confirmed": false}  ← cancels the rollback
     """
+    # It resumed any session for anybody, as nobody: no token, no caller, so what ran next
+    # ran with no company, no buildings and no pages. It is now the caller's own run, resumed
+    # as them - their token on every call it makes, their pages on every tool it is handed.
+    await _session_guard(session_id, principal, unknown_ok=True)
+    caller_authorization.set(request.headers.get("authorization"))
+    caller_principal.set(principal)
     activity_log.set_current_session(session_id, session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     activity_log.set_current_session(session_id, session_id)
@@ -973,9 +1031,11 @@ async def get_workspace_status(
         None,
         description="Optional migration UUID(s) from the UI to sync mapping/hierarchy pills",
     ),
+    principal: Principal = Depends(current_principal),
     orchestrator=Depends(get_orchestrator),
 ) -> WorkspaceStatusResponse:
     """Phase 7 — workspace status cards for ingestion / mapping / hierarchy / WO candidate."""
+    await _session_guard(session_id, principal, unknown_ok=True)
     if migration_id:
         from ...agents.session_workspace import register_migration_id
 
@@ -988,6 +1048,7 @@ async def get_workspace_status(
 @router.get("/status/{session_id}", response_model=ThreadStatusResponse)
 async def get_workflow_status(
     session_id: str,
+    principal: Principal = Depends(current_principal),
     orchestrator=Depends(get_orchestrator),
 ) -> ThreadStatusResponse:
     """
@@ -997,6 +1058,7 @@ async def get_workflow_status(
     waiting for a human decision. Returns interrupted=false if the session
     completed or doesn't exist.
     """
+    await _session_guard(session_id, principal, unknown_ok=True)
     state = await orchestrator.get_thread_state(session_id)
     if state is None:
         return ThreadStatusResponse(
@@ -1179,8 +1241,15 @@ class ActivityEntry(BaseModel):
 
 
 @router.get("/activity")
-async def activity_sessions(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
-    """Sessions with recorded activity, newest first."""
+async def activity_sessions(limit: int = Query(50, ge=1, le=500),
+                            principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """Sessions with recorded activity, newest first - every company's, so a platform tool.
+    The log has no company on its rows to narrow this by; it was served to anyone with no
+    token at all."""
+    if principal.role != "superadmin":
+        raise HTTPException(status_code=403, detail={
+            "ok": False, "error": "This is a platform tool, not part of the app.",
+            "reason": "platform_only"})
     return {"ok": True, "sessions": await activity_log.recent_sessions(limit=limit)}
 
 
@@ -1191,16 +1260,25 @@ async def activity_for_session(
     stage: str | None = Query(None, description="turn | plan | fetch | summary | analyst | review | router | tool | action"),
     turn_id: str | None = Query(None, description="Only the rows of one transaction"),
     limit: int = Query(200, ge=1, le=2000),
+    principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
     """Every recorded input/output for one session, oldest first — for troubleshooting a turn."""
-    rows = await activity_log.list_activity(session_id, agent=agent, stage=stage, turn_id=turn_id, limit=limit)
+    await _session_guard(session_id, principal)
+    rows = _since_cut(principal, await activity_log.list_activity(
+        session_id, agent=agent, stage=stage, turn_id=turn_id, limit=limit))
     return {"ok": True, "session_id": session_id, "turn_id": turn_id, "count": len(rows), "entries": rows}
 
 
 @router.get("/activity/{session_id}/turns")
-async def activity_turns(session_id: str, limit: int = Query(200, ge=1, le=2000)) -> dict[str, Any]:
+async def activity_turns(session_id: str, limit: int = Query(200, ge=1, le=2000),
+                         principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """The transactions of one session: per turn, its first input, final output, the stages it
     passed through, token totals and whether every step succeeded."""
+    await _session_guard(session_id, principal)
+    if getattr(principal, "pages", None) is not None and getattr(principal, "access_narrowed_at", None):
+        # The roll-up spans a turn's whole life and carries its first input and final output;
+        # a caller whose pages were narrowed reads the rows themselves, from the cut on.
+        return {"ok": True, "session_id": session_id, "count": 0, "turns": []}
     turns = await activity_log.list_turns(session_id, limit=limit)
     return {"ok": True, "session_id": session_id, "count": len(turns), "turns": turns}
 
@@ -1237,7 +1315,8 @@ async def investigation_summary(
 
 
 @router.post("/activity", status_code=201)
-async def activity_append(entry: ActivityEntry) -> dict[str, Any]:
+async def activity_append(entry: ActivityEntry,
+                          _principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """Append one client-side activity entry (e.g. the compliance console's scan / verify /
     renewal calls with their responses)."""
     row_id = await activity_log.record(

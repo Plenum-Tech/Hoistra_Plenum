@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from ... import database
+from ...agents import page_access
 from ...services.principal import Principal, current_principal
 
 log = structlog.get_logger(__name__)
@@ -101,6 +102,18 @@ async def _owner_and_kind(session, doc_id: str) -> dict | None:
           FROM plenum_cafm.documents d WHERE d.document_id::text = :id"""), {"id": doc_id})).mappings().first()
 
 
+def _page_allows(principal: Principal, row) -> bool:
+    """Whether the caller's pages own this document (agents/page_access.py): a document
+    belongs to the page that owns its type. A caller with every page may see any; one held
+    to some pages may not open a file with no register row, which has no type to go by."""
+    pages = getattr(principal, "pages", None)
+    if pages is None:
+        return True
+    if row is None:
+        return False
+    return page_access.document_page(row.get("doc_type")) in pages
+
+
 def _is_personal(row) -> bool:
     return (row.get("sensitivity") or "").lower() == "personal" or (row.get("doc_type") or "").lower() in _PERSONAL_TYPES
 
@@ -126,6 +139,8 @@ async def document_link(document_id: str, principal: Principal = Depends(current
             if principal.role != "superadmin" and (
                     not principal.organization_id or str(row["owner_org"] or "") != str(principal.organization_id)
                     or (row["building_id"] and not principal.allows_building(row["building_id"]))):
+                raise HTTPException(status_code=404, detail="Document not found")
+            if not _page_allows(principal, row):
                 raise HTTPException(status_code=404, detail="Document not found")
             personal = _is_personal(row)
             if personal and not principal.is_admin:
@@ -273,6 +288,8 @@ async def index_filed_document(document_id: str, principal: Principal = Depends(
     if row is None or (principal.role != "superadmin" and (
             not principal.organization_id or str(row["owner_org"] or "") != str(principal.organization_id)
             or (row["building_id"] and not principal.allows_building(row["building_id"])))):
+        raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found", "error": "No such document."})
+    if not _page_allows(principal, row):
         raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found", "error": "No such document."})
     if (row["sensitivity"] or "").lower() == "personal" or (row["doc_type"] or "").lower() in _PERSONAL_TYPES:
         raise HTTPException(status_code=422, detail={"ok": False, "reason": "personal",

@@ -1708,3 +1708,11 @@ WO_ENGINE_SUBAGENT_TOOLS = [
     create_work_order, update_work_order, transition_work_order, approve_work_order,
     close_work_order,
 ]
+
+
+# These lists hold tools the orchestrator's main list leaves out, so they are guarded here,
+# where they are defined: each refuses to run for a caller whose pages do not own it
+# (agents/page_access.py).
+from . import page_access as _page_access  # noqa: E402
+
+_page_access.guard_tools([*MAINTENANCE_READ_TOOLS, *WO_ENGINE_SUBAGENT_TOOLS])

@@ -21,11 +21,13 @@ not reach, and the two helpers are shaped so that using them is shorter than not
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, Query, status
+from fastapi import Depends, Header, HTTPException, Query, Request, status
 
+from ...shared import page_filter
 from . import roles as role_engine
 from . import tokens as token_engine
 
@@ -40,10 +42,25 @@ class Scope:
     #: None = unrestricted within the organisation. () = restricted to nothing.
     building_ids: tuple[UUID, ...] | None
     can_ingest: bool
+    #: The access role and the pages that go with it (engines/auth/pages.py). ``pages`` None
+    #: = every page; an empty set = no page. The second boundary, beside the buildings.
+    access_role: str | None = None
+    pages: frozenset[str] | None = None
+    #: When the pages last got narrower; history made before it is not shown to the caller.
+    access_narrowed_at: datetime | None = None
 
     @property
     def restricted(self) -> bool:
         return self.building_ids is not None
+
+    def allows_page(self, page: str) -> bool:
+        """Whether this caller may read data owned by one page."""
+        return self.pages is None or page in self.pages
+
+    def allows_any(self, *pages: str) -> bool:
+        """Whether the caller holds at least one of these pages. A route that serves two
+        registers is open to the holder of either."""
+        return self.pages is None or any(p in self.pages for p in pages)
 
     @property
     def is_admin(self) -> bool:
@@ -103,7 +120,39 @@ def scope_for(
         organization_id=org,
         building_ids=building_ids,
         can_ingest=principal.can_ingest,
+        access_role=getattr(principal, "access_role", None),
+        pages=getattr(principal, "pages", None),
+        access_narrowed_at=getattr(principal, "access_narrowed_at", None),
     )
+
+
+PAGE_NOT_ALLOWED = page_filter.PAGE_NOT_ALLOWED
+
+
+def _page_refusal(page: str | None) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail=page_filter.refusal_detail(page))
+
+
+def pages_of(scope: Any) -> frozenset[str] | None:
+    """The caller's pages, or None for every page. Read this way where a handler may be
+    handed a stand-in scope that predates the pages: no pages on it means no restriction,
+    which is what None means everywhere else."""
+    return getattr(scope, "pages", None)
+
+
+def assert_page(scope: Scope, *any_of: str) -> None:
+    """403 unless the caller holds at least one of these pages."""
+    if not scope.allows_any(*any_of):
+        raise _page_refusal(any_of[0] if any_of else "")
+
+
+def assert_pages_all(scope: Scope, *all_of: str) -> None:
+    """403 unless the caller holds every one of these pages. For an action that writes into
+    a second register: nobody creates a record in a register they cannot see."""
+    for page in all_of:
+        if not scope.allows_page(page):
+            raise _page_refusal(page)
 
 
 def organization_for(scope: Scope, requested: UUID | None) -> UUID | None:
@@ -441,3 +490,43 @@ def bind(current_principal_dep, get_session_dep=None):
         return s
 
     return _scope, _ingest_scope
+
+
+def bind_page_gate(scope_dep):
+    """The dependency that holds a caller to the pages they were given.
+
+    Attached once per domain router where the routers are mounted (src/app.py), so no route
+    file has to remember it. It looks the matched route up in engines/auth/page_map.py:
+
+      * a caller with every page (``pages is None`` — a normal user, an admin, a superadmin,
+        or enforcement switched off) is not looked at at all, so their path is unchanged;
+      * a route tagged shared / ingest / admin / public is open here and narrowed, if it
+        needs to be, inside its handler;
+      * otherwise the caller needs one of the route's pages, and every page of an action
+        listed in ``NEEDS_ALL``;
+      * a route with no row is refused. A forgotten row must fail closed for the people it
+        would otherwise expose data to, and tests/unit/test_page_gate.py catches it first.
+    """
+    from . import page_map
+    from . import pages as page_engine
+
+    async def page_gate(request: Request, s: Scope = Depends(scope_dep)) -> None:
+        if s.pages is None:
+            return
+        route = request.scope.get("route")
+        key_path = getattr(route, "path", None)
+        tags = page_map.tags_for(request.method, key_path)
+        if tags is None:
+            raise _page_refusal(None)
+        owners = [t for t in tags if t in page_engine.PAGES]
+        if len(owners) == len(tags) and not s.allows_any(*owners):
+            raise _page_refusal(owners[0] if owners else None)
+        # A route that adds data is not any one page's, so the pages cannot decide it. For a
+        # caller held to pages the ingest switch does - here, because several of these
+        # handlers never asked for it and would let such a caller write into any register.
+        if page_engine.INGEST in tags:
+            assert_can_ingest(s)
+        method = "GET" if request.method.upper() == "HEAD" else request.method.upper()
+        assert_pages_all(s, *page_map.NEEDS_ALL.get((method, key_path), ()))
+
+    return page_gate

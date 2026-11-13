@@ -267,6 +267,43 @@ async def record_view(session_id: str, view: dict | None, cost: dict | None = No
         log.warning("chat_threads.record_view_failed", session_id=session_id, error=str(exc)[:300])
 
 
+def _narrowed_at() -> datetime | None:
+    """When the caller's pages last got narrower, for a caller held to some pages; else None.
+
+    An answer stored before a page was taken away may hold that page's data, and earlier turns
+    are fed back into later ones. So such a caller reads - and the model is given - only what
+    was said after this moment. Nothing is deleted: a caller given every page again sees it all
+    again. A caller with every page, or one whose pages were never narrowed, gets None and
+    every read below is the read it always was (agents/page_access.py).
+    """
+    p = caller_principal.get()
+    if p is None or getattr(p, "pages", None) is None:
+        return None
+    return getattr(p, "access_narrowed_at", None)
+
+
+def _since(cut: datetime | None) -> str:
+    """The SQL that keeps only turns made after the cut; nothing for a caller with none."""
+    return " AND created_at > CAST(:cut AS timestamptz)" if cut is not None else ""
+
+
+def _predates(created: Any, cut: datetime | None) -> bool:
+    """Whether a thread began at or before the cut, so its summary and working set were built
+    from turns that are now hidden. A thread with no time on it cannot be shown to be recent."""
+    if cut is None:
+        return False
+    if created is None:
+        return True
+    if isinstance(created, str):
+        try:
+            created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return created <= cut
+
+
 async def working_set(session_id: str) -> dict | None:
     """The thread's working set, or None when there is none or the store is unavailable."""
     if not _ready or not session_id:
@@ -274,9 +311,15 @@ async def working_set(session_id: str) -> dict | None:
     try:
         from ..database import _get_engine
 
+        # The thread's start is read only for a caller with a cut, so everyone else runs the
+        # statement this always ran.
+        cut = _narrowed_at()
+        cols = "working_set, created_at" if cut is not None else "working_set"
         async with _get_engine().connect() as conn:
-            row = (await conn.execute(text(f"SELECT working_set FROM {THREADS} WHERE id = :tid"),
+            row = (await conn.execute(text(f"SELECT {cols} FROM {THREADS} WHERE id = :tid"),
                                       {"tid": session_id})).first()
+        if cut is not None and row is not None and _predates(row[1], cut):
+            return None       # built from turns that are now hidden
         ws = row[0] if row else None
         return json.loads(ws) if isinstance(ws, str) else ws
     except Exception as exc:  # noqa: BLE001
@@ -364,11 +407,15 @@ async def last_turn(session_id: str) -> dict[str, Any] | None:
     try:
         from ..database import _get_engine
 
+        cut = _narrowed_at()
+        params: dict[str, Any] = {"tid": session_id}
+        if cut is not None:
+            params["cut"] = cut
         async with _get_engine().connect() as conn:
             row = (await conn.execute(text(f"""
                 SELECT question, answer, turn_no FROM {TURNS}
-                 WHERE thread_id = :tid AND answer IS NOT NULL
-                 ORDER BY turn_no DESC LIMIT 1"""), {"tid": session_id})).mappings().first()
+                 WHERE thread_id = :tid AND answer IS NOT NULL{_since(cut)}
+                 ORDER BY turn_no DESC LIMIT 1"""), params)).mappings().first()
         return dict(row) if row else None
     except Exception as exc:  # noqa: BLE001
         log.warning("chat_threads.last_turn_failed", session_id=session_id, error=str(exc)[:300])
@@ -382,17 +429,26 @@ async def conversation_context(session_id: str) -> str | None:
     try:
         from ..database import _get_engine
 
+        cut = _narrowed_at()
         async with _get_engine().connect() as conn:
-            head = (await conn.execute(text(f"SELECT summary, summary_through FROM {THREADS} WHERE id = :tid"),
+            head_cols = "summary, summary_through, created_at" if cut is not None else "summary, summary_through"
+            head = (await conn.execute(text(f"SELECT {head_cols} FROM {THREADS} WHERE id = :tid"),
                                        {"tid": session_id})).mappings().first()
             if head is None:
                 return ""
+            # A thread that began before the caller's pages were narrowed: its summary folds the
+            # turns that are now hidden, so it is left out and the recent turns are read on
+            # their own, from the cut on.
+            old = cut is not None and _predates(head["created_at"], cut)
+            params: dict[str, Any] = {"tid": session_id, "n": CONTEXT_TURNS,
+                                      "after": 0 if old else int(head["summary_through"] or 0)}
+            if cut is not None:
+                params["cut"] = cut
             rows = (await conn.execute(text(f"""
                 SELECT question, answer, turn_no FROM {TURNS}
-                 WHERE thread_id = :tid AND turn_no > :after AND answer IS NOT NULL
-                 ORDER BY turn_no DESC LIMIT :n"""),
-                {"tid": session_id, "after": int(head["summary_through"] or 0), "n": CONTEXT_TURNS})).mappings().all()
-        return format_context(head["summary"], [dict(r) for r in reversed(rows)])
+                 WHERE thread_id = :tid AND turn_no > :after AND answer IS NOT NULL{_since(cut)}
+                 ORDER BY turn_no DESC LIMIT :n"""), params)).mappings().all()
+        return format_context(None if old else head["summary"], [dict(r) for r in reversed(rows)])
     except Exception as exc:  # noqa: BLE001
         log.warning("chat_threads.context_failed", session_id=session_id, error=str(exc)[:300])
         return None
@@ -499,6 +555,25 @@ def _owner_sql(p: Principal, org: str | None) -> tuple[str, dict[str, Any]]:
     return "user_id = CAST(:uid AS uuid) AND organization_id IS NULL", params
 
 
+async def session_owner(session_id: str) -> dict[str, Any] | None:
+    """Who a conversation belongs to - {"user_id", "organization_id"} - or None when there is
+    no record of it (or the store is unavailable). For the routes that are handed a session id
+    and nothing else, so they can refuse somebody else's."""
+    if not _ready or not session_id:
+        return None
+    try:
+        from ..database import _get_engine
+
+        async with _get_engine().connect() as conn:
+            row = (await conn.execute(text(f"""
+                SELECT user_id::text AS user_id, organization_id::text AS organization_id
+                  FROM {THREADS} WHERE id = :tid"""), {"tid": session_id})).mappings().first()
+        return dict(row) if row else None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("chat_threads.session_owner_failed", session_id=session_id, error=str(exc)[:300])
+        return None
+
+
 async def list_threads(*, limit: int = 60, q: str | None = None, before: str | None = None) -> list[dict[str, Any]]:
     """The caller's threads, newest first. `before` pages on: only threads whose last message is
     no newer than that time - the last row of the previous page - so a client can read the whole
@@ -510,8 +585,16 @@ async def list_threads(*, limit: int = 60, q: str | None = None, before: str | N
     if p is None:
         return []
     where, params = _owner_sql(p, org)
+    cut = _narrowed_at()
+    summary_sql = "left(coalesce(summary, ''), 240)"
+    if cut is not None:
+        # Only conversations with something said since the cut; and an older one's summary,
+        # which folds its hidden turns, is neither shown nor searched.
+        where += " AND last_message_at > CAST(:cut AS timestamptz)"
+        params["cut"] = cut
+        summary_sql = f"CASE WHEN created_at > CAST(:cut AS timestamptz) THEN {summary_sql} ELSE '' END"
     if q and q.strip():
-        where += " AND (title ILIKE :q OR summary ILIKE :q)"
+        where += " AND (title ILIKE :q OR summary ILIKE :q)" if cut is None else " AND title ILIKE :q"
         params["q"] = "%" + q.strip() + "%"
     cursor: datetime | None = None
     if before:
@@ -532,7 +615,7 @@ async def list_threads(*, limit: int = 60, q: str | None = None, before: str | N
     async with _get_engine().connect() as conn:
         rows = (await conn.execute(text(f"""
             SELECT id, title, building_id, turn_count, created_at, last_message_at,
-                   left(coalesce(summary, ''), 240) AS summary
+                   {summary_sql} AS summary
               FROM {THREADS} WHERE deleted_at IS NULL AND {where}
              ORDER BY last_message_at DESC NULLS LAST LIMIT :lim"""), params)).mappings().all()
     return [_iso(dict(r)) for r in rows]
@@ -555,11 +638,21 @@ async def get_thread(session_id: str) -> dict[str, Any] | None:
               FROM {THREADS} WHERE id = :tid AND deleted_at IS NULL AND {where}"""), params)).mappings().first()
         if head is None:
             return None
+        cut = _narrowed_at()
+        turn_params: dict[str, Any] = {"tid": session_id}
+        if cut is not None:
+            turn_params["cut"] = cut
         rows = (await conn.execute(text(f"""
             SELECT turn_no, question, answer, tools, citations, route, created_at, answered_at
-              FROM {TURNS} WHERE thread_id = :tid ORDER BY turn_no ASC"""), {"tid": session_id})).mappings().all()
+              FROM {TURNS} WHERE thread_id = :tid{_since(cut)} ORDER BY turn_no ASC"""), turn_params)).mappings().all()
+    old = cut is not None and _predates(head["created_at"], cut)
     out = _iso(dict(head))
     out["turns"] = [_iso(dict(r)) for r in rows]
+    if cut is not None:
+        # The count is of what is shown, and an older thread's summary folds turns that are not.
+        out["turn_count"] = len(out["turns"])
+        if old:
+            out["summary"] = None
     return out
 
 

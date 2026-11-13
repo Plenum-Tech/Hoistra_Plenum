@@ -31,6 +31,7 @@ from ...engines.auth import accounts as acc
 from ...engines.auth import otp as otp_engine
 from ...engines.auth import access
 from ...engines.auth import invitations
+from ...engines.auth import pages as page_engine
 from ...engines.auth import roles as role_engine
 from ...engines.auth import secrets_store
 from ...engines.auth import tokens as token_engine
@@ -106,6 +107,24 @@ async def register(
         raise _fail(exc) from None
 
 
+async def _with_pages(session: AsyncSession, out: Any) -> Any:
+    """Add the access role and pages to a sign-in answer, so the client knows what to show the
+    moment it is signed in — without them a person held to some pages is offered the instance
+    picker, and their browser asks for every page's data, before it finds out.
+
+    Never fails a sign-in: if the row cannot be read the answer goes out without them, and the
+    client learns the pages from GET /api/auth/me as it always could.
+    """
+    try:
+        user = out.get("user") if isinstance(out, dict) else None
+        if isinstance(user, dict) and user.get("id"):
+            role, held = await page_engine.for_user(session, user["id"], user.get("role"))
+            user.update(page_engine.public_fields(role, held))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("auth.signin_pages_unread", error=str(exc)[:200])
+    return out
+
+
 @router.post("/verify-email", response_model=SessionResponse)
 async def verify_email(
     body: VerifyEmailRequest,
@@ -119,10 +138,10 @@ async def verify_email(
     they have just proved both the password (at registration) and the mailbox.
     """
     try:
-        return await acc.verify_email(
+        return await _with_pages(session, await acc.verify_email(
             session, email=body.email, code=body.code,
             user_agent=user_agent, request_ip=_client_ip(request),
-        )
+        ))
     except acc.AuthError as exc:
         raise _fail(exc) from None
 
@@ -165,10 +184,10 @@ async def login(
     question the error message refuses to.
     """
     try:
-        return await acc.sign_in(
+        return await _with_pages(session, await acc.sign_in(
             session, email=body.email, password=body.password,
             user_agent=user_agent, request_ip=_client_ip(request),
-        )
+        ))
     except acc.AuthError as exc:
         raise _fail(exc) from None
 
@@ -202,7 +221,9 @@ async def refresh(
     row = await acc.find_by_email(session, principal.email)
     return {
         "ok": True,
-        "user": acc.public_user(row),
+        # The pages as the principal just read them, so a refresh keeps the client current.
+        "user": {**acc.public_user(row),
+                 **page_engine.public_fields(principal.access_role, principal.pages)},
         "tokens": {
             "access_token": pair.access_token, "refresh_token": pair.refresh_token,
             "token_type": pair.token_type, "expires_in": pair.expires_in,
@@ -254,6 +275,12 @@ async def _principal(session: AsyncSession, authorization: str | None):
         )
     try:
         return await token_engine.principal_from_token(session, token.strip())
+    except page_engine.PagesUnreadable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"ok": False, "error": "Your access could not be checked just now. Try again.",
+                    "reason": "access_unreadable"},
+        ) from None
     except token_engine.InvalidToken as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -296,6 +323,17 @@ async def me(
         None if principal.building_ids is None else [str(b) for b in principal.building_ids]
     )
     user["all_buildings"] = principal.building_ids is None
+    # The pages they may open. null means every page (a normal user, an admin); a list — even
+    # an empty one — means only those. The other services read this to refuse the rest, and
+    # the client reads it to show only what is held.
+    user["access_role"] = principal.access_role
+    user["access_role_label"] = page_engine.label(principal.access_role)
+    user["pages"] = (
+        None if principal.pages is None
+        else [p for p in page_engine.PAGES if p in principal.pages]
+    )
+    user["access_narrowed_at"] = (
+        principal.access_narrowed_at.isoformat() if principal.access_narrowed_at else None)
     # The building they are working in now, if they have chosen one. A client shows this as
     # the current selection and narrows its own views to it; the server already has.
     user["selected_building_id"] = (
@@ -515,6 +553,9 @@ require_superadmin = require_role(role_engine.SUPERADMIN)
 # The building-scope dependencies every other router uses. Bound here because access.py
 # cannot import current_principal without a circular import.
 scope, ingest_scope = access.bind(current_principal, get_session)
+# The second boundary: which pages the caller may open. Attached where the domain routers
+# are mounted (src/app.py), reading engines/auth/page_map.py.
+page_gate = access.bind_page_gate(scope)
 
 
 class AcceptInvitation(BaseModel):
@@ -555,7 +596,11 @@ async def list_roles():
     server actually enforces.
     """
     return {"ok": True, "roles": role_engine.describe(),
-            "default": role_engine.DEFAULT_ROLE}
+            "default": role_engine.DEFAULT_ROLE,
+            # The access roles an administrator can give a plain user, and the pages that
+            # can be ticked for one. Keys are what the API takes; a role ticks nothing itself.
+            "access_roles": [{"key": k, "label": v} for k, v in page_engine.ACCESS_ROLES.items()],
+            "pages": list(page_engine.PAGES)}
 
 
 @router.get("/users")

@@ -33,6 +33,7 @@ from ...engines.energy import operating_hours as hours_svc
 from ...engines.energy import reports as report_svc
 from ...models.energy import EnergyMonthlyReport
 from ...shared import approvals as approvals_svc
+from ...shared import page_filter
 from ...engines.auth import access
 from ...engines.energy import chiller as chiller_svc
 from ...engines.energy import market_profiles as profile_svc
@@ -315,6 +316,22 @@ def _narrow_to_scope(out: dict[str, Any], s: access.Scope) -> dict[str, Any]:
     return dict(out, **{key: rows}, count=len(rows), scoped_to_buildings=len(rows))
 
 
+def _narrow_to_pages(out: dict[str, Any], s: access.Scope) -> dict[str, Any]:
+    """The buildings table for a caller held to some pages (shared/page_filter.building_rows).
+
+    Building names label every page's rows and fill every picker, so every caller gets them.
+    The register behind the names — profile, EUI, counts — is the Buildings page's, and the
+    counts and score parts inside it belong to the pages that own those records.
+    """
+    pages = access.pages_of(s)
+    if pages is None or not isinstance(out, dict):
+        return out
+    key = "buildings" if isinstance(out.get("buildings"), list) else "rows"
+    if not isinstance(out.get(key), list):
+        return out
+    return dict(out, **{key: page_filter.building_rows(out[key], pages)})
+
+
 @router.get("/buildings")
 async def list_buildings(
     organization_id: UUID | None = Query(None),
@@ -333,7 +350,7 @@ async def list_buildings(
     organization_for() both replaced."""
     org_id = access.organization_for(s, organization_id)
     out = await bld_svc.list_buildings(session, organization_id=org_id, limit=limit)
-    return _narrow_to_scope(out, s)
+    return _narrow_to_pages(_narrow_to_scope(out, s), s)
 
 
 @router.get("/hoist-score")
@@ -361,6 +378,8 @@ async def hoist_score(
         root=str(table.get("root") or "sites"),
         restricted=bool(s.restricted),
     )
+    # Only the bars the caller's pages own; the mean only for a holder of all of them.
+    out = page_filter.hoist_score(out, access.pages_of(s))
     if not include_rows:
         out.pop("rows", None)
     return out
@@ -830,7 +849,9 @@ async def building_graph(
     out = await bld_tree.building_tree(session, str(bid))
     if not out.get("ok"):
         response.status_code = int(out.get("status") or 400)
-    return out
+    # Certificates, contracts, work orders, meters and assets hang off the building here, and
+    # each branch is its own page's register.
+    return page_filter.building_tree(out, access.pages_of(s))
 
 
 @router.get("/buildings/{building_id}/cost-drivers")
@@ -876,6 +897,11 @@ async def get_building(
     out = await bld_svc.get_building(session, site_id, organization_id=organization_id)
     if not out.get("ok"):
         raise HTTPException(status_code=404, detail=out)
+    # The same narrowing the list applies to each row: the counts and score parts inside a
+    # building's row belong to the pages that own those records.
+    pages = access.pages_of(s)
+    if pages is not None and isinstance(out.get("building"), dict):
+        out = dict(out, building=page_filter.building_rows([out["building"]], pages)[0])
     return out
 
 
@@ -1160,6 +1186,9 @@ async def asset_intelligence(
         raise HTTPException(status_code=404, detail={
             "ok": False, "error": "No such asset in your buildings.",
             "reason": out.get("reason", "not_found")})
+    # The anomaly on an asset is the energy register's finding about it.
+    if not page_filter.holds(access.pages_of(s), "energy") and "anomaly" in out:
+        out = dict(out, anomaly=None)
     return out
 
 
@@ -1408,6 +1437,7 @@ async def decide_approval(
     item_id: UUID,
     body: QueueDecisionRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     return await approvals_svc.decide_queue_item(
         session,
@@ -1415,6 +1445,7 @@ async def decide_approval(
         decision=body.decision,
         pm_notes=body.pm_notes,
         prepare_email_handoff=body.prepare_email_handoff,
+        scope=s,
     )
 
 
@@ -1647,8 +1678,10 @@ async def condition_summary(
     to count — that second figure is the one a person actually wants.
     """
     ids = await position_svc.building_ids_for(session, s, building_id)
-    return await cond_svc.summary(session, building_ids=ids,
-                                  organization_id=access.organization_for(s, None))
+    out = await cond_svc.summary(session, building_ids=ids,
+                                 organization_id=access.organization_for(s, None))
+    # The anomaly figures beside a band are the energy register's findings about the asset.
+    return out if page_filter.holds(access.pages_of(s), "energy") else page_filter.without_anomalies(out)
 
 
 @router.get("/condition/assets")
@@ -1676,8 +1709,11 @@ async def condition_assets(
         rows = [a for a in rows
                 if a["section_deviation_pct"] is not None
                 and a["section_deviation_pct"] >= min_deviation_pct]
+    shown = rows[:limit]
+    if not page_filter.holds(access.pages_of(s), "energy"):
+        shown = page_filter.without_anomalies(shown)
     return {"ok": True, "rules": out["rules"], "method": out["method"],
-            "count": len(rows), "total": len(out["assets"]), "assets": rows[:limit]}
+            "count": len(rows), "total": len(out["assets"]), "assets": shown}
 
 
 @router.get("/condition/rules")
@@ -1764,6 +1800,13 @@ async def ask_assets(
     figure is generated — a question this cannot place comes back saying so, with the list of
     what it can be asked.
     """
+    # The bar answers two pages' questions. One whose page the caller does not hold is
+    # refused before anything is read - the question is matched, not answered.
+    pages = access.pages_of(s)
+    if pages is not None:
+        skill, _confidence, _near = ask_svc.match((body.question or "").strip())
+        if skill is not None:
+            access.assert_page(s, skill.page)
     ids = await position_svc.building_ids_for(session, s, building_id)
     return await ask_svc.ask(session, question=body.question, building_ids=ids,
                              organization_id=access.organization_for(s, None),
@@ -1776,7 +1819,11 @@ async def ask_asset_suggestions(
     s: access.Scope = Depends(scope),
 ):
     """The chips a page shows, served rather than hard-coded in the frontend."""
-    return {"ok": True, "suggestions": ask_svc.suggestions(page)}
+    chips = ask_svc.suggestions(page)
+    pages = access.pages_of(s)
+    if pages is not None:
+        chips = [c for c in chips if c.get("page") in pages]
+    return {"ok": True, "suggestions": chips}
 
 
 @router.get("/tariffs")

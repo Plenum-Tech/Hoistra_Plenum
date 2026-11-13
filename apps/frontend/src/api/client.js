@@ -13,6 +13,7 @@
 // The auth endpoints themselves pass `auth: false`: no header and no interception, so a
 // failing /login or /refresh can never trigger a refresh of its own.
 import { scrubInternal } from '../logic/publicText.js';
+import { pagesForRequest, requestHeld } from '../logic/accessRoles.js';
 
 const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
 const trim = (s) => String(s || '').replace(/\/+$/, '');
@@ -63,7 +64,11 @@ export function setActiveSpace(key) { activeSpace = key ? String(key) : null; }
 export function getActiveSpace() { return activeSpace; }
 export function currentOrgId() { return actingOrgId || ORG_ID || ''; }
 
-let hooks = { getToken: () => null, refresh: null, onTerminal: null };
+// getAccount and onPageRefused are the access-role hooks (logic/accessRoles.js): the account
+// says which pages the person holds, so a request for a page they do not hold is answered
+// here without being sent; and a refusal from the server tells the shell its copy of the
+// pages is out of date.
+let hooks = { getToken: () => null, refresh: null, onTerminal: null, getAccount: null, onPageRefused: null };
 export function configureAuth(h) { hooks = Object.assign({}, hooks, h || {}); }
 
 // The access token itself, for the one caller that cannot go through apiFetch: a browser
@@ -118,6 +123,20 @@ function rawErrorMessage(data, res) {
   return res.status + ' ' + res.statusText;
 }
 
+// What every service says for data owned by a page the caller does not hold.
+const PAGE_NOT_ALLOWED = 'That is not part of the pages you have access to.';
+const pageBases = () => ({ ops: BASES.opsIntelligence, wo: BASES.workOrder, con: BASES.connector });
+
+// The same refusal the server would send, made here, for a request that is never sent.
+function pageRefusal(pages) {
+  const e = new ApiError(PAGE_NOT_ALLOWED, 403, {
+    detail: { ok: false, reason: 'page_not_allowed', page: (pages && pages[0]) || null, error: PAGE_NOT_ALLOWED }
+  });
+  e.pageNotAllowed = true;
+  e.notSent = true;
+  return e;
+}
+
 export class ApiError extends Error {
   // `message` is what may be shown; `rawMessage` is the service's own wording, for the activity
   // log and anyone diagnosing it - not for the screen.
@@ -146,6 +165,13 @@ export class ApiError extends Error {
 export async function apiFetch(base, path, opts) {
   const o = opts || {};
   const useAuth = o.auth !== false;
+  // A person an admin has held to some pages (logic/accessRoles.js): a request that is
+  // certainly another page's own is not sent. The server would refuse it; this keeps a
+  // loader that reads for several pages from asking at all. Everyone else is not looked at.
+  if (useAuth && typeof hooks.getAccount === 'function'
+    && !requestHeld(hooks.getAccount(), base, path, pageBases())) {
+    throw pageRefusal(pagesForRequest(base, path, pageBases()));
+  }
   const issuedUnder = orgEpoch;
   // No token yet, and one on its way (authBoot's refresh at first paint): wait for it rather
   // than go out bare. Every mount read used to be sent before that refresh landed, come back
@@ -187,6 +213,14 @@ async function attempt(base, path, o, token, useAuth) {
   try {
     return await request(base, path, o, token);
   } catch (e) {
+    // The server refused a page this client thought was held: its copy of the person's pages
+    // is out of date (an admin has just changed them). Marked, so no caller shows it as an
+    // error, and reported, so the shell re-reads the account.
+    if (e instanceof ApiError && e.status === 403 && e.reason === 'page_not_allowed') {
+      e.pageNotAllowed = true;
+      if (useAuth && typeof hooks.onPageRefused === 'function') hooks.onPageRefused(e);
+      throw e;
+    }
     if (!(e instanceof ApiError) || e.status !== 401 || !useAuth) throw e;
     if (RETRY_ONCE_401.has(e.reason) && hooks.refresh && !o._retried) {
       // A refresh in this tab may already have replaced the token this request went out

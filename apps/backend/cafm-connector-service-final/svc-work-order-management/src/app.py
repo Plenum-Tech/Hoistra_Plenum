@@ -16,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .core.logging import configure_logging, get_logger
 from .db import init_db
+from .services.page_access import PageNotAllowed, page_gate, page_not_allowed_handler
 from .services.principal import current_principal
 from .api.routes import maintenance, work_orders, approvals, approval_admin, email_processor, ppm_scheduler, journeys, assets, dashboard, chat
 from .api.schemas.work_order import ErrorDetail, ErrorResponse
@@ -147,6 +148,10 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     )
 
 
+# More specific than HTTPException, so it is chosen first for this one refusal.
+app.add_exception_handler(PageNotAllowed, page_not_allowed_handler)
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Wraps all HTTPExceptions in the ErrorResponse envelope."""
@@ -230,27 +235,39 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-app.include_router(work_orders.router,     prefix="/api/work-orders",          tags=["Work Orders"])
+# Every router whose data belongs to a page is held to the pages its caller was given
+# (services/page_access.py). The gate does nothing for a caller with every page, which is
+# everyone without an access role.
+_PAGES = [Depends(page_gate)]
+app.include_router(work_orders.router,     prefix="/api/work-orders",          tags=["Work Orders"],
+                   dependencies=_PAGES)
 app.include_router(approvals.router,       prefix="/api/work-orders/approvals", tags=["Approvals"])
 # Backward-compatible alias used by older clients/tests.
 app.include_router(approvals.router,       prefix="/api/approvals",             tags=["Approvals"])
 # Who may approve what is an administrative setting, and it answered anybody who asked.
 app.include_router(approval_admin.router,  prefix="/api/admin",                 tags=["Approval Admin"],
-                   dependencies=[Depends(current_principal)])
+                   dependencies=[Depends(current_principal), *_PAGES])
 # This one was serving a real mailbox — its contents, and the address it is connected to —
 # to anybody on the internet with no token at all.
 app.include_router(email_processor.router, prefix="/api/email",                 tags=["Email Intake"],
-                   dependencies=[Depends(current_principal)])
+                   dependencies=[Depends(current_principal), *_PAGES])
 # The PPM scheduler creates work orders from an external system and had no caller at all.
 app.include_router(ppm_scheduler.router,   prefix="/api/ppm",                   tags=["PPM Scheduler"],
-                   dependencies=[Depends(current_principal)])
-app.include_router(maintenance.router,     prefix="/api/maintenance",           tags=["Maintenance"])
+                   dependencies=[Depends(current_principal), *_PAGES])
+app.include_router(maintenance.router,     prefix="/api/maintenance",           tags=["Maintenance"],
+                   dependencies=_PAGES)
 # A journey is the history of a work order, so it carries whatever that order carries.
 app.include_router(journeys.router,        prefix="/api/journeys",              tags=["Journeys"],
-                   dependencies=[Depends(current_principal)])
-app.include_router(assets.router,          prefix="/api",                       tags=["Assets", "Locations"])
-app.include_router(dashboard.router,       prefix="/api/dashboard",             tags=["Dashboard"])
-app.include_router(chat.router,            prefix="/api/chat",                  tags=["Chat Interface"])
+                   dependencies=[Depends(current_principal), *_PAGES])
+app.include_router(assets.router,          prefix="/api",                       tags=["Assets", "Locations"],
+                   dependencies=_PAGES)
+app.include_router(dashboard.router,       prefix="/api/dashboard",             tags=["Dashboard"],
+                   dependencies=_PAGES)
+# The work-order chat — and the stored history of any session id — answered anybody with no
+# token at all. The gate resolves the caller, so it now needs a signed-in one who holds the
+# maintenance page; the orchestrator, its only caller, already sends the caller's token.
+app.include_router(chat.router,            prefix="/api/chat",                  tags=["Chat Interface"],
+                   dependencies=_PAGES)
 
 
 @app.get("/health", tags=["Health"], summary="Service health check")

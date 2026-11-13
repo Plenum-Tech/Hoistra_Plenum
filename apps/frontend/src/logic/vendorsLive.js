@@ -31,6 +31,7 @@ import { opsApi } from '../api/opsIntelligence.js';
 import { complianceApi } from '../api/compliance.js';
 import { normCountry, countryMeta } from './complianceLive.js';
 import { isStaleScope } from '../api/client.js';
+import { holdsPage } from './accessRoles.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -899,7 +900,12 @@ export const vendorsLiveMethods = {
       contracts: () => opsApi.contracts(),
       weights: () => opsApi.weights(),
       approvals: () => opsApi.contractApprovals(),
-      certificates: () => complianceApi.listCertificates({ cert_scope: "vendor" }),
+      // Certificates are the compliance register's. A user with an access role who does not
+      // hold that page is not shown them (accessRoles.js), so none are asked for - an empty
+      // list, not a failed read. The Blocked state still arrives, with vendor coverage.
+      certificates: () => (holdsPage(this.state.account, "compliance")
+        ? complianceApi.listCertificates({ cert_scope: "vendor" })
+        : Promise.resolve({ certificates: [] })),
       // Each vendor's newest scored month only — what the cards beside it show. A
       // portfolio-wide read under one limit let one vendor's history crowd out another's.
       // Its own longer timer: it is the slowest read on the page (14-25 s seen, 2 Nov 2026).
@@ -1007,7 +1013,8 @@ export const vendorsLiveMethods = {
     raw.coverage = {}; raw.packs = {};
     await Promise.all(ccs.map(async (cc) => {
       const api = countryMeta(cc).api;
-      const [v, p] = await Promise.allSettled([complianceApi.vendorCoverage(api), complianceApi.countryPack(api)]);
+      const [v, p] = await Promise.allSettled([complianceApi.vendorCoverage(api),
+        holdsPage(this.state.account, "compliance") ? complianceApi.countryPack(api) : Promise.resolve({ types: [] })]);
       // "fulfilled" only means the fetch resolved — apiFetch returns null for an empty 200,
       // and `null.vendors` would throw here rather than fall back to the empty list below.
       raw.coverage[cc] = v.status === "fulfilled" ? ((v.value && v.value.vendors) || []) : [];

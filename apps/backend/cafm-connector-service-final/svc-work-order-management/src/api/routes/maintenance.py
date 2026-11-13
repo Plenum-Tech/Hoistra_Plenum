@@ -63,6 +63,13 @@ async def _scope(
     return await scope_building_ids(session, principal, organization_id)
 
 
+def _held(principal: Principal) -> dict:
+    """The caller's pages, for the reads that mix other modules' decisions in — named only
+    when the caller is held to some, so a caller with every page makes the call it always did."""
+    pages = getattr(principal, "pages", None)
+    return {"pages": pages} if pages is not None else {}
+
+
 @router.get(
     "/decisions",
     summary="Decisions the property manager owes",
@@ -93,7 +100,7 @@ async def list_decisions(
 ):
     ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.decisions(session, building_ids=ids, limit=limit,
-                             state=state, source=source, group_by=group_by)
+                             state=state, source=source, group_by=group_by, **_held(principal))
     log.debug("maintenance.decisions", count=out.get("count"), building_id=building_id)
     return out
 
@@ -162,7 +169,7 @@ async def summary(
     principal: Principal = Depends(current_principal),
 ):
     ids = await _scope(session, principal, building_id, organization_id)
-    dec = await mx.decisions(session, building_ids=ids, limit=200)
+    dec = await mx.decisions(session, building_ids=ids, limit=200, **_held(principal))
     ins = await mx.inspections(session, building_ids=ids, limit=200)
     ppm = await mx.ppm_health(session, building_ids=ids)
     return {
@@ -294,7 +301,7 @@ async def maintenance_overview(
     principal: Principal = Depends(current_principal),
 ):
     ids = await _scope(session, principal, building_id, organization_id)
-    out = await mx.overview(session, building_ids=ids)
+    out = await mx.overview(session, building_ids=ids, **_held(principal))
     log.debug("maintenance.overview",
               **{k: v["value"] for k, v in out["cards"].items() if isinstance(v.get("value"), int)})
     return out

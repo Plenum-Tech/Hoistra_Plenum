@@ -46,6 +46,7 @@ from ...engines.auth import access
 from ...engines.auth import ingestion_audit
 from ...engines.auth import vendor_audit
 from ...engines.auth import invitations as invite_engine
+from ...engines.auth import pages as page_engine
 from ...engines.auth import roles as role_engine
 from ...engines.auth import usage as usage_engine
 from ...shared.approvals import PLATFORM_FEATURE, write_audit
@@ -77,6 +78,11 @@ class InviteUser(BaseModel):
     can_ingest: bool = False
     job_title: str | None = Field(None, max_length=120)
     role: str = Field(role_engine.USER, description="user | admin")
+    #: The access role for a plain user, and the pages that go with it. Leave both out for a
+    #: normal user, who opens every page. A role ticks no page by itself: at least one page
+    #: must be named. See engines/auth/pages.py.
+    access_role: str | None = Field(None, description="portfolio_management | property_manager | general_user | compliance_officer")
+    pages: list[str] | None = Field(None, description="buildings | compliance | energy | vendors | ops | assets")
 
 
 class PatchUser(BaseModel):
@@ -84,6 +90,10 @@ class PatchUser(BaseModel):
     can_ingest: bool | None = None
     job_title: str | None = None
     full_name: str | None = None
+    #: Sent only to change them. ``access_role: null`` makes the person a normal user again
+    #: and clears their pages; ``pages`` alone changes the ticks under the role they hold.
+    access_role: str | None = None
+    pages: list[str] | None = None
     #: active | inactive | deleted. "suspended" is accepted and stored as inactive — it was
     #: the old word for the same state, and a client still sending it must not be refused.
     #: deleted through PATCH is refused: deleting scrubs a person's details, and that goes
@@ -141,6 +151,21 @@ async def _company_buildings(session: AsyncSession, org: UUID) -> dict[str, dict
     return {r["id"]: dict(r) for r in rows}
 
 
+def _access_refused(exc: page_engine.AccessRoleError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"ok": False, "error": exc.message, "reason": exc.reason},
+    )
+
+
+def _roles_not_set_up() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"ok": False, "error": page_engine.NOT_SET_UP,
+                "reason": "access_roles_not_set_up"},
+    )
+
+
 def _check_buildings(requested: list[UUID], owned: dict[str, dict]) -> list[str]:
     """Every allocated building must belong to this company. Allocating a building the
     company does not own would hand a user someone else's records."""
@@ -172,9 +197,13 @@ async def list_users(
 ):
     """Every account in the company with what the table shows: buildings, ingestion, usage, status."""
     org = scope.organization_id
+    # The access-role columns are named only once they exist (pages.columns_ready).
+    page_columns = (
+        "u.access_role, u.allowed_pages," if await page_engine.columns_ready(session) else "")
     users = (await session.execute(
-        text("""SELECT u.id::text, u.full_name, u.email, u.job_title, u.status,
+        text(f"""SELECT u.id::text, u.full_name, u.email, u.job_title, u.status,
                        u.platform_role AS role, COALESCE(u.can_ingest, FALSE) AS can_ingest,
+                       {page_columns}
                        u.last_login_at, u.invited_at, u.activated_at, u.created_at
                   FROM plenum_cafm.users u
                  WHERE u.organization_id = :o
@@ -198,8 +227,16 @@ async def list_users(
     for u in users:
         admin = role_engine.at_least(str(u["role"] or "user"), role_engine.ADMIN)
         buildings = by_user.get(u["id"], [])
+        row = dict(u)
+        # An admin has no access role whatever the row holds; a role user's pages come back
+        # in the order they are ticked. null pages = every page.
+        access_role, held = page_engine.resolve(
+            row.get("role"), row.pop("access_role", None), row.pop("allowed_pages", None))
         out.append({
-            **dict(u),
+            **row,
+            "access_role": access_role,
+            "access_role_label": page_engine.label(access_role),
+            "pages": None if held is None else [p for p in page_engine.PAGES if p in held],
             "can_ingest": bool(u["can_ingest"]) or admin,
             # An admin is not allocated; they see the company. Said explicitly so the table
             # does not render "0 buildings" against the person who administers all of them.
@@ -236,6 +273,13 @@ async def invite_user(
         raise HTTPException(status_code=400, detail={"ok": False, "error": "role must be user or admin"})
     if body.role == role_engine.ADMIN and not scope.is_admin:
         raise HTTPException(status_code=403, detail={"ok": False, "error": "forbidden"})
+    try:
+        access_role, pages = page_engine.validate_assignment(
+            platform_role=body.role, access_role=body.access_role, pages=body.pages)
+    except page_engine.AccessRoleError as exc:
+        raise _access_refused(exc) from None
+    if access_role and not await page_engine.columns_ready(session):
+        raise _roles_not_set_up()
     owned = await _company_buildings(session, scope.organization_id)
     ids = _check_buildings(body.building_ids, owned)
     if body.role == role_engine.USER and not ids:
@@ -248,7 +292,7 @@ async def invite_user(
             session, organization_id=scope.organization_id, email=str(body.email),
             full_name=body.full_name, role=body.role, can_ingest=body.can_ingest,
             building_ids=[UUID(b) for b in ids], invited_by=scope.user_id,
-            job_title=body.job_title,
+            job_title=body.job_title, access_role=access_role, pages=pages,
         )
     except invite_engine.InvitationError as exc:
         raise HTTPException(status_code=exc.http_status,
@@ -256,7 +300,8 @@ async def invite_user(
     await write_audit(
         session, actor=str(scope.user_id), action_type="admin.user.invited",
         source_feature=PLATFORM_FEATURE, organization_id=scope.organization_id,
-        input_payload={"email": str(body.email), "buildings": ids, "can_ingest": body.can_ingest},
+        input_payload={"email": str(body.email), "buildings": ids, "can_ingest": body.can_ingest,
+                       "access_role": access_role, "pages": pages},
         output_payload={"user_id": out["user_id"]},
     )
     await session.commit()
@@ -275,13 +320,46 @@ async def patch_user(
 ):
     """Change what a user may see and do. Takes effect on their next request — the
     principal is read from the database every call, not from the token."""
+    has_pages = await page_engine.columns_ready(session)
     row = (await session.execute(
-        text("""SELECT id, platform_role, status FROM plenum_cafm.users
+        text(f"""SELECT id, platform_role, status
+                        {', access_role, allowed_pages' if has_pages else ''}
+                   FROM plenum_cafm.users
                  WHERE id = :i AND organization_id = :o"""),
         {"i": user_id, "o": scope.organization_id},
     )).mappings().first()
     if row is None:
         raise HTTPException(status_code=404, detail={"ok": False, "error": "user_not_found"})
+
+    # The access role and its pages, when either was sent. Sending the role alone keeps the
+    # ticks; sending the pages alone keeps the role; sending the role as null clears both.
+    access_change: tuple[str | None, list[str] | None] | None = None
+    narrowing = False
+    sent = body.model_fields_set
+    if "access_role" in sent or "pages" in sent:
+        held_role = row.get("access_role") if has_pages else None
+        before = page_engine.resolve(
+            row["platform_role"], held_role, row.get("allowed_pages") if has_pages else None)[1]
+        wanted_role = body.access_role if "access_role" in sent else held_role
+        if "pages" in sent:
+            wanted_pages = body.pages
+        elif wanted_role:
+            wanted_pages = [p for p in page_engine.PAGES if p in (before or ())]
+        else:
+            wanted_pages = None
+        try:
+            access_change = page_engine.validate_assignment(
+                platform_role=str(row["platform_role"] or role_engine.USER),
+                access_role=wanted_role, pages=wanted_pages)
+        except page_engine.AccessRoleError as exc:
+            raise _access_refused(exc) from None
+        if not has_pages:
+            if access_change[0]:
+                raise _roles_not_set_up()
+            access_change = None        # nothing to clear on a database without the columns
+        else:
+            after = frozenset(access_change[1]) if access_change[0] else None
+            narrowing = page_engine.narrowed(before, after)
 
     changed: dict = {}
     if body.building_ids is not None:
@@ -303,6 +381,14 @@ async def patch_user(
         sets.append("job_title = :jt"); params["jt"] = body.job_title; changed["job_title"] = body.job_title
     if body.full_name is not None:
         sets.append("full_name = :fn"); params["fn"] = body.full_name; changed["full_name"] = body.full_name
+    if access_change is not None:
+        sets.append("access_role = :ar"); params["ar"] = access_change[0]
+        sets.append("allowed_pages = CAST(:ap AS text[])"); params["ap"] = access_change[1]
+        if narrowing:
+            # From now on, chat turns and report runs made before this moment are not shown
+            # to this person: they may hold data from a page that was just taken away.
+            sets.append("access_narrowed_at = now()")
+        changed["access_role"], changed["pages"] = access_change
     if body.status is not None:
         # _normalise_status already refused anything but active / inactive (and folded the
         # old word "suspended" into inactive). The check that used to sit here compared
@@ -382,10 +468,13 @@ async def delete_user(
     if row["status"] == DELETED:
         return {"ok": True, "user_id": str(user_id), "status": DELETED, "already": True}
     scrubbed = f"deleted+{str(user_id)[:8]}@invalid.local"
+    clear_pages = (
+        "access_role = NULL, allowed_pages = NULL, access_narrowed_at = NULL,"
+        if await page_engine.columns_ready(session) else "")
     await session.execute(
-        text("""UPDATE plenum_cafm.users
+        text(f"""UPDATE plenum_cafm.users
                    SET status = 'deleted', email = :e, full_name = 'Deleted user',
-                       phone = NULL, phone2 = NULL, job_title = NULL,
+                       phone = NULL, phone2 = NULL, job_title = NULL, {clear_pages}
                        password_hash = NULL, selected_building_id = NULL, updated_at = now()
                  WHERE id = :i"""), {"e": scrubbed, "i": user_id})
     await session.execute(

@@ -25,6 +25,7 @@ from ...db import get_session
 from ...engines import document_register as reg
 from ...engines import document_search as doc_svc
 from ...engines.auth import access
+from ...shared import page_filter
 from .auth import scope
 
 router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(scope)])
@@ -59,7 +60,7 @@ async def search_documents(
     return await doc_svc.search(session, question=q, organization_id=org, building_ids=s.building_ids,
                                 vendor=vendor, contract_ref=contract_ref, building_id=building_id,
                                 doc_type=doc_type, document_ids=document_id, asset=asset,
-                                include_personal=s.is_admin, user_id=s.user_id)
+                                include_personal=s.is_admin, user_id=s.user_id, pages=s.pages)
 
 
 @router.get("/types")
@@ -79,6 +80,10 @@ async def list_documents(
     out = await reg.list_documents(session, building_id=building_id, organization_id=org,
                                    building_ids=s.building_ids, include_personal=s.is_admin)
     out["can_manage"] = s.is_admin
+    # A document belongs to the page that owns its type; a caller held to some pages gets
+    # only those (shared/page_filter.py).
+    if s.pages is not None and isinstance(out.get("documents"), list):
+        out["documents"] = page_filter.documents(out["documents"], s.pages)
     return out
 
 

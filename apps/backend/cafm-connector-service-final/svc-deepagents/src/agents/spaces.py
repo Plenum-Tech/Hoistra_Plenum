@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
+from . import page_access
+
 #: The space the current request is being answered in, set once where the request arrives so
 #: the router does not have to be threaded through every call between here and there. None
 #: means no space was declared, which allows everything.
@@ -67,8 +69,8 @@ DOMAIN_NAMES: dict[str, str] = {
 }
 
 
-def engines_for(space: str | None) -> frozenset[str] | None:
-    """The domain engines this space may use, or None when every engine is allowed.
+def _space_engines(space: str | None) -> frozenset[str] | None:
+    """The domain engines the space alone allows, or None when it allows every one.
 
     None — not one of the known spaces, or no space at all — means no restriction. A space this
     module has not heard of must not silently lose its engines.
@@ -78,6 +80,23 @@ def engines_for(space: str | None) -> frozenset[str] | None:
     if reports is None:
         return None
     return frozenset(e for e, r in _ENGINE_REPORT.items() if r in reports)
+
+
+def engines_for(space: str | None) -> frozenset[str] | None:
+    """The domain engines a question asked here may use, or None when every engine is allowed.
+
+    Two things decide it, and it takes both. The space is what the browser says the person is
+    looking at. The pages are what an administrator gave them (agents/page_access.py), and they
+    come from the identity service with the caller — so a space can narrow what the pages
+    allow, and can never widen it. A caller with every page is decided by the space alone,
+    exactly as before the pages existed.
+    """
+    by_space = _space_engines(space)
+    pages = page_access.current()
+    if pages is None:
+        return by_space
+    by_pages = frozenset(e for e, r in _ENGINE_REPORT.items() if r in pages)
+    return by_pages if by_space is None else by_space & by_pages
 
 
 def allows(space: str | None, engine: str | None) -> bool:
@@ -100,7 +119,7 @@ def space_with(engine: str | None) -> str | None:
     """
     if engine not in _ENGINE_REPORT:
         return None
-    having = [k for k in SPACE_REPORTS if k != "full" and engine in (engines_for(k) or ())]
+    having = [k for k in SPACE_REPORTS if k != "full" and engine in (_space_engines(k) or ())]
     return having[0] if len(having) == 1 else None
 
 
@@ -113,6 +132,10 @@ def refusal(space: str | None, engine: str | None) -> str | None:
     """
     if allows(space, engine):
         return None
+    # When it is the caller's pages that refuse, say that: there is no space to switch to.
+    by_pages = page_access.refusal(engine)
+    if by_pages:
+        return by_pages
     here = SPACE_NAMES.get(str(space or "").strip().lower(), "this space")
     domain = DOMAIN_NAMES.get(engine or "", engine or "that")
     elsewhere = space_with(engine)

@@ -130,7 +130,7 @@ from .udr_hybrid_tools import (
 )
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
 from ..services import chat_memories, chat_threads
-from . import cert_checks, cert_expiry, planner, spaces, thread_scope, trace
+from . import cert_checks, cert_expiry, page_access, planner, spaces, thread_scope, trace
 from . import final_answer as final_step  # the module; `final_answer` is a local name in the loop
 from . import evidence as answer_evidence
 from . import plan_scope
@@ -407,6 +407,11 @@ TOOL_CATALOG = [
     *CONTRACT_PERFORMANCE_TOOLS,
     *ENERGY_INTELLIGENCE_TOOLS,
 ]
+
+# Every tool refuses to run for a caller whose pages do not own it (agents/page_access.py).
+# The lists are also filtered where they are bound; this is the layer on the tool itself, for
+# any path that reaches one without going through a bound list.
+page_access.guard_tools([*ALL_TOOLS, *[t for _tools in PHASE2_ENGINE_TOOLS.values() for t in _tools]])
 
 # OpenAI Chat Completions rejects tool arrays longer than 128.
 _OPENAI_MAX_TOOLS = 128
@@ -935,15 +940,11 @@ class DeepAgentOrchestrator:
         # The working context is self-managed (agents/context_budget.py): the model compacts
         # tool results it has finished into notes; the old oldest-first trim stays inside the
         # hook as the last resort, and is the whole behaviour with CONTEXT_SELF_MANAGE off.
-        self._agent = create_react_agent(
-            model=self._llm,
-            tools=[*ALL_TOOLS, compact_context],
-            checkpointer=checkpointer,
-            # A turn stopped mid-tool must not leave its thread unable to answer again
-            # (agents/tool_call_repair.py, 29 Oct 2026).
-            pre_model_hook=with_stopped_calls_answered(make_context_hook(
-                agent="orchestrator", trim_max_tokens=settings.orchestrator_history_max_tokens)),
-        )
+        self._checkpointer = checkpointer
+        #: The loop's agent for a caller held to some pages, one per set of pages
+        #: (_agent_for_caller). A caller with every page uses self._agent, built here.
+        self._page_agents: dict[tuple[str, ...], Any] = {}
+        self._agent = self._build_agent([*ALL_TOOLS, compact_context])
         init_meta_tools(openai_api_key=openai_api_key, model=model)
         log.info(
             "orchestrator.ready",
@@ -961,7 +962,9 @@ class DeepAgentOrchestrator:
 
     def _config(self, thread_id: str) -> dict:
         """Build the LangGraph run config for a given thread."""
-        return {"configurable": {"thread_id": thread_id}, "recursion_limit": 60}
+        # A caller whose pages were narrowed carries on under a key of their own, so the saved
+        # messages from before it are not handed back to the model (agents/page_access.py).
+        return {"configurable": {"thread_id": page_access.thread_key(thread_id)}, "recursion_limit": 60}
 
     @staticmethod
     def _wrap_stateful_user_message(
@@ -1020,6 +1023,11 @@ class DeepAgentOrchestrator:
             wrapped = wrapped.replace("\n\n---\n\n**Current user message:**", "\n\n" + block + "\n\n---\n\n**Current user message:**", 1) \
                 if "**Current user message:**" in wrapped else block + "\n\n---\n\n**Current user message:**\n" + wrapped
         system_prompt = build_system_prompt(extra_context)
+        # A caller held to some pages: the model is told which, so it declines the rest in a
+        # sentence instead of reaching for a tool it was not given (agents/page_access.py).
+        _pages_note = page_access.prompt_note()
+        if _pages_note:
+            system_prompt = system_prompt + "\n\n" + _pages_note
         # The trace keeps what shaped this turn's first model call (agents/trace.py).
         trace.on_prompt(system_prompt=system_prompt, user_message=user_message, conversation=conversation, working_set=ws,
                         memories=memories_text, extra_context=extra_context, scope_block=scope_text)
@@ -3831,6 +3839,10 @@ class DeepAgentOrchestrator:
         """Run the planner's extra fetches concurrently. Each is best-effort."""
         if not needs:
             return []
+        # Open work orders are read here straight from the database, not through a tool, so
+        # nothing else stands between a caller held to pages and the maintenance register.
+        if not page_access.allows_engine("wo_engine"):
+            needs = [n for n in needs if n != "work_orders"]
         from .compliance_engine_agent import get_compliance_coverage, list_country_pack
 
         async def _regulations() -> dict[str, Any] | None:
@@ -7043,13 +7055,48 @@ class DeepAgentOrchestrator:
             out += "CONTEXT: " + str(extra_context)[:(4600 if step["kind"] == "followup" else 600)] + "\n"
         return out
 
+    def _build_agent(self, tools: list) -> Any:
+        """The general loop's agent over these tools. Everything but the tool list is the same
+        for every caller."""
+        return create_react_agent(
+            model=self._llm,
+            tools=tools,
+            checkpointer=self._checkpointer,
+            # A turn stopped mid-tool must not leave its thread unable to answer again
+            # (agents/tool_call_repair.py, 29 Oct 2026).
+            pre_model_hook=with_stopped_calls_answered(make_context_hook(
+                agent="orchestrator", trim_max_tokens=settings.orchestrator_history_max_tokens)),
+        )
+
+    def _agent_for_caller(self) -> Any:
+        """The loop's agent for whoever is asking (agents/page_access.py).
+
+        A caller with every page gets the agent built at start, as always. A caller held to
+        some pages gets one built with only the tools those pages own — the model is never
+        handed a tool it may not use — kept per set of pages, so it is built once. They share
+        the checkpointer, so a conversation's state is the same whichever agent runs a turn.
+        """
+        key = page_access.pages_key(page_access.current())
+        if key is None:
+            return self._agent
+        agent = self._page_agents.get(key)
+        if agent is None:
+            agent = self._build_agent(page_access.filter_tools([*ALL_TOOLS, compact_context]))
+            self._page_agents[key] = agent
+        return agent
+
     @staticmethod
     def _space_engine_tools() -> list[tuple[str, list]]:
         """The engines' tool lists this space may use (agents/spaces.py). A tool two engines share
         stays while either engine is in the space (3 Nov 2026: the planner offered compliance's
-        certificate tools in the Assets Operating System)."""
+        certificate tools in the Assets Operating System).
+
+        An engine's list also holds a few tools of another page - the energy list carries the
+        asset-condition tools - so a caller held to some pages gets each list less those
+        (agents/page_access.py). A caller with every page gets the lists themselves."""
         here = spaces.current()
-        return [(engine, tools) for engine, tools in PHASE2_ENGINE_TOOLS.items() if spaces.allows(here, engine)]
+        return [(engine, page_access.filter_tools(tools))
+                for engine, tools in PHASE2_ENGINE_TOOLS.items() if spaces.allows(here, engine)]
 
     def _planner_schemas(self) -> dict[str, dict[str, Any]]:
         """Each plannable tool's argument schema, so a plan's arguments are checked when it is made
@@ -8377,7 +8424,7 @@ class DeepAgentOrchestrator:
         try:
             # Outside the event stream, the trace learns the loop's model and tool calls this way.
             _h = trace.callback_handler("orchestrator loop")
-            result = await self._agent.ainvoke(input_, {**config, **({"callbacks": [_h]} if _h else {})})
+            result = await self._agent_for_caller().ainvoke(input_, {**config, **({"callbacks": [_h]} if _h else {})})
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.invoke.error", thread_id=thread_id, error=err, exc_info=True)
@@ -8665,6 +8712,16 @@ class DeepAgentOrchestrator:
             ROUTE_WO_CLARIFY,
         }
         engine = None if support else preferred_engine
+        # The request may name an engine outright. That is not a way round the caller's pages:
+        # nothing runs and no register is read (agents/page_access.py).
+        _outside_pages = page_access.refusal(engine) if engine else None
+        if _outside_pages:
+            trace.on_plan(planner.one_step_plan("clarify", _outside_pages, source="router"), source="router")
+            return attach_route_to_result(
+                {"session_id": session_id, "answer": _outside_pages, "tool_calls": [], "success": True,
+                 "error": None, "interrupted": False, "interrupt_payload": None},
+                session_id, intent=ROUTE_GENERAL, domain="orchestrator",
+            )
         routing_note: str | None = None
         if route_intent in core_routes:
             # Every turn records its plan (12 Nov 2026): a keyword route skips the router and the
@@ -9398,7 +9455,7 @@ class DeepAgentOrchestrator:
         log.info("orchestrator.stream.start", session_id=sid, message_len=len(user_message))
 
         try:
-            async for event in self._agent.astream_events(input_, config, version="v2"):
+            async for event in self._agent_for_caller().astream_events(input_, config, version="v2"):
                 kind = event["event"]
 
                 if kind == "on_tool_start":

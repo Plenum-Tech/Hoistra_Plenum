@@ -1,5 +1,6 @@
 import { energyApi } from '../api/energy.js';
 import { instanceReports, instanceShowsModule } from './instances.js';
+import { holdsPage } from './accessRoles.js';
 
 // A failed read is still an answer about this building, and re-asking will not change it.
 // The guards below used to read "cached and not an error", so an error cached one render
@@ -141,6 +142,13 @@ export const buildingsGraphMethods = {
     const prev = (this.state.bgCost || {})[id];
     if (bgSettled(prev)) return;
     const attempts = (prev && prev.attempts) || 0;
+    // Which plant drives a building's spend is the asset register's. A user with an access
+    // role who does not hold that page is shown none of it: an answer with nothing in it,
+    // not a read that failed (accessRoles.js).
+    if (!holdsPage(this.state.account, 'assets')) {
+      this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: {} }) }));
+      return;
+    }
     this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: { loading: true, attempts: attempts } }) }));
     try {
       const res = await energyApi.costDrivers(id);

@@ -66,6 +66,33 @@ export default function Users({ vals }) {
                 </React.Fragment>
               ))}
             </div>
+            {/* The role, and the pages that go with it (logic/accessRoles.js). No role is a normal
+                user, who opens every page. A role ticks nothing: the admin ticks each page. */}
+            <div style={{ fontSize: "10.5px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Role"}</div>
+            <div data-us="role" style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
+              {(vals.usRoleChips || []).map((r, $index) => (
+                <React.Fragment key={$index}>
+                  <div role="radio" aria-checked={r.on} onClick={r.pick} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${r.edge}`, background: r.bg, color: r.fg, cursor: "pointer" }}>{r.label}</div>
+                </React.Fragment>
+              ))}
+            </div>
+            {vals.usRoleOn ? (
+              <>
+                <div style={{ fontSize: "10.5px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Pages this user can open"}</div>
+                <div data-us="pages" style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
+                  {(vals.usPageChips || []).map((p, $index) => (
+                    <React.Fragment key={$index}>
+                      <div role="checkbox" aria-checked={p.on} title={p.hint} onClick={p.pick} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${p.edge}`, background: p.bg, color: p.fg, cursor: "pointer" }}>
+                        <i className={`ph ${p.tick}`} style={{ fontSize: "12px" }}></i>
+                        <span>{p.label}</span>
+                        {p.hint ? <span style={{ fontSize: "10.5px", opacity: "0.7" }}>{"· "}{p.hint}</span> : null}
+                      </div>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            <div style={{ fontSize: "11px", color: vals.usSendOff ? "var(--st-warn)" : "var(--color-neutral-500)" }}>{vals.usRoleNote}</div>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <div onClick={vals.usToggleIngestForm} style={{ width: "34px", height: "19px", borderRadius: "10px", background: vals.usFormTgBg, position: "relative", cursor: "pointer", flexShrink: "0", transition: "background 0.15s ease" }}>
                 <div style={{ position: "absolute", top: "2.5px", left: vals.usFormTgLeft, width: "14px", height: "14px", borderRadius: "50%", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", transition: "left 0.15s ease" }}></div>
@@ -73,7 +100,7 @@ export default function Users({ vals }) {
               <span style={{ fontSize: "12px", color: "var(--color-neutral-300)" }}>{"Can ingest data — "}{vals.usFormTgLabel}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-              <div className="btn btn-primary" onClick={vals.usSend} style={{ fontSize: "12px", padding: "8px 15px", cursor: "pointer" }}>{"Send invitation"}</div>
+              <div className="btn btn-primary" aria-disabled={vals.usSendOff} onClick={vals.usSend} style={{ fontSize: "12px", padding: "8px 15px", cursor: vals.usSendOff ? "not-allowed" : "pointer", opacity: vals.usSendOff ? "0.45" : "1" }}>{"Send invitation"}</div>
               <div onClick={vals.usToggleInvite} style={{ fontSize: "12px", padding: "8px 13px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>{"Cancel"}</div>
               <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{"They receive an email invitation, activate the account, then set or change their password on first sign-in."}</span>
             </div>
@@ -102,7 +129,10 @@ export default function Users({ vals }) {
                 <div className="hv2" onClick={u.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(180px,1.3fr) minmax(140px,1fr) 130px minmax(150px,1fr) 92px 28px", gap: "12px", alignItems: "center", padding: "11px 16px", cursor: "pointer" }}>
                   <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-500)" }}>{u.arrow}</span>
                   <div style={{ minWidth: "0" }}>
-                    <div style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</div>
+                    <div style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {u.name}
+                      <span style={{ display: u.roleTagShow || "none", marginLeft: "8px", fontSize: "10px", padding: "1px 7px", borderRadius: "5px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", verticalAlign: "1px" }}>{u.roleTag}</span>
+                    </div>
                     <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.email}{" · "}{u.title}</div>
                   </div>
                   <div style={{ minWidth: "0" }}>
@@ -137,6 +167,33 @@ export default function Users({ vals }) {
                         </div>
                       </React.Fragment>
                     ))}
+                  </div>
+                  {/* The person's role and pages: the same choice the invite form offers, saved
+                      as it is made. Not offered for an admin, who opens every page. */}
+                  <div data-us="row-access" style={{ display: u.accessShow || "none", flexDirection: "column", gap: "9px", marginTop: "4px" }}>
+                    <div style={{ fontSize: "10.5px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Role"}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
+                      {(u.roleChips || []).map((r, $index2) => (
+                        <React.Fragment key={$index2}>
+                          <div role="radio" aria-checked={r.on} onClick={r.pick} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${r.edge}`, background: r.on ? r.bg : "transparent", color: r.fg, cursor: "pointer" }}>{r.label}</div>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                    <div style={{ display: u.pagesShow || "none", flexDirection: "column", gap: "9px" }}>
+                      <div style={{ fontSize: "10.5px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Pages "}{u.name}{" can open"}</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
+                        {(u.pageChips || []).map((p, $index2) => (
+                          <React.Fragment key={$index2}>
+                            <div role="checkbox" aria-checked={p.on} title={p.hint} onClick={p.pick} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${p.edge}`, background: p.on ? p.bg : "transparent", color: p.fg, cursor: "pointer" }}>
+                              <i className={`ph ${p.tick}`} style={{ fontSize: "12px" }}></i>
+                              <span>{p.label}</span>
+                              {p.hint ? <span style={{ fontSize: "10.5px", opacity: "0.7" }}>{"· "}{p.hint}</span> : null}
+                            </div>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{u.accessNote}</div>
                   </div>
                   {u.labUser && u.panelShow !== "none" ? <TraceLabAccess user={u.labUser} /> : null}
                 </div>

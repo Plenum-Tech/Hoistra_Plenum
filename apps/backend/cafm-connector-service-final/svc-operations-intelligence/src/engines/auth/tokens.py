@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID
 
 from . import keys
+from . import pages as page_engine
 
 import jwt
 from sqlalchemy import text
@@ -71,6 +72,14 @@ class Principal:
     #: The building this person has chosen to work in right now, or None for all of
     #: theirs. Never widens access: Scope narrows to it only when it is one they hold.
     selected_building_id: UUID | None = None
+    #: The access role an administrator gave a plain user, and the pages that go with it
+    #: (engines/auth/pages.py). ``pages`` None means every page — a normal user, an admin, a
+    #: superadmin. An EMPTY set is a real answer: a role with no page behind it sees nothing.
+    access_role: str | None = None
+    pages: frozenset[str] | None = None
+    #: When this person's pages last got narrower. Chat turns and report runs made before it
+    #: may hold data from a page they no longer have, and are not shown to them.
+    access_narrowed_at: datetime | None = None
 
 
 class InvalidToken(Exception):
@@ -196,13 +205,23 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
     # has pressed every button the product offers to stop it. The join costs one extra
     # indexed lookup on a query that was already being made.
     sid = claims.get("sid")
+    # The access-role columns are named only once they exist. Before their migration is
+    # applied, naming them here would fail this query — and with it every request.
+    has_pages = await page_engine.columns_ready(session)
+    if not has_pages and page_engine.check_failed():
+        # It could not be told whether the caller is held to some pages. Going on would read
+        # them as holding every page; refusing costs one retry.
+        raise page_engine.PagesUnreadable("the caller's pages could not be read")
+    page_columns = (
+        "u.access_role, u.allowed_pages, u.access_narrowed_at," if has_pages else ""
+    )
     row = (
         await session.execute(
             text(
-                """SELECT u.id, u.email, u.organization_id, u.status,
+                f"""SELECT u.id, u.email, u.organization_id, u.status,
                           u.password_changed_at, u.platform_role AS role,
                           COALESCE(u.can_ingest, FALSE) AS can_ingest,
-                          u.selected_building_id,
+                          u.selected_building_id, {page_columns}
                           s.revoked_at, s.expires_at, s.revoked_reason
                    FROM plenum_cafm.users u
                    LEFT JOIN plenum_cafm.auth_sessions s
@@ -265,6 +284,17 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
     except (KeyError, ValueError, TypeError):
         selected = None
 
+    # The pages are read with the role, for the same reason: a page taken away must be gone
+    # on the next call. Only a plain user is bounded by them (pages.resolve).
+    access_role, held = page_engine.resolve(
+        role,
+        row.get("access_role") if has_pages else None,
+        row.get("allowed_pages") if has_pages else None,
+    )
+    narrowed_at = row.get("access_narrowed_at") if (has_pages and held is not None) else None
+    if narrowed_at is not None and narrowed_at.tzinfo is None:
+        narrowed_at = narrowed_at.replace(tzinfo=timezone.utc)
+
     return Principal(
         user_id=row["id"],
         email=row["email"],
@@ -276,6 +306,9 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         can_ingest=bool(row["can_ingest"]) or role in ("admin", "superadmin"),
         selected_building_id=selected,
         building_ids=building_ids,
+        access_role=access_role,
+        pages=held,
+        access_narrowed_at=narrowed_at,
     )
 
 

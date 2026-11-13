@@ -35,6 +35,13 @@ class Principal:
     role: str
     can_ingest: bool
 
+    #: The pages this caller may open, or None for every page (services/page_access.py).
+    #: An empty set is a real answer: held to no page at all.
+    pages: "frozenset[str] | None" = None
+
+    def allows_page(self, page: str) -> bool:
+        return self.pages is None or page in self.pages
+
     @property
     def is_superadmin(self) -> bool:
         return self.role == "superadmin"
@@ -48,6 +55,27 @@ def _detail(error: str, reason: str) -> dict:
     return {"ok": False, "error": error, "reason": reason}
 
 
+#: The pages an administrator can tick for a user (the identity service owns the list:
+#: svc-operations-intelligence engines/auth/pages.py).
+_PAGES = frozenset({"buildings", "compliance", "energy", "vendors", "ops", "assets"})
+
+
+def _pages_from(user: dict) -> "frozenset[str] | None":
+    """The pages the identity service says this caller holds.
+
+    Absent or null is a caller with every page — and an identity service that predates the
+    field. A list is a caller held to those pages; anything in it this service does not know
+    is dropped. Any other shape holds nothing: an answer that cannot be read is never read
+    as "every page".
+    """
+    raw = user.get("pages")
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(p).strip().lower() for p in raw if isinstance(p, str)) & _PAGES
+
+
 def from_me(payload: dict) -> Principal:
     user = payload.get("user") or {}
     return Principal(
@@ -56,6 +84,7 @@ def from_me(payload: dict) -> Principal:
         organization_id=UUID(str(user["organization_id"])) if user.get("organization_id") else None,
         role=str(user.get("platform_role") or user.get("role") or "user"),
         can_ingest=bool(user.get("can_ingest")),
+        pages=_pages_from(user),
     )
 
 

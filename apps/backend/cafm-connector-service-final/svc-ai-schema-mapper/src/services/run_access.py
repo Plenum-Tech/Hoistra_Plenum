@@ -69,6 +69,30 @@ _PLATFORM_ONLY_EXACT = {("POST", "/api/migration")}
 
 _READS = ("GET", "HEAD")
 
+#: The document index mounted in this service (app.py, "/doc-rag"). It answers about any
+#: document and any table and has no notion of who is asking, so a caller an administrator has
+#: held to some pages (services/principal.Principal.pages) is kept off it. Adding a document,
+#: and reading that one document's status while it is indexed, is ingesting - governed by the
+#: caller's own ingest switch - and stays.
+_DOC_RAG = "/doc-rag/"
+_DOC_RAG_ADD = re.compile(r"^/doc-rag/documents/(upload|upload-batch)$")
+_DOC_RAG_ONE = re.compile(r"^/doc-rag/documents/[^/]+$")
+PAGE_NOT_ALLOWED = "That is not part of the pages you have access to."
+
+
+def doc_rag_refused(principal: Principal, method: str, path: str) -> tuple[int, str, str] | None:
+    """None when this caller may make this call to the document index; else the refusal.
+
+    Only a caller held to pages is looked at: everyone else reaches the index as before."""
+    if getattr(principal, "pages", None) is None or not path.startswith(_DOC_RAG):
+        return None
+    method = method.upper()
+    if method == "POST" and _DOC_RAG_ADD.match(path):
+        return None
+    if method in _READS and _DOC_RAG_ONE.match(path):
+        return None
+    return 403, PAGE_NOT_ALLOWED, "page_not_allowed"
+
 
 def _deny(code: int, error: str, reason: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={"detail": {"ok": False, "error": error,
@@ -180,6 +204,11 @@ async def authorize(request: Request) -> JSONResponse | None:
         return _deny(403, "This is a platform tool, not part of the app.", "platform_only")
     if path.startswith(_ADMIN_ONLY) and not principal.is_admin:
         return _deny(403, "Only an admin can connect the company's CMMS.", "admin_only")
+    held_out = doc_rag_refused(principal, method, path)
+    if held_out:
+        # The same body every service answers with for a page the caller does not hold.
+        return JSONResponse(status_code=held_out[0], content={"detail": {
+            "ok": False, "reason": held_out[2], "page": None, "error": held_out[1]}})
 
     m = _RUN.match(path)
     if m:
