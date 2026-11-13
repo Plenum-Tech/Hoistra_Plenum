@@ -231,11 +231,13 @@ export const usersLiveMethods = {
       // — then the link is the only way in, so the admin is told to share it. note rides
       // back instead when zero buildings were allocated (engines/auth's own wording) —
       // said out loud rather than left for the admin to notice from an empty chip list.
-      this.flash(r.accept_url
+      // A role asked for and not recorded: the person was invited as a normal user.
+      const roleLost = !!body.access_role && !r.access_role;
+      this.flash((roleLost ? "The role was not recorded: " + u.email + " was invited as a normal user who opens every page. " : "") + (r.accept_url
         ? "Invitation created for " + u.email + " — the email was not delivered. Share the activation link: " + r.accept_url
         : r.note
         ? "Invitation sent to " + u.email + " — " + r.note
-        : "Invitation sent to " + u.email + " — they activate the account and set a password from the email.");
+        : "Invitation sent to " + u.email + " — they activate the account and set a password from the email."));
       clearTimeout(this._usLiveRefresh);
       this._usLiveRefresh = setTimeout(() => this.usLiveLoad(), REFRESH_AFTER_WRITE_MS);
     } catch (e) {
@@ -253,7 +255,18 @@ export const usersLiveMethods = {
     const pend = this.usPendOf(u.id, "access");
     const body = role ? { access_role: role, pages: cleanPages(pages) } : { access_role: null };
     const seq = ++pend.seq;
-    const send = () => adminApi.patchUser(u.id, body).then(() => {
+    const send = () => adminApi.patchUser(u.id, body).then((res) => {
+      // Believed only when the server says it recorded it: a server from before access roles
+      // answers 200 and changes nothing, and the row must not claim a restriction that is not
+      // there (or lifted one that still is).
+      const changed = res && res.changed && typeof res.changed === 'object' ? res.changed : null;
+      if (!changed || !("access_role" in changed) || (changed.access_role || null) !== (role || null)) {
+        if (seq !== pend.seq) return;
+        pend.done = seq;
+        this.usAccessDrop(u.id);
+        this.flash("Role not recorded for " + u.name + " — the server did not save it. " + u.name + "'s access is unchanged.");
+        return;
+      }
       // The server took this change, so the row says so - even when a newer change is already
       // on its way: if that one is refused, the row must show what the server holds, which
       // is this. Only the newest change clears the unsaved choice and speaks.

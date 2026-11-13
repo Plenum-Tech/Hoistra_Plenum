@@ -52,7 +52,8 @@ export const usersMethods = {
     const next = { role: role || "", pages: role ? cleanPages(pages) : [] };
     this.setState((p) => ({ usAccess: Object.assign({}, p.usAccess, { [u.id]: next }) }));
     if (!next.role) {
-      if (u.accessRole) return this.usLiveSetAccess(u, null, null);
+      // Pages with no role restrict as well (accessRoles.js isRoleUser), so No role lifts them too.
+      if (u.accessRole || Array.isArray(u.pages)) return this.usLiveSetAccess(u, null, null);
       return this.usAccessDrop(u.id);
     }
     if (!next.pages.length) return undefined;
@@ -172,7 +173,10 @@ export const usersMethods = {
           roleChips: roleChips(accRole, (key) => this.usAccessSet(u, key, key ? accPages : [])),
           pageChips: pageChips(accPages, (key) => this.usAccessSet(u, accRole, togglePage(accPages, key))),
           pagesShow: accRole ? "flex" : "none",
-          accessNote: !accRole ? u.name + " is a normal user and opens every page."
+          accessNote: !accRole && !draft && Array.isArray(u.pages)
+            ? u.name + " has no role but is held to: " + (cleanPages(u.pages).map((k) => (PAGE_OPTIONS.find((p) => p.key === k) || {}).label || k).join(", ") || "no page")
+              + ". Choose a role to set the pages, or No role to lift the restriction."
+            : !accRole ? u.name + " is a normal user and opens every page."
             : accPages.length ? u.name + " opens only the ticked pages, and only their data — in the app and in the chat."
             : NEEDS_A_PAGE + " Nothing is saved until then.",
           labUser: u.live && !isMe ? { id: u.id, email: u.email, role: u.role } : null,

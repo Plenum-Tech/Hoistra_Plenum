@@ -21,6 +21,7 @@
 // HoistraLogic.prototype and `this` is the controller.
 import { accountCanIngest } from './auth.js';
 import { instanceOf, usesInstances } from './instances.js';
+import { roleReports } from './accessRoles.js';
 
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
 const isBuilding = (b) => b && b.name && !/no building on certificate/i.test(b.name);
@@ -145,6 +146,9 @@ const STAT_LABELS = ['Areas', 'Obligations', 'Certificates', 'Vendors', 'Accredi
 
 // The Compliance Engine is the instance that carries this report, in either view.
 function hgAllowed(s) {
+  // A user with an access role has no instance: the graph comes with the Compliance page.
+  const mine = roleReports(s.account);
+  if (mine) return !!s.signedIn && mine.indexOf('graph') > -1;
   const inst = instanceOf(s.instance);
   return !!s.signedIn && usesInstances(s.account, s.viewOrgId) && !!inst && inst.reports.indexOf('graph') > -1;
 }

@@ -20,7 +20,8 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { workOrderApi } from '../api/workOrder.js';
 import { energyApi } from '../api/energy.js';
-import { isStaleScope } from '../api/client.js';
+import { isPageRefusal, isStaleScope } from '../api/client.js';
+import { holdsPage } from './accessRoles.js';
 
 // Reads a paged list to its end: page 1, 2, … until a page comes back short. `complete` is
 // false only when maxPages ran out first, so a caller can say the list was cut rather than
@@ -71,9 +72,15 @@ export const assetsLiveMethods = {
     try {
       // Every page of each. Both routes cap a page at 200, and one page was all the page read:
       // on 28 Sep 2026 that was 200 of Bishopsgate's 1,985 work orders, with nothing said.
+      // The work orders are the maintenance register's. A user with an access role who holds
+      // Assets but not Maintenance gets the register without them (accessRoles.js): none are
+      // asked for, and the asset list is not lost with them.
+      const woHeld = holdsPage(this.state.account, 'ops');
       const [a, w] = await Promise.all([
         readAllPages((page, limit) => workOrderApi.assets({ limit, page }), { size: 200, key: (r) => r && r.asset_id }),
-        readAllPages((page, limit) => workOrderApi.workOrders({ limit, page }), { size: 200, key: (r) => r && (r.work_order_id || r.id) })
+        woHeld
+          ? readAllPages((page, limit) => workOrderApi.workOrders({ limit, page }), { size: 200, key: (r) => r && (r.work_order_id || r.id) })
+          : Promise.resolve({ rows: [], complete: true })
       ]);
       const assets = a.rows;
       let workOrders = w.rows;
@@ -96,6 +103,8 @@ export const assetsLiveMethods = {
       // response, and the switch has already started a correctly-scoped read. Reporting
       // it would put a spurious error on a register that is loading perfectly well.
       if (isStaleScope(e)) return;
+      // Refused for a page this person does not hold: nothing to show and nothing to retry.
+      if (isPageRefusal(e)) { this.setState({ asLiveLoading: false, asLiveError: '' }); return; }
       const msg = (e && e.message) || String(e);
       this._asLiveAttempts = (this._asLiveAttempts || 0) + 1;
       this.setState({ asLiveLoading: false, asLiveError: msg });

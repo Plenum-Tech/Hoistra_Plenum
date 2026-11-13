@@ -88,10 +88,27 @@ export function roleReports(account) {
   return out;
 }
 
+// The name the top bar shows: the server's own label first, then this build's, and for pages
+// with no role (a record edited by hand) a plain description - never "null" or a raw key.
 export function roleLabel(account) {
   if (!isRoleUser(account)) return null;
+  if (typeof account.access_role_label === 'string' && account.access_role_label.trim()) return account.access_role_label.trim();
   const known = ACCESS_ROLES.find((r) => r.key === account.access_role);
-  return known ? known.label : String(account.access_role);
+  if (known) return known.label;
+  // A role this build has not heard of is shown by its key; pages with no role at all are
+  // described, never printed as "null".
+  return account.access_role ? String(account.access_role) : 'Limited access';
+}
+
+// A conversation a role user may still see in this browser's list: none from before their
+// access was last narrowed (access_narrowed_at), the same cut the server applies to its
+// thread list - the transcript kept here may hold answers from a page since taken away.
+export function sessionVisible(account, rec) {
+  if (!isRoleUser(account) || !rec) return true;
+  const cut = account.access_narrowed_at ? Date.parse(account.access_narrowed_at) : NaN;
+  if (isNaN(cut)) return true;
+  const at = Number(rec.createdAt) || Number(rec.at) || 0;
+  return at > cut;
 }
 
 // ── the view a page lives on ──────────────────────────────────────────────────────────
@@ -106,10 +123,13 @@ export function viewPage(view, module) {
 
 // A role user is never on a view whose page they do not hold, nor on the instance picker:
 // either is Home for them (HoistraLogic's update hook moves them there).
-export function viewOffLimits(account, view, module) {
+// The built-in spaces (spacesLive.js BUILTIN_SPACES) are keyed by the page they belong to;
+// Support and saved spaces belong to everyone.
+const SPACE_PAGE = { compliance: 'compliance', energy: 'energy', vendors: 'vendors', ops: 'ops' };
+export function viewOffLimits(account, view, module, spaceKey) {
   if (!isRoleUser(account)) return false;
   if (view === 'instances') return true;
-  const page = viewPage(view, module);
+  const page = view === 'space' ? (SPACE_PAGE[spaceKey] || null) : viewPage(view, module);
   return !!page && !holdsPage(account, page);
 }
 

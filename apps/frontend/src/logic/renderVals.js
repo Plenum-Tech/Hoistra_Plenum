@@ -2,6 +2,7 @@ import { docLabel } from './chatCases.js';
 import { choiceCards, choiceIntro } from './choiceCards.js';
 import { filterQueue, queueFiltersFor } from './queueLive.js';
 import { instanceReports, instanceShowsModule, instanceShowsSession } from './instances.js';
+import { sessionVisible } from './accessRoles.js';
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER, INGEST_ASK } from './constants.js';
@@ -250,7 +251,9 @@ export const renderValsMethods = {
     // And an instance lists only sessions of its own modules: a conversation about
     // certificates is not Ops Brain's (instanceShowsSession).
     const mySessions = myEmail
-      ? s.sessions.filter((r) => r.owner === myEmail && (r.viewOrgId || null) === myOrgScope && instanceShowsSession(instReports, r))
+      ? s.sessions.filter((r) => r.owner === myEmail && (r.viewOrgId || null) === myOrgScope && instanceShowsSession(instReports, r)
+        // A user with an access role: none from before their access was narrowed (accessRoles.js).
+        && sessionVisible(s.account, r))
       : [];
     // Reports are personal: every route in api/routes/reports.py filters on s.user_id, so
     // the array in state holds the rows of whoever was signed in when it was READ — which

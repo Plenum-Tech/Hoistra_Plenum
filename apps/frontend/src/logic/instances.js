@@ -383,6 +383,8 @@ export const instancesMethods = {
       out.instStatic = true;
       out.instSwitch = () => {};
       out.navSections = (vals.navSections || []).filter((n) => mine.indexOf(NAV_REPORT[n.key]) > -1);
+      // The spaces of the pages they hold, and Support and saved spaces, which are everyone's.
+      out.navSpaces = (vals.navSpaces || []).filter((sp) => !SPACE_REPORT[sp.key] || mine.indexOf(SPACE_REPORT[sp.key]) > -1);
       if (mine.indexOf('graph') > -1) {
         const at = out.navSections.findIndex((n) => n.key === 'buildings_user');
         out.navSections.splice(at + 1, 0, this.hgNavItem(s));

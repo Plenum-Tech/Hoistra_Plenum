@@ -8,7 +8,7 @@ import { authApi } from '../api/auth.js';
 import { adminApi } from '../api/admin.js';
 import { ApiError, configureAuth, getActingOrg, setActingOrg } from '../api/client.js';
 import { usesInstances } from './instances.js';
-import { roleReports } from './accessRoles.js';
+import { isRoleUser, roleReports } from './accessRoles.js';
 import { forgetIssuedToken, forgetSharedSession, isSupersededToken, issuedTokenKey, latestIssuedRecord, loadSharedSession, recordIssuedToken, SESSION_KEY } from './session.js';
 
 // Resolves on the next storage event for this account's session slot or token record, or
@@ -180,6 +180,15 @@ export const authMethods = {
     configureAuth(this.authHooks());
     this._authStorage = (e) => this.authStorageChanged(e);
     window.addEventListener('storage', this._authStorage);
+    // A user with an access role has their pages re-read when the tab comes back into view
+    // (authRecheckPages): an admin who ticks a page, or lifts the role, is otherwise not seen
+    // until the next token refresh - nothing they newly hold is ever refused, so nothing asks.
+    this._authFocus = () => this.authRecheckPages();
+    window.addEventListener('focus', this._authFocus);
+    if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') {
+      this._authVisible = () => { if (document.visibilityState === 'visible') this.authRecheckPages(); };
+      document.addEventListener('visibilitychange', this._authVisible);
+    }
     if (!this.state.refreshToken) {
       this.authLoadConfig();
       return Promise.resolve();
@@ -190,6 +199,8 @@ export const authMethods = {
 
   authStop() {
     window.removeEventListener('storage', this._authStorage);
+    if (this._authFocus) window.removeEventListener('focus', this._authFocus);
+    if (this._authVisible && typeof document !== 'undefined' && document) document.removeEventListener('visibilitychange', this._authVisible);
     clearInterval(this._authTimer); this._authTimer = null;
   },
 
@@ -489,6 +500,16 @@ export const authMethods = {
     };
   },
 
+  // Re-read a role user's pages (GET /me), at most once a minute. Everyone else is left alone:
+  // their pages cannot widen, and a narrowing is caught by the first refusal (authPageRefused).
+  authRecheckPages() {
+    if (!this.state.signedIn || !isRoleUser(this.state.account)) return;
+    const now = Date.now();
+    if (this._pagesCheckedAt && now - this._pagesCheckedAt < 60000) return;
+    this._pagesCheckedAt = now;
+    Promise.resolve(this.authLoadScope()).catch(() => {});
+  },
+
   // The server refused a page this client thought was held: an admin has changed the
   // person's pages since they were last read. Re-read them - once for a burst of refusals -
   // and say nothing: what is no longer theirs simply goes (authLoadScope clears it).
@@ -550,7 +571,10 @@ export const authMethods = {
             access_role: u.access_role === undefined ? p.account.access_role : (u.access_role || null),
             access_role_label: u.access_role_label === undefined ? p.account.access_role_label : (u.access_role_label || null),
             pages: u.pages === undefined ? p.account.pages : (Array.isArray(u.pages) ? u.pages : null),
-            pages_known: u.pages === undefined ? p.account.pages_known : true
+            pages_known: u.pages === undefined ? p.account.pages_known : true,
+            // When the person's access was last narrowed: conversations from before it are not
+            // listed for them (accessRoles.js sessionVisible), as the server does not list them.
+            access_narrowed_at: u.access_narrowed_at === undefined ? p.account.access_narrowed_at : (u.access_narrowed_at || null)
           })
         } : {}), () => {
           // The pages changed under a signed-in session - a role given, taken away, a page

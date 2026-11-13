@@ -79,7 +79,7 @@ test('a burst of role edits leaves the row showing what the server holds', async
   let n = 0;
   const real = adminApi.patchUser;
   // The first change is taken by the server; the second is refused.
-  adminApi.patchUser = async () => { n += 1; if (n === 2) throw new Error('refused'); return { ok: true }; };
+  adminApi.patchUser = async (id, body) => { n += 1; if (n === 2) throw new Error('refused'); return { ok: true, changed: { access_role: body.access_role, pages: body.pages } }; };
   try {
     const u = x.state.users[0];
     x.usLiveSetAccess(u, 'general_user', ['energy', 'assets']);

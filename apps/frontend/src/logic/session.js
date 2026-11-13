@@ -75,8 +75,23 @@ function cleanAccount(a) {
     building_ids: a.building_ids === null ? null : (isStrArray(a.building_ids) ? a.building_ids.slice() : null),
     all_buildings: a.all_buildings === true,
     selected_building_id: isStr(a.selected_building_id) ? a.selected_building_id : null,
-    buildings: isBuildingList(a.buildings) ? a.buildings.slice() : []
+    buildings: isBuildingList(a.buildings) ? a.buildings.slice() : [],
+    // The access role and the pages that go with it (logic/accessRoles.js), kept so a reload
+    // knows them before the refresh answers: without them a role user was shown the instance
+    // picker and every register was asked for. Only when the account carries them, so an
+    // account from before access roles is stored exactly as it was.
+    ...accessOf(a)
   };
+}
+
+function accessOf(a) {
+  const out = {};
+  if ('access_role' in a) out.access_role = isStr(a.access_role) && a.access_role ? a.access_role : null;
+  if ('access_role_label' in a) out.access_role_label = isStr(a.access_role_label) && a.access_role_label ? a.access_role_label : null;
+  if ('pages' in a) out.pages = isStrArray(a.pages) ? a.pages.slice() : null;
+  if ('pages_known' in a) out.pages_known = a.pages_known === true;
+  if ('access_narrowed_at' in a) out.access_narrowed_at = isStr(a.access_narrowed_at) ? a.access_narrowed_at : null;
+  return out;
 }
 
 // Parses and validates one storage's slice. Shared by both stores so a stale or

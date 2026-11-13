@@ -56,7 +56,7 @@ import { healthBand } from './assetsLive.js';
 import { workOrderApi } from '../api/workOrder.js';
 import { energyApi } from '../api/energy.js';
 import { complianceApi } from '../api/compliance.js';
-import { isStaleScope } from '../api/client.js';
+import { isPageRefusal, isStaleScope } from '../api/client.js';
 import { t } from './constants.js';
 import { assetChain, canAct } from './accessRoles.js';
 import { actionCtx, actionSteps, mailDraft, investigationQuestion as shapeQuery, investigationSteps, shapeInvestigation, investigationError,
@@ -387,6 +387,9 @@ export const assetsConditionMethods = {
     let stale = null;
     const soft = (p) => p.catch((e) => {
       if (isStaleScope(e)) { stale = e; return { __stale: true }; }
+      // A part owned by a page this person does not hold (accessRoles.js) is left out - an
+      // empty answer, never an "unreachable" line naming the refusal.
+      if (isPageRefusal(e)) return {};
       return { __err: (e && e.message) || String(e) };
     });
     try {

@@ -34,7 +34,7 @@ import { maintenanceLiveMethods } from './maintenanceLive.js';
 import { graphLiveMethods } from './graphLive.js';
 import { chatMethods } from './chat.js';
 import { loadSession, saveSession } from './session.js';
-import { guardLoaders, viewOffLimits } from './accessRoles.js';
+import { guardLoaders, isRoleUser, viewOffLimits } from './accessRoles.js';
 import { loadSessions, saveSessions, sessionsMethods } from './sessions.js';
 import { spacesMethods } from './spacesLive.js';
 import { FALLBACK_PRESETS, reportsMethods } from './reports.js';
@@ -345,6 +345,9 @@ export class HoistraLogic extends Controller {
     // holds "Exit" (review, 12 Oct 2026).
     const viewingAsAdmin = this.state.account && this.state.account.role === "superadmin" && this.state.role === "admin";
     if (this.state.signedIn && picks && !this.state.instance && !viewingAsAdmin) this.state.view = "instances";
+    // A user with an access role reloads onto a page they hold, or Home (accessRoles.js) - a view
+    // stored before the role was given, or before a page was unticked, is not reopened.
+    if (viewOffLimits(this.state.account, this.state.view, this.state.module, this.state.spaceKey)) this.state.view = "home";
     // getActingOrg() (api/client.js) is a plain in-memory variable, not itself persisted —
     // every API call reads it directly, so a restored viewOrgId must be primed back into
     // it here, or every report keeps reading the account's own company regardless of what
@@ -403,7 +406,12 @@ export class HoistraLogic extends Controller {
     if (this.state.signedIn || prev.signedIn) saveSession(this.state, prev);
     // A user with an access role is never left on a view whose page they do not hold, nor on
     // the instance picker (accessRoles.js): either is Home for them.
-    if (toHome || viewOffLimits(st.account, st.view, st.module)) this.setState({ view: "home" });
+    // Nor in an instance: one picked while they were a normal user would keep sending its space
+    // with every question, and the chat answers only what the space AND the pages allow.
+    const fix = {};
+    if (toHome || viewOffLimits(st.account, st.view, st.module, st.spaceKey)) fix.view = "home";
+    if (st.instance && isRoleUser(st.account)) fix.instance = null;
+    if (Object.keys(fix).length) this.setState(fix);
   }
 }
 

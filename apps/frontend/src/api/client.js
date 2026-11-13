@@ -52,6 +52,11 @@ export function setActingOrg(id) { actingOrgId = id ? String(id) : null; orgEpoc
 // Loaders check it to stay quiet: the switch has already started a correctly-scoped read,
 // so there is nothing to report and nothing to retry.
 export function isStaleScope(e) { return !!(e && e.staleScope); }
+// A refusal for a page the person does not hold (logic/accessRoles.js), sent or not. It is not
+// an error to show: the part it would have filled is simply left out.
+export function isPageRefusal(e) {
+  return !!(e && (e.pageNotAllowed || (e.status === 403 && e.reason === 'page_not_allowed')));
+}
 export function getActingOrg() { return actingOrgId; }
 
 // The role space the user is working in (logic/instances.js: ops, comp, assets, full). A space
