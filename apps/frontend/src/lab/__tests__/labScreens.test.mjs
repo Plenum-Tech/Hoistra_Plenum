@@ -45,14 +45,13 @@ test('the picker: Platform view first, then each company, the chosen one checked
   assert.ok(html(L.Picker, { companies: null, onChoose: () => {} }).includes('Reading the companies'));
 });
 
-test('the menu: Sessions, Runs, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
-  // Sessions first (11 Nov 2026); Runs is back after it for the questions people ask by hand. Synthetic is commented
-  // out (13 Nov 2026): sessions take its place.
-  const WORK = ['sessions', 'runs', 'labels', 'progress', 'loop', 'notes', 'learning'];
+test('the menu: Runs, Labels, Progress, Loop, Notes and Learning, plus People for admins; a question code names its run', () => {
+  // Synthetic is commented out (13 Nov 2026), and Sessions too (14 Nov 2026): its list opens inside Runs.
+  const WORK = ['runs', 'labels', 'progress', 'loop', 'notes', 'learning'];
   assert.deepEqual(L.navFor({ manages: false }).map((x) => x[0]), WORK);
   assert.deepEqual(L.navFor({ manages: true }).map((x) => x[0]), WORK.concat(['people']));
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Sessions', 'Runs', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Runs', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
   assert.equal(L.runOf('r3-12'), 'R3');
   assert.equal(L.runOf('R3'), null);
 });
@@ -252,7 +251,7 @@ test('Learning is a page of its own, and the lab app renders it', () => {
   assert.ok(app.includes("current === 'learning' ? <Learning"),
     'the menu names a page nothing draws, so opening it shows nothing');
   assert.deepEqual(L.navFor(null).map((x) => x[1]),
-    ['Sessions', 'Runs', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
+    ['Runs', 'Labels', 'Progress', 'Loop', 'Notes', 'Learning']);
 });
 
 test('the draft comes from the service, not from the browser', () => {
@@ -350,7 +349,9 @@ test('the time is stamped when the page receives the batch, not read from the re
 // made from them, so there is no second label store to open a session from.
 test('labels is handed the run picked in the top bar and nothing reads the old sessions grid', () => {
   const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
-  assert.match(app, /<LabelsView [^>]*picked=\{run\}/);
+  assert.match(app, /<LabelsView [^>]*run=\{run\} /,
+    'the top bar\'s run as it is; All runs is every run (14 Nov 2026: one Labels page, no Sessions | Runs switch)');
+  assert.ok(!/<LabelsView [^>]*picked=/.test(app), 'nothing left to switch on');
   assert.ok(!app.includes('onOpenSession'), 'a session row no longer exists on Labels');
   const api = readFileSync(new URL('../labApi.js', import.meta.url), 'utf-8');
   assert.ok(!api.includes("'/eval/labels'"), 'the per-turn grid route is gone');

@@ -313,7 +313,7 @@ async def test_a_scenario_session_is_filed_by_itself_and_listed_under_its_run_ta
     assert [q["question"] for q in (await runs.list_questions(boss, day[0]["code"]))["questions"]] == [
         "How many floors does Bishopsgate Tower have?"]
     tagged = (await runs.list_runs(boss, kind="sessions"))["runs"]
-    assert [r["title"] for r in tagged] == ["Sessions · auto_v0"]
+    assert [r["run_tag"] for r in tagged] == ["auto_v0"] and tagged[0]["title"].startswith("Sessions · auto_v0 · ")
     assert [q["question"] for q in (await runs.list_questions(boss, tagged[0]["code"]))["questions"]] == [
         "Which certificates are due?"]
     async with lab_scratch.connect() as conn:

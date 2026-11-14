@@ -388,7 +388,8 @@ export function SessionBody({ data, active, trees, notes, labels, flags, flagSta
   );
 }
 
-export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoop }) {
+// `turn` opens the page on that turn (a link to a question names its turn, 14 Nov 2026); else the first.
+export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoop, turn }) {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState('');
   const [active, setActive] = React.useState(null);
@@ -413,7 +414,7 @@ export default function SessionPage({ sessionId, me, onBack, backText, onOpenLoo
         if (mine !== ask.current) return;
         setData(out);
         const tabs = turnTabs(out && out.traces);
-        setActive(tabs.length ? tabs[0].traceId : null);
+        setActive(tabs.length ? (tabs.some((t) => t.traceId === turn) ? turn : tabs[0].traceId) : null);
       })
       .catch((e) => { if (mine === ask.current) setError(errText(e)); });
   }, [sessionId]);

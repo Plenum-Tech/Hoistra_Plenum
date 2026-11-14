@@ -35,6 +35,9 @@ MAIN_POOL_SIZE = 2
 LAB_POOL_SIZE = 3
 LAB_MAX_OVERFLOW = 2
 MAIN_SERVER_SETTINGS: dict[str, str] = {"default_transaction_read_only": "on", "application_name": APPLICATION_NAME}
+#: Trace Lab's own database. JIT off (14 Nov 2026): the runs list's plan crossed Postgres's JIT threshold and spent
+#: ~1.2 s compiling a ~30 ms query; Trace Lab's reads are all short, so compiling them never pays.
+LAB_SERVER_SETTINGS: dict[str, str] = {"application_name": APPLICATION_NAME, "jit": "off"}
 UNAVAILABLE_TEXT = "Trace Lab is not available right now. The chat is not affected."
 RETRY_AFTER_S = 30
 
@@ -109,7 +112,7 @@ def lab_engine() -> AsyncEngine:
         if not url:
             raise RuntimeError("TRACE_LAB_DB_URL is not set")
         _lab = _engine_for(url, pool_size=LAB_POOL_SIZE, max_overflow=LAB_MAX_OVERFLOW,
-                           server_settings={"application_name": APPLICATION_NAME})
+                           server_settings=LAB_SERVER_SETTINGS)
     return _lab
 
 

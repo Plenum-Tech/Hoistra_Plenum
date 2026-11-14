@@ -134,8 +134,14 @@ async def eval_new_run_tag(body: RunTagIn, m: labelling.Member = Depends(_wide))
 async def _ingest(m: labelling.Member, body: IngestIn) -> dict[str, int]:
     runs.require_curator(m)
     since = body.since or (datetime.now(timezone.utc) - timedelta(days=CHAT_INGEST_DAYS if body.chat else INGEST_DAYS))
-    return await eval_store.ingest_from_main(since=since, run_tag=body.run_tag, sessions=body.sessions,
-                                             org=_company(m), by=m, **({"chat": True} if body.chat else {}))
+    out = await eval_store.ingest_from_main(since=since, run_tag=body.run_tag, sessions=body.sessions,
+                                            org=_company(m), by=m, **({"chat": True} if body.chat else {}))
+    # Every scenario run tag is a run (14 Nov 2026): a tag read in now gets its run at once.
+    try:
+        await runs.ensure_batch_runs(_company(m))
+    except Exception:  # noqa: BLE001 - the sessions are read in either way; the automatic sync makes it later
+        pass
+    return out
 
 
 @router.post("/eval/ingest")

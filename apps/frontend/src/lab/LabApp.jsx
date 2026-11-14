@@ -2,19 +2,22 @@
 // Sign in (the Hoistra email and password; an unverified email asks for its code). There is no company level: the
 // platform team and a consultant see every company's records, everyone else their own company's. The service says who
 // the person is in Trace Lab (/lab/me): company admins, the platform team and a consultant go straight in; anyone else
-// waits until a company admin gives them a Trace Lab role. The workspace opens on Sessions (11 Nov 2026: scenario
-// conversations, a trace per turn, noted and labelled on each turn), then Runs (Runs -> Questions -> one answer's steps:
-// where the questions people ask by hand land, synced from the chat), Synthetic, Labels (failure modes per run),
-// Progress, Loop, Notes, Learning and, for admins, People. A run and question in view are kept in the address
-// (?run=R3&q=R3-12), so a link opens the same place.
+// waits until a company admin gives them a Trace Lab role. The workspace opens on Runs (14 Nov 2026, Hussain: the
+// Sessions tab moved into it): a sessions run or a person's live day opens as its conversations and a conversation as
+// the session page (a trace per turn, noted and labelled on each turn); a run typed on the page or imported opens as
+// Runs -> Questions -> one answer's steps. Then Labels (failure modes per run), Progress, Loop, Notes, Learning and,
+// for admins, People. A run, question and session in view are kept in the address (?run=R3&q=R3-12, ?session=...),
+// so a link opens the same place; an older ?view=sessions link opens Runs (on its session when it names one).
 import React from 'react';
 import { authApi } from '../api/auth.js';
 import { setActingOrg } from '../api/client.js';
 import { createLabAuth } from './authFlow.js';
 import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
-import RunsPage from './Runs.jsx';
-import Sessions from './Sessions.jsx';
+import RunsPage, { runLabel, sessionsTagOf, syncLines } from './Runs.jsx';
+// Sessions is commented out (14 Nov 2026, Hussain): its list opens inside Runs (a run's conversations), its Read buttons
+// and Scenarios view are on Runs. The page is kept: put this line, the menu item and the page line below back.
+// import Sessions from './Sessions.jsx';
 // Synthetic is commented out (13 Nov 2026, Hussain): sessions take its place. Put this line, the menu item and the
 // page line below back to bring it back.
 // import Synthetic from './Synthetic.jsx';
@@ -31,15 +34,14 @@ const store = () => { try { return window.localStorage; } catch (e) { return nul
 const locks = () => { try { return navigator.locks || null; } catch (e) { return null; } };
 
 // The page a plain /lab/ opens on.
-export const HOME_VIEW = 'sessions';
+export const HOME_VIEW = 'runs';
 
 // The workspace menu. People is for company admins (and the platform team).
 export function navFor(me) {
   // Loop follows Progress (the correction loop, 3 Nov 2026); Learning sits after Notes because that is the order
   // the work happens in: read a run, leave notes on it, then see what the notes add up to.
-  // Sessions (11 Nov 2026) comes first: the scenario conversations, a trace per turn, noted and labelled. Runs follows
-  // it: the questions people ask by hand, synced from the chat as one run per person per day.
-  const items = [['sessions', 'Sessions'], ['runs', 'Runs'], /* ['synthetic', 'Synthetic'], */ ['labels', 'Labels'],
+  // Sessions (11 Nov 2026) is commented out (14 Nov 2026): Runs holds its conversations, Read buttons and Scenarios.
+  const items = [/* ['sessions', 'Sessions'], */ ['runs', 'Runs'], /* ['synthetic', 'Synthetic'], */ ['labels', 'Labels'],
     ['progress', 'Progress'], ['loop', 'Loop'], ['notes', 'Notes'], ['learning', 'Learning']];
   if (me && me.manages) items.push(['people', 'People']);
   return items;
@@ -48,39 +50,73 @@ export function navFor(me) {
 // The run (R3) of a question code (R3-12).
 export const runOf = (code) => { const m = /^\s*(R\d+)-\d+\s*$/i.exec(String(code || '')); return m ? m[1].toUpperCase() : null; };
 
-function readPlace() {
+// The place an address names. The Sessions page is gone (14 Nov 2026): ?view=sessions opens Runs, keeping the session
+// (?session=) it names and the run tag (?tag=) a Runs row used to name.
+export function placeOf(search) {
   try {
-    const q = new URLSearchParams(window.location.search);
+    const q = new URLSearchParams(search || '');
     const run = (q.get('run') || '').toUpperCase() || null;
     const question = (q.get('q') || '').toUpperCase() || null;
-    return { run: run || runOf(question), question, view: q.get('view') || null };
-  } catch (e) { return { run: null, question: null, view: null }; }
+    const view = q.get('view') || null;
+    return { view: view === 'sessions' ? 'runs' : view, run: run || runOf(question), question,
+      session: (q.get('session') || '').slice(0, 200) || null, tag: (q.get('tag') || '').slice(0, 40) || null };
+  } catch (e) { return { view: null, run: null, question: null, session: null, tag: null }; }
 }
-// The page an address opens on: the one it names; else Runs when it names a run or a question (the links written before
-// Sessions came first, ?run=R3&q=R3-12, open the question as they always did); else Sessions.
+function readPlace() {
+  try { return placeOf(window.location.search); } catch (e) { return placeOf(''); }
+}
+// The page an address opens on: the one it names; else Runs.
 export function startView(place) {
   const p = place || {};
   if (p.view) return p.view;
   return p.run || p.question ? 'runs' : HOME_VIEW;
 }
 
-// The address for a place. The page is named whenever it is not Sessions or a run or question is in it, so the address
-// reads back as the same page (startView).
-export function placeQuery(view, run, question, session) {
+// The run an older ?tag= link opens: the tag's latest batch (its sessions runs, the latest start first; one made before
+// batches has none, so it is the earliest), among the runs listed.
+export function runForTag(runs, tag) {
+  if (!tag) return null;
+  const found = (runs || []).filter((r) => sessionsTagOf(r) === tag);
+  found.sort((a, b) => String(b.batch_start || '').localeCompare(String(a.batch_start || '')));
+  return found.length ? found[0].code : null;
+}
+
+// The address for a place. The page is named whenever it is not Runs or a run, question or session is in it, so the
+// address reads back as the same page (startView). A session and a run tag's entry (?tag=, 14 Nov 2026) are Runs' own
+// part of the address.
+export function placeQuery(view, run, question, session, tag) {
   const q = new URLSearchParams();
-  if (session && view === 'sessions') q.set('session', session);
-  if (view && (view !== HOME_VIEW || run || question)) q.set('view', view);
+  const ses = view === 'runs' ? session : null;
+  const t = view === 'runs' && !run ? tag : null;
+  if (view && (view !== HOME_VIEW || run || question || ses || t)) q.set('view', view);
   if (run) q.set('run', run);
   if (question) q.set('q', question);
+  if (ses) q.set('session', ses);
+  if (t) q.set('tag', t);
   return q.toString();
 }
 
-function keepPlace(view, run, question) {
+// Browser back and forward (14 Nov 2026): a move to another page, run or session is a history entry, so Back returns to
+// where the person was instead of leaving Trace Lab. A redirect the page makes by itself only rewrites the address it
+// came from, or Back would land on it and be sent forward again: a question link that opened its conversation, an
+// older ?tag= link that opened its run. The first address is only tidied. null when the address is already right.
+export function historyStep(prev, next, first) {
+  if (prev === next) return null;
+  if (first) return 'replace';
+  const a = new URLSearchParams(String(prev).split('?')[1] || '');
+  const b = new URLSearchParams(String(next).split('?')[1] || '');
+  if (a.get('q') && !b.get('q') && b.get('session') && a.get('run') === b.get('run')) return 'replace';
+  if (a.get('tag') && !a.get('run') && !b.get('tag') && b.get('run')) return 'replace';
+  return 'push';
+}
+
+function keepPlace(view, run, question, session, tag, first) {
   try {
-    // The session open on the Sessions page is that page's own part of the address; keep it while that page is in view.
-    const session = new URLSearchParams(window.location.search).get('session');
-    const s = placeQuery(view, run, question, session);
-    window.history.replaceState(null, '', window.location.pathname + (s ? '?' + s : ''));
+    const s = placeQuery(view, run, question, session, tag);
+    const next = window.location.pathname + (s ? '?' + s : '');
+    const step = historyStep(window.location.pathname + window.location.search, next, first);
+    if (step === 'push') window.history.pushState(null, '', next);
+    else if (step === 'replace') window.history.replaceState(null, '', next);
   } catch (e) { /* the address is a convenience */ }
 }
 
@@ -102,7 +138,7 @@ export function RunPicker({ runs, run, onRun, onSync, syncing, synced, auto }) {
       <label className="lab-visually-hidden" htmlFor="lab-run-pick">{'Run'}</label>
       <select id="lab-run-pick" className="lab-run-pick" value={run || ''} onChange={(e) => onRun(e.target.value || null)}>
         <option value="">{'All runs'}</option>
-        {(runs || []).map((r) => <option key={r.code} value={r.code}>{r.code + ' · ' + r.title + ' · ' + (r.n_questions || 0) + (r.n_questions === 1 ? ' question' : ' questions')}</option>)}
+        {(runs || []).map((r) => <option key={r.code} value={r.code}>{runLabel(r)}</option>)}
       </select>
       <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onSync} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync now'}</button>
       {synced ? <span className="lab-small" role="status">{synced}</span> : null}
@@ -238,6 +274,10 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const start = React.useRef(readPlace());
   const [run, setRun] = React.useState(start.current.run);
   const [question, setQuestion] = React.useState(start.current.question);
+  // The session open inside Runs (a run's conversation, or one an older ?view=sessions&session= link names).
+  const [session, setSession] = React.useState(start.current.session);
+  // A scenario run tag's entry open inside Runs (?tag=; an older ?view=sessions&tag= link opens it too).
+  const [tag, setTag] = React.useState(start.current.run ? null : start.current.tag);
   const [runs, setRuns] = React.useState(null);
   // The instance everything in the lab is asked in. Kept for this browser tab, so a reload
   // does not quietly move a batch to a different set of engines.
@@ -271,38 +311,54 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   const loadRuns = React.useCallback(() => labApi.runs({ limit: 200 })
     .then((out) => setRuns((out && out.runs) || [])).catch(() => setRuns([])), []);
   React.useEffect(() => { loadRuns(); }, [loadRuns]);
-  React.useEffect(() => { keepPlace(current, run, question); }, [current, run, question]);
+  const placed = React.useRef(false);
+  React.useEffect(() => {
+    keepPlace(current, run, question, session, tag, !placed.current);
+    placed.current = true;
+  }, [current, run, question, session, tag]);
+  // An older ?tag=<tag> link opens the tag's latest batch once the runs are read; with none, the tag's conversations.
+  React.useEffect(() => {
+    if (!tag || run || !runs) return;
+    const code = runForTag(runs, tag);
+    if (code) { setRun(code); setTag(null); }
+  }, [runs]); // eslint-disable-line react-hooks/exhaustive-deps
   // The answer and step a question is opened on ({ code, turn, step }): the Notes page opens a note where it was written
   // (10 Nov 2026). Any other way of opening a question opens its newest answer, as before.
   const [focus, setFocus] = React.useState(null);
-  const pickRun = (code) => { setRun(code); setQuestion(null); setFocus(null); };
+  // The turn a session is opened on from Labels (a Codex row: its conversation inside the run on view, 14 Nov 2026).
+  const [turnAt, setTurnAt] = React.useState(null);
+  const pickRun = (code) => { setRun(code); setQuestion(null); setFocus(null); setSession(null); setTag(null); setTurnAt(null); };
+  const pickTag = (t) => { setTag(t || null); setRun(null); setQuestion(null); setFocus(null); setSession(null); };
   const pickQuestion = (code) => { setFocus(null); setQuestion(code); };
-  // A "Sessions · <tag>" run on the Runs page opens the Sessions list filtered to that tag (14 Nov 2026), which reads
-  // ?tag= when it opens.
-  const openTag = (tag) => {
-    if (!tag) return;
-    try {
-      const q = new URLSearchParams(window.location.search);
-      q.delete('session');
-      q.delete('run');
-      q.delete('q');
-      q.set('tag', tag);
-      window.history.replaceState(null, '', window.location.pathname + '?' + q.toString());
-    } catch (e) { /* the address is a convenience */ }
-    onView('sessions');
-  };
   const openQuestion = (code, at) => {
     const r = runOf(code); if (!r) return;
-    setRun(r); setQuestion(code);
+    setRun(r); setQuestion(code); setSession(null); setTag(null);
     setFocus(at && (at.turn || at.step) ? { code, turn: at.turn || null, step: at.step || null } : null);
+    onView('runs');
+  };
+  const showSession = (sid) => { setSession(sid); setTurnAt(null); };
+  // Back and forward: the page, run, question and session the address names (historyStep made the entry).
+  React.useEffect(() => {
+    const restore = () => {
+      const p = readPlace();
+      setRun(p.run); setQuestion(p.question); setSession(p.session); setTag(p.run ? null : p.tag);
+      setFocus(null); setTurnAt(null);
+      onView(startView(p));
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const openTurn = (code, sid, turnId) => {
+    setRun(code); setQuestion(null); setFocus(null); setTag(null); setSession(sid); setTurnAt(turnId || null);
     onView('runs');
   };
   const sync = async () => {
     setSyncing(true); setSynced('');
     try {
+      // The same Sync now as the Runs page's (14 Nov 2026): live questions, chat conversations, Codex sessions, runs.
       const out = await labApi.syncRuns();
-      const n = (out && out.new_questions) || 0;
-      setSynced(n ? n + (n === 1 ? ' new question' : ' new questions') + (out.more ? ', more to come: sync again' : '') : 'Up to date');
+      const said = syncLines(out);
+      setSynced([said.line].concat(said.problems).join(' · '));
       await loadRuns();
       setStamp((x) => x + 1);
     } catch (e) {
@@ -332,13 +388,14 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
           ))}
         </nav>
       </div>
-      <main className={'lab-main' + (current === 'runs' && run ? ' lab-main-split' : '')} key={'v' + stamp}>
-        {current === 'sessions' ? <Sessions me={me} onOpenLoop={() => onView('loop')} /> : null}
-        {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion} onOpenTag={openTag}
+      <main className={'lab-main' + (current === 'runs' && (run || session || tag) ? ' lab-main-split' : '')} key={'v' + stamp}>
+        {/* Commented out (14 Nov 2026): {current === 'sessions' ? <Sessions me={me} onOpenLoop={() => onView('loop')} /> : null} */}
+        {current === 'runs' ? <RunsPage me={me} run={run} onRun={pickRun} question={question} onQuestion={pickQuestion}
+          session={session} onSession={showSession} known={runs} tag={tag} onTag={pickTag} turnAt={turnAt}
           focus={focus && focus.code === question ? focus : null}
           onOpenLoop={() => onView('loop')} /> : null}
         {/* Commented out (13 Nov 2026): {current === 'synthetic' ? <Synthetic instance={instance} onPick={pickInstance} org={orgOfRun} /> : null} */}
-        {current === 'labels' ? <LabelsView me={me} run={run || (runs && runs[0] ? runs[0].code : null)} picked={run} onOpenQuestion={openQuestion}
+        {current === 'labels' ? <LabelsView me={me} run={run} onOpenQuestion={openQuestion} onOpenTurn={openTurn}
           onOpenLoop={() => onView('loop')} /> : null}
         {current === 'progress' ? <ProgressView me={me} run={run} /> : null}
         {current === 'loop' ? <Loop me={me} runs={runs} run={run} onOpenQuestion={openQuestion} /> : null}
@@ -356,7 +413,7 @@ export default function LabApp() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [email, setEmail] = React.useState('');
-  // A shared link (?view=labels&run=R3) opens on that screen; a plain /lab/ opens on HOME_VIEW (Sessions).
+  // A shared link (?view=labels&run=R3) opens on that screen; a plain /lab/ opens on HOME_VIEW (Runs).
   const [view, setView] = React.useState(() => startView(readPlace()));
   const [me, setMe] = React.useState(null);
   const [meError, setMeError] = React.useState('');

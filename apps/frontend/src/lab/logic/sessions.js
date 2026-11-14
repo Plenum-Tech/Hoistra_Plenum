@@ -102,11 +102,34 @@ export function sessionTitle(session) {
   return s.scenario_id || s.id || '—';
 }
 
-// One row of the sessions list, as it is read.
+// A question cut to fit a row, at a word where it can be (14 Nov 2026); the whole of it goes on hover.
+export function shortQuestion(text, most = 90) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= most) return t;
+  const cut = t.slice(0, most);
+  const at = cut.lastIndexOf(' ');
+  return (at > most * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,;:.]+$/, '') + '…';
+}
+
+// Where a session was asked, in words: "asked here" on this environment, "asked on <machine>" elsewhere, and nothing
+// when the origin is only a container id (12 hex characters: a recreated local container, not a place a person knows).
+const CONTAINER_ID = /^[0-9a-f]{12}$/i;
+export function askedText(x) {
+  const s = x || {};
+  const origin = String(s.origin || '').trim();
+  const where = s.asked_here ? 'asked here' : (origin && !CONTAINER_ID.test(origin) ? 'asked on ' + origin : '');
+  const attempt = Number(s.attempt) || 1;
+  return where ? where + (attempt > 1 ? ' · attempt ' + attempt : '') : '';
+}
+
+// One row of the sessions list, as it is read. A row is titled by the conversation's first question when the service
+// sends it (14 Nov 2026), its scenario then a chip; "asked here" when it was asked on this environment.
 export function sessionRow(s) {
   const x = s || {};
   const scores = x.scores || {};
   return {
+    question: shortQuestion(x.first_question), questionFull: String(x.first_question || '').trim(), scenario: x.scenario_id || '',
+    askedHere: !!x.asked_here, askedText: askedText(x),
     id: x.id, title: sessionTitle(x), runTag: x.run_tag || '', origin: x.origin || '', attempt: Number(x.attempt) || 1,
     type: TYPE_TEXT[x.type] || '—', turns: plural(x.turns, 'turn', 'turns'),
     status: STATUS_TEXT[x.status] || '—', failed: x.status === 'failed', when: x.started_at || null,

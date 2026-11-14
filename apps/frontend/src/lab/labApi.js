@@ -50,7 +50,8 @@ export const labApi = {
   runs: (query) => call('GET', '/lab/runs', { query }),
   run: (code) => call('GET', '/lab/runs/' + enc(code)),
   createRun: (body) => call('POST', '/lab/runs', { body }),
-  syncRuns: () => call('POST', '/lab/runs/sync', { timeoutMs: 60000 }),
+  // One Sync now for everything (14 Nov 2026): live questions, chat conversations, Codex sessions and runs; it can take a while.
+  syncRuns: () => call('POST', '/lab/runs/sync', { timeoutMs: 300000 }),
   importRuns: (file, fields) => {
     const form = new FormData();
     form.append('file', file);
@@ -58,7 +59,11 @@ export const labApi = {
     return call('POST', '/lab/runs/import', { form, timeoutMs: 120000 });
   },
   runQuestions: (code) => call('GET', '/lab/runs/' + enc(code) + '/questions'),
+  // A sessions run's or a live day's conversations as session rows, and its questions not filed yet (14 Nov 2026).
+  runSessions: (code, query) => call('GET', '/lab/runs/' + enc(code) + '/sessions', { query: query || {} }),
   runLabels: (code) => call('GET', '/lab/runs/' + enc(code) + '/labels'),
+  // Labels for All runs (14 Nov 2026): every run the top bar lists, each with its own rows.
+  allLabels: () => call('GET', '/lab/labels'),
   progress: (run) => call('GET', '/lab/progress', { query: run ? { run } : {} }),
   q: (code, turn) => call('GET', '/lab/q/' + enc(code), { query: turn ? { turn } : {} }),
   // The Trace tab (9 Nov 2026): the question's answer as Langfuse's tree of steps, read only when the tab opens.

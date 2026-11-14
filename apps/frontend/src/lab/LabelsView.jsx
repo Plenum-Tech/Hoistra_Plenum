@@ -142,7 +142,7 @@ function Cell({ q, mode, c, busy, onCell }) {
   const tint = c.mine === 'positive' ? ' lab-lv-pos' : (c.mine === 'negative' ? ' lab-lv-neg' : '');
   return (
     <td className={'lab-lv-cell' + tint}>
-      <div className="lab-lv-toggle" role="group" aria-label={'Your label for ' + q.code + ', ' + mode.name}>
+      <div className="lab-lv-toggle" role="group" aria-label={'Your label for ' + rowTag(q) + ', ' + mode.name}>
         {VALUES.map((v) => {
           const on = c.mine === v;
           return (
@@ -155,7 +155,7 @@ function Cell({ q, mode, c, busy, onCell }) {
         <div className="lab-lv-suggest" title={c.suggestedBy}>
           <span>{'Suggested by agent: ' + c.suggested}</span>
           {c.mine !== c.suggested ? (
-            <button type="button" className="lab-link" disabled={!!busy} aria-label={'Accept the suggestion ' + c.suggested + ' for ' + q.code + ', ' + mode.name}
+            <button type="button" className="lab-link" disabled={!!busy} aria-label={'Accept the suggestion ' + c.suggested + ' for ' + rowTag(q) + ', ' + mode.name}
               onClick={() => onCell && onCell(q, mode, c.suggested)}>{'Accept'}</button>
           ) : null}
         </div>
@@ -172,38 +172,10 @@ function Cell({ q, mode, c, busy, onCell }) {
   );
 }
 
-// What is labelled (13 Nov 2026): the run made from a run tag's sessions ("Sessions · <tag>", one per company), picked
-// here, or the run picked in the top bar. Both are runs, so every label is in one store that Progress, the Loop and the
-// coding agent read (13 Nov 2026 review).
-export const SOURCES = [['sessions', 'Sessions'], ['runs', 'Runs']];
-export function LabelsSource({ source, runs, run, error, onSource, onRun, onRetry }) {
-  return (
-    <div className="lab-row lab-lv-source">
-      <div className="lab-row" role="group" aria-label="What to label">
-        {SOURCES.map(([key, text]) => (
-          <button key={key} type="button" className={'lab-btn lab-btn-sm' + (source === key ? '' : ' lab-btn-quiet')}
-            aria-pressed={source === key ? 'true' : 'false'} onClick={() => onSource && onSource(key)}>{text}</button>
-        ))}
-      </div>
-      {source === 'sessions' && runs && runs.length ? (
-        <label className="lab-lv-tag">
-          <span className="lab-qp-label">{'Run tag'}</span>
-          <select value={run || ''} onChange={(e) => onRun && onRun(e.target.value)}>
-            {runs.map((r) => <option key={r.code} value={r.code}>{r.code + ' · ' + r.title + ' (' + (Number(r.n_questions) || 0) + ')'}</option>)}
-          </select>
-        </label>
-      ) : null}
-      {source === 'sessions' && !runs && error ? (
-        <span className="lab-row">
-          <span role="alert" className="lab-error">{'Could not read the sessions: ' + error}</span>
-          {onRetry ? <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onRetry}>{'Try again'}</button> : null}
-        </span>
-      ) : null}
-      {source === 'sessions' && !runs && !error ? <span className="lab-small" role="status">{'Reading…'}</span> : null}
-      {source === 'sessions' && runs && !runs.length ? <span className="lab-small">{'No sessions yet: ask scenarios first, then label their turns here.'}</span> : null}
-    </div>
-  );
-}
+// What is labelled (14 Nov 2026, Hussain: "make the labels also one only, no runs and sessions different"): the run
+// picked in the top bar, a Codex batch or a person's live day alike. A run's rows are the turns it opens on the Runs page
+// (runs.label_questions), and every label is in the one store that Progress, the Loop and the coding agent read. The
+// Sessions | Runs switch and its own list of sessions runs (13 Nov 2026) are gone.
 
 // Saves the caller's value for one cell on its question (PUT /lab/q/{code}/cells) and returns the service's time.
 export async function saveCell(api, q, lineage, value) {
@@ -211,28 +183,50 @@ export async function saveCell(api, q, lineage, value) {
   return (out && out.cell && out.cell.at) || null;
 }
 
-// Which source the page opens on: a run picked in the top bar or named in the address (?run=) is shown as it is;
-// otherwise the one this browser chose last.
-export function startSource(stored, picked) {
-  return picked ? 'runs' : (stored === 'runs' ? 'runs' : 'sessions');
-}
-
 // A failed save says so only while its grid is the one in view.
 export function saveErrorShown(shownRun, savedRun) {
   return String(shownRun || '').toUpperCase() === String(savedRun || '').toUpperCase();
 }
 
-// The page for one run, from what the service returned (GET /lab/runs/{code}/labels). Nothing here reads the service:
-// LabelsView does, and hands the clicks back through onCell and the onAddMode / onEditMode / onRetireMode promises.
-export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, onOpenQuestion, onAddMode, onEditMode, onRetireMode,
-  onRetry, waiting, onOpenLoop, picker, empty }) {
+// The grid on view: a run's code, or ALL for every run.
+export const gridKey = (run) => (run ? String(run).toUpperCase() : 'ALL');
+
+// What a row is called (14 Nov 2026, Hussain: "I need to see the selected run only"). A Codex batch's row is a turn of
+// one of its sessions: it is named by its scenario (and its turn when the session has more than one), never by the
+// code of the run its question was filed in before 13 Nov (R51-1 on R57). Any other row keeps its code (R53-4).
+const SCENARIO_OF = /^scn__.+?__(.+)__\d+$/;
+export function rowTag(q) {
+  const x = q || {};
+  if (!x.session_id) return x.code || '';
+  const m = SCENARIO_OF.exec(String(x.session_id));
+  const name = x.scenario_id || (m ? m[1] : 'Session');
+  return Number(x.session_turns) > 1 && x.turn_no ? name + ' · turn ' + x.turn_no : name;
+}
+
+// Opening a row: a Codex row opens its conversation inside the run on view, on its turn; any other its question.
+export function openRow(q, runCode, { onOpenQuestion, onOpenTurn } = {}) {
+  if (q && q.session_id && onOpenTurn) onOpenTurn(runCode, q.session_id, q.turn_id || null);
+  else if (q && onOpenQuestion) onOpenQuestion(q.code);
+}
+
+// The grid's runs and their rows: one run (GET /lab/runs/{code}/labels) or every run (GET /lab/labels).
+export function gridGroups(data) {
+  if (!data) return [];
+  if (Array.isArray(data.runs)) return data.runs.filter((g) => g && g.run && (g.questions || []).length);
+  return data.run ? [{ run: data.run, questions: data.questions || [] }] : [];
+}
+
+// The page for one run or for All runs, from what the service returned. Nothing here reads the service: LabelsView
+// does, and hands the clicks back through onCell and the onAddMode / onEditMode / onRetireMode promises.
+export function LabelsMatrix({ run, all, data, me, loading, error, saving, onCell, onOpenQuestion, onOpenTurn, onAddMode, onEditMode,
+  onRetireMode, onRetry, waiting, onOpenLoop, picker, empty }) {
   const [form, setForm] = React.useState(null);        // null, { add: true }, or { mode } while one column is edited
   const [asking, setAsking] = React.useState(null);    // the column whose retirement is being confirmed
   const [modeBusy, setModeBusy] = React.useState(false);
   const [modeError, setModeError] = React.useState('');
   const canEdit = !!(me && me.all_companies);
 
-  if (!run) {
+  if (!run && !all) {
     return (
       <div className="lab-page-body lab-page-full">
         <div className="lab-page-head"><div><h1>{'Labels'}</h1>{picker || null}</div></div>
@@ -240,14 +234,16 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
       </div>
     );
   }
-  const r = (data && data.run) || { code: String(run).toUpperCase() };
+  const r = all ? { code: 'All runs' } : ((data && data.run) || { code: String(run).toUpperCase() });
   const modes = (data && data.modes) || [];
-  const questions = (data && data.questions) || [];
+  const groups = gridGroups(data);
+  const questions = groups.reduce((acc, g) => acc.concat(g.questions), []);
   const head = (
     <div className="lab-page-head lab-head-row">
       <div>
         <h1>{'Labels'}</h1>
-        <p className="lab-small lab-big">{'Failure modes for ' + r.code + (r.title ? ' · ' + r.title : '')
+        <p className="lab-small lab-big">{(all ? 'Failure modes for every run, latest asked first'
+          : 'Failure modes for ' + r.code + (r.title ? ' · ' + r.title : ''))
           + '. Positive means the failure is in the question’s answer; negative means it is not.'}</p>
         {picker || null}
       </div>
@@ -268,8 +264,9 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
 
   const cells = data.cells || {};
   const meId = data.me || (me && me.user_id) || null;
-  const views = questions.map((q) => modes.map((m) => cellView((cells[q.id] || {})[m.lineage_id], meId)));
-  const mineN = views.reduce((n, row) => n + row.filter((c) => c.mine).length, 0);
+  const views = {};
+  questions.forEach((q) => { views[q.id] = modes.map((m) => cellView((cells[q.id] || {})[m.lineage_id], meId)); });
+  const mineN = Object.values(views).reduce((n, row) => n + row.filter((c) => c.mine).length, 0);
   const adding = canEdit && (form ? !!form.add : !modes.length);
   const editing = canEdit && form && form.mode ? form.mode : null;
   const submitMode = async (body) => {
@@ -315,8 +312,9 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
       ) : null}
       {adding ? <ModeForm key="add" onSubmit={submitMode} onCancel={modes.length ? () => setForm(null) : null} /> : null}
       {editing ? <ModeForm key={'edit-' + editing.lineage_id} mode={editing} onSubmit={submitMode} onCancel={() => setForm(null)} /> : null}
-      {modes.length && !questions.length ? (
-        <Empty title="This run has no questions yet">{'Questions appear here once they are imported, synced from the chat or typed in.'}</Empty>
+      {modes.length && !questions.length ? (all
+        ? <Empty title="No run has questions to label yet">{'Questions appear here once Codex sessions or chat questions are synced, or a run is typed in or imported.'}</Empty>
+        : <Empty title="This run has no questions yet">{'Questions appear here once they are imported, synced from the chat or typed in.'}</Empty>
       ) : null}
       {modes.length && questions.length ? (
         <div className="lab-lv-scroll" role="region" aria-label={'Labels for ' + r.code} tabIndex={0}>
@@ -331,26 +329,40 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
               </tr>
             </thead>
             <tbody>
-              {questions.map((q, i) => {
-                const answer = (q.turn_ids || [])[0];
+              {groups.map((g) => [
+                all ? (
+                  <tr key={'g-' + g.run.code} className="lab-lv-group">
+                    <th scope="colgroup" colSpan={1 + modes.length}>
+                      <span className="lab-lv-group-label">
+                        <span className="lab-lv-group-name">{g.run.code + (g.run.title ? ' · ' + g.run.title : '')}</span>
+                        <span className="lab-lv-group-count">{g.questions.length + (g.questions.length === 1 ? ' question' : ' questions')}</span>
+                      </span>
+                    </th>
+                  </tr>
+                ) : null,
+              ].concat(g.questions.map((q) => {
+                const answer = q.turn_id || (q.turn_ids || [])[0];
+                const tag = rowTag(q);
+                const canOpen = q.session_id ? !!onOpenTurn : !!onOpenQuestion;
                 return (
                   <tr key={q.id}>
                     <th scope="row" className="lab-lv-q">
                       <div className="lab-lv-qhead">
-                        {onOpenQuestion
-                          ? <button type="button" className="lab-lv-code" onClick={() => onOpenQuestion(q.code)} aria-label={'Open question ' + q.code}>{q.code}</button>
-                          : <span className="lab-lv-code">{q.code}</span>}
+                        {canOpen
+                          ? <button type="button" className="lab-lv-code" onClick={() => openRow(q, g.run.code, { onOpenQuestion, onOpenTurn })}
+                              aria-label={q.session_id ? 'Open ' + tag + ' in ' + g.run.code : 'Open question ' + q.code}>{tag}</button>
+                          : <span className="lab-lv-code">{tag}</span>}
                         {answer ? <span className="lab-lv-answer" title={answer}>{'Answer ' + shortId(answer)}</span>
                           : <span className="lab-lv-answer">{'No answer yet'}</span>}
                       </div>
                       <div className="lab-lv-qtext" title={q.question || undefined}>{q.question || '—'}</div>
                     </th>
                     {modes.map((m, j) => (
-                      <Cell key={m.lineage_id} q={q} mode={m} c={views[i][j]} busy={saving && saving[q.id + '|' + m.lineage_id]} onCell={onCell} />
+                      <Cell key={m.lineage_id} q={q} mode={m} c={views[q.id][j]} busy={saving && saving[q.id + '|' + m.lineage_id]} onCell={onCell} />
                     ))}
                   </tr>
                 );
-              })}
+              })))}
             </tbody>
           </table>
         </div>
@@ -361,31 +373,10 @@ export function LabelsMatrix({ run, data, me, loading, error, saving, onCell, on
 
 // Reads the run's labels, sets the caller's cells (shown at once, put back with the reason if refused) and, for the
 // platform team and the consultant, adds, edits and retires failure modes, reading the matrix again after each.
-const SOURCE_KEY = 'tracelab.labels.source';
-const readSource = () => { try { return window.localStorage.getItem(SOURCE_KEY) === 'runs' ? 'runs' : 'sessions'; } catch (e) { return 'sessions'; } };
-
-export default function LabelsView({ me, run: fallbackRun, picked, onOpenQuestion, onOpenLoop }) {
-  // Sessions (the runs made from sessions) or Runs (the run picked in the top bar); the choice is kept in this browser.
-  const [source, setSource] = React.useState(() => startSource(readSource(), picked));
-  React.useEffect(() => { if (picked) setSource('runs'); }, [picked]);
-  const [list, setList] = React.useState({ runs: null, error: '' });
-  const [tagRun, setTagRun] = React.useState(null);
-  const readList = React.useCallback(() => {
-    let live = true;
-    setList({ runs: null, error: '' });
-    labApi.runs({ kind: 'sessions', limit: 200 })
-      .then((out) => { if (live) setList({ runs: (out && out.runs) || [], error: '' }); },
-        (e) => { if (live) setList({ runs: null, error: errText(e) }); });
-    return () => { live = false; };
-  }, []);
-  React.useEffect(() => readList(), [readList]);
-  React.useEffect(() => {
-    const rs = list.runs;
-    if (rs && rs.length && !rs.some((r) => r.code === tagRun)) setTagRun(rs[0].code);
-  }, [list, tagRun]);
-  const pickSource = (key) => { setSource(key); try { window.localStorage.setItem(SOURCE_KEY, key); } catch (e) { /* a convenience */ } };
-  const run = source === 'sessions' ? tagRun : fallbackRun;
-  const [res, setRes] = React.useState({ data: null, loading: !!run, error: '' });
+export default function LabelsView({ me, run, onOpenQuestion, onOpenTurn, onOpenLoop }) {
+  // The run picked in the top bar; with none (All runs), every run (GET /lab/labels).
+  const grid = gridKey(run);
+  const [res, setRes] = React.useState({ key: grid, data: null, loading: true, error: '' });
   const [waiting, setWaiting] = React.useState(0);
   React.useEffect(() => {
     let live = true;
@@ -397,23 +388,20 @@ export default function LabelsView({ me, run: fallbackRun, picked, onOpenQuestio
   const [cellError, setCellError] = React.useState('');
   const ask = React.useRef(0);
   const inflight = React.useRef({});
-  const shown = React.useRef(run);
-  shown.current = run;
+  const shown = React.useRef(grid);
+  shown.current = grid;
 
-  // A quiet read keeps what is on screen (and any error) until the answer comes; another run starts empty.
+  // A quiet read keeps what is on screen (and any error) until the answer comes; another grid starts empty.
   const load = React.useCallback(async (quiet) => {
     const mine = (ask.current += 1);
-    if (!run) { setRes({ data: null, loading: false, error: '' }); return; }
-    const wanted = String(run).toUpperCase();
-    setRes((p) => ({ data: p.data && p.data.run && String(p.data.run.code).toUpperCase() === wanted ? p.data : null,
-      loading: true, error: quiet ? p.error : '' }));
+    setRes((p) => ({ key: grid, data: p.key === grid ? p.data : null, loading: true, error: quiet ? p.error : '' }));
     try {
-      const out = await labApi.runLabels(run);
-      if (mine === ask.current) setRes({ data: out || null, loading: false, error: '' });
+      const out = run ? await labApi.runLabels(run) : await labApi.allLabels();
+      if (mine === ask.current) setRes({ key: grid, data: out || null, loading: false, error: '' });
     } catch (e) {
       if (mine === ask.current) setRes((p) => Object.assign({}, p, { loading: false, error: errText(e) }));
     }
-  }, [run]);
+  }, [run, grid]);
   React.useEffect(() => { inflight.current = {}; setSaving({}); setCellError(''); load(false); }, [load]);
 
   // One cell at a time per cell: the click shows at once; the service's time replaces ours, a refusal puts it back.
@@ -422,12 +410,12 @@ export default function LabelsView({ me, run: fallbackRun, picked, onOpenQuestio
     const key = q.id + '|' + mode.lineage_id;
     if (!data || inflight.current[key]) return;
     inflight.current[key] = true;
-    const code = data.run && data.run.code;
+    const code = res.key;
     const meId = data.me || (me && me.user_id) || null;
     const before = (((data.cells || {})[q.id] || {})[mode.lineage_id] || []).find((e) => isMine(e, meId)) || null;
     const next = value ? { value, author_id: meId, author_email: (me && me.email) || null, author_role: (me && me.role) || null,
       source: 'manual', at: new Date().toISOString(), mine: true } : null;
-    const put = (entry, extra) => setRes((p) => (p.data && p.data.run && p.data.run.code === code
+    const put = (entry, extra) => setRes((p) => (p.data && p.key === code
       ? Object.assign({}, p, { data: Object.assign(withMine(p.data, q.id, mode.lineage_id, meId, entry), extra || {}) }) : p));
     put(next);
     setSaving((p) => Object.assign({}, p, { [key]: true }));
@@ -437,7 +425,7 @@ export default function LabelsView({ me, run: fallbackRun, picked, onOpenQuestio
       if (at) put(next ? Object.assign({}, next, { at }) : null, { last_updated: at });
     } catch (e) {
       put(before);
-      if (saveErrorShown(shown.current, code)) setCellError('Could not save ' + q.code + ' · ' + mode.name + ': ' + errText(e));
+      if (saveErrorShown(shown.current, code)) setCellError('Could not save ' + rowTag(q) + ' · ' + mode.name + ': ' + errText(e));
     } finally {
       delete inflight.current[key];
       setSaving((p) => { const n = Object.assign({}, p); delete n[key]; return n; });
@@ -448,13 +436,10 @@ export default function LabelsView({ me, run: fallbackRun, picked, onOpenQuestio
   const onEditMode = async (mode, body) => { await labApi.editMode(mode.lineage_id, body); await load(true); };
   const onRetireMode = async (mode) => { await labApi.retireMode(mode.lineage_id); await load(true); };
 
-  // With Sessions and nothing to show yet, the picker says why (reading, failed, none yet): no stale "Pick a run".
-  const noRun = source === 'sessions' && !run ? '' : undefined;
   return (
-    <LabelsMatrix run={run} data={res.data} me={me} loading={res.loading} error={cellError || res.error} saving={saving} onCell={onCell}
-      onOpenQuestion={onOpenQuestion} onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
-      waiting={waiting} onOpenLoop={onOpenLoop} empty={noRun}
-      picker={<LabelsSource source={source} runs={list.runs} run={tagRun} error={list.error} onSource={pickSource} onRun={setTagRun}
-        onRetry={readList} />} />
+    <LabelsMatrix run={run} all={!run} data={res.key === grid ? res.data : null} me={me} loading={res.loading}
+      error={cellError || res.error} saving={saving} onCell={onCell} onOpenQuestion={onOpenQuestion} onOpenTurn={onOpenTurn}
+      onAddMode={onAddMode} onEditMode={onEditMode} onRetireMode={onRetireMode} onRetry={() => load(false)}
+      waiting={waiting} onOpenLoop={onOpenLoop} />
   );
 }

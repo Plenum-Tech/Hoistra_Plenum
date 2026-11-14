@@ -134,8 +134,9 @@ const annotate = (o) => Object.assign({
 
 test('note counts show on rows', () => {
   const s = html(TT.TraceView, { tree: TREE, annotate: annotate() });
-  assert.match(s, />answer_from_records<(?:(?!<\/li>)[\s\S])*aria-label="2 notes"[^>]*>2</);
-  assert.match(s, />router<(?:(?!<\/li>)[\s\S])*aria-label="1 note"[^>]*>1</);
+  // The count follows a speech-bubble glyph (14 Nov 2026).
+  assert.match(s, />answer_from_records<(?:(?!<\/li>)[\s\S])*aria-label="2 notes"[^>]*><svg[\s\S]*?<\/svg>2</);
+  assert.match(s, />router<(?:(?!<\/li>)[\s\S])*aria-label="1 note"[^>]*><svg[\s\S]*?<\/svg>1</);
   assert.equal((s.match(/lab-tt-ncount/g) || []).length, 2);
   const t = html(TT.TraceView, { tree: TREE, annotate: annotate(), view: 'timeline' });
   assert.equal((t.match(/lab-tt-ncount/g) || []).length, 2);

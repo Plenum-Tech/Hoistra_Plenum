@@ -52,7 +52,8 @@ def test_one_round_syncs_the_chat_to_runs_and_to_sessions(synced):
     now = datetime(2026, 11, 13, 9, 0, tzinfo=timezone.utc)
     status = asyncio.run(autosync.tick(now))
     assert calls["runs"] == [None]                                   # every company
-    kw = calls["sessions"][0]
+    # Codex sessions are read first now (14 Nov 2026), so the chat's read is found by what it asks for.
+    kw = next(k for k in calls["sessions"] if k["chat"])
     assert kw["chat"] is True and kw["scenarios"] is False
     assert kw["since"] == now - timedelta(days=eval_store.CHAT_SYNC_DAYS)
     assert "org" not in kw and "sessions" not in kw                  # every company, found by their ids
@@ -141,9 +142,10 @@ def test_the_round_also_makes_questions_of_sessions_the_chat_here_never_recorded
     """Thirty sessions pushed from another machine (frontend_nov13_202718) were in Sessions and not in Runs."""
     calls, _ = sessions_to_runs
     status = asyncio.run(autosync.tick())
-    assert [org for org, _kw in calls["session_runs"]] == [None]            # every company
-    assert status["session_runs_ok"] is True and status["last_session_questions"] == 3
-    # after the chat's own sync, so a turn the chat recorded is already a question of its person's day
+    # Every company, twice a round (14 Nov 2026): the scenario sessions' turns before the live questions (so a Codex
+    # turn is never a live question), the other sessions' turns after them (so a hand turn is its person's day).
+    assert calls["session_runs"] == [(None, {"now": None, "scenarios_only": True}), (None, {"now": None})]
+    assert status["session_runs_ok"] is True and status["last_session_questions"] == 6, "the round's total"
     assert calls["runs"] == [None] and len(calls["sessions"]) == 2
 
 
@@ -151,7 +153,7 @@ def test_a_backlog_is_worked_through_in_batches(sessions_to_runs):
     calls, replies = sessions_to_runs
     replies["session_runs"] = {"new_questions": 2000, "new_runs": 0, "more": True}
     asyncio.run(autosync.tick())
-    assert len(calls["session_runs"]) == autosync.MAX_BATCHES
+    assert len(calls["session_runs"]) == 2 * autosync.MAX_BATCHES, "each of the round's two steps works through it"
 
 
 def test_a_failure_there_fails_neither_of_the_other_two(sessions_to_runs):

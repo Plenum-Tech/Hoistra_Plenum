@@ -1,13 +1,16 @@
 """Trace Lab runs routes (22 Oct 2026): runs above questions, expected answers, failure modes, the labels view and
 progress, under /api/trace-lab (trace_lab.app ROUTERS):
 
-    GET    /lab/runs                          runs the caller may see, newest first (platform team and consultant: all)
+    GET    /lab/runs                          runs the caller may see, newest first (platform team and consultant: all);
+                                              ?for_page=true: the Runs page's list (no live day of scenario questions only)
     POST   /lab/runs                          a synthetic run typed on the page                (curators)
     POST   /lab/runs/sync                     make questions of newer live answers, a run per person per day
     POST   /lab/runs/import                   Excel / CSV: new questions, or expected answers by question code (curators)
     GET    /lab/runs/{code}                   one run (R3)
     GET    /lab/runs/{code}/questions         its questions (R3-1, R3-2 ...)
+    GET    /lab/runs/{code}/sessions          its conversations: a sessions run's or a live day's sessions, and waiting rows
     GET    /lab/runs/{code}/labels            its labels view: questions x failure modes, each person's newest cell
+    GET    /lab/labels                        All runs' labels: every run the top bar lists, each with its own rows
     GET    /lab/progress                      review completion and failure-mode counts (?run=R3, default newest)
     GET    /lab/q/{code}                      one question: expected answer, answers, the active answer's steps, notes
     GET    /lab/q/{code}/tree                 the Trace tab: one answer as Langfuse's tree of steps (read only)
@@ -33,7 +36,7 @@ from pydantic import BaseModel, Field
 
 from src.services.principal import Principal
 
-from . import auth, db, golden, labelling, runs, trace_tree
+from . import auth, db, eval_store, golden, labelling, runs, trace_tree
 from .routes_labelling import _call
 
 router = APIRouter(tags=["Trace Lab runs"])
@@ -91,8 +94,11 @@ class PlatformMemberIn(BaseModel):
 @router.get("/lab/runs")
 async def lab_runs(kind: str | None = Query(None, max_length=20), q: str | None = Query(None, max_length=200),
                    company: str | None = Query(None, max_length=64), limit: int = Query(100, ge=1, le=200),
-                   offset: int = Query(0, ge=0, le=1_000_000), m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
-    return {"ok": True, **await _call(runs.list_runs(m, kind=kind, q=q, company=company, limit=limit, offset=offset))}
+                   offset: int = Query(0, ge=0, le=1_000_000), for_page: bool = Query(False),
+                   m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    # for_page: the Runs page's list, without a live day of scenario questions only (14 Nov 2026).
+    return {"ok": True, **await _call(runs.list_runs(m, kind=kind, q=q, company=company, limit=limit, offset=offset,
+                                                     **({"for_page": True} if for_page else {})))}
 
 
 @router.post("/lab/runs")
@@ -128,6 +134,18 @@ async def lab_run(code: str, m: labelling.Member = Depends(_wide)) -> dict[str, 
 @router.get("/lab/runs/{code}/questions")
 async def lab_run_questions(code: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
     return {"ok": True, **await _call(runs.list_questions(m, code))}
+
+
+@router.get("/lab/runs/{code}/sessions")
+async def lab_run_sessions(code: str, all_attempts: bool = Query(False), m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """A run's conversations as session rows (eval_store.run_sessions, 14 Nov 2026); a typed run says "questions"."""
+    return {"ok": True, **await _call(eval_store.run_sessions(m, code, all_attempts=all_attempts))}
+
+
+@router.get("/lab/labels")
+async def lab_labels_all(m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """Labels for All runs (runs.matrix_all, 14 Nov 2026): every run the top bar lists, each with its own rows."""
+    return {"ok": True, **await _call(runs.matrix_all(m))}
 
 
 @router.get("/lab/runs/{code}/labels")

@@ -105,32 +105,27 @@ test('labels: no run asks for one; no failure modes says where they come from, w
   assert.ok(html(LV.LabelsMatrix, { run: 'R3', me: TESTER, loading: true }).includes('Reading…'));
 });
 
-// ── Labels for sessions (13 Nov 2026 review): the run made from a run tag's sessions ("Sessions · <tag>"), labelled in
-// the same store as every run, so Progress, the Loop and the coding agent see the labels ─────────────────────────────
-const SESSION_RUNS = [{ code: 'R7', title: 'Sessions · hussain_5q_v0', n_questions: 5, kind: 'synthetic', source: 'sync' }];
-const SESSION_GRID = Object.assign({}, MATRIX, { run: { code: 'R7', title: 'Sessions · hussain_5q_v0', kind: 'synthetic', source: 'sync' } });
+// ── One Labels page (14 Nov 2026, Hussain: "make the labels also one only, no runs and sessions different"): it labels
+// the run picked in the top bar, a Codex batch or a live day alike, in the one label store ─────────────────────────────
+const BATCH_GRID = Object.assign({}, MATRIX, { run: { code: 'R54', title: 'Sessions · hussain_5q_v0', kind: 'synthetic', source: 'sync' } });
+const fs = await import('node:fs');
+const LABELS_SRC = fs.readFileSync(new URL('../LabelsView.jsx', import.meta.url), 'utf8');
 
-test('labels for sessions: Sessions or Runs, then the runs made from sessions to pick from', () => {
-  const picker = html(LV.LabelsSource, { source: 'sessions', runs: SESSION_RUNS, run: 'R7', onSource() {}, onRun() {} });
-  assert.match(picker, /aria-pressed="true"[^>]*>Sessions</);
-  assert.match(picker, /aria-pressed="false"[^>]*>Runs</);
-  assert.ok(picker.includes('R7 · Sessions · hussain_5q_v0 (5)') && picker.includes('Run tag'));
-  assert.ok(!html(LV.LabelsSource, { source: 'runs', runs: [], run: null, onSource() {}, onRun() {} }).includes('Run tag'),
-    'runs are picked in the top bar, as before');
-  const out = html(LV.LabelsMatrix, { run: 'R7', data: SESSION_GRID, me: TESTER, onCell() {}, onOpenQuestion() {},
-    picker: React.createElement('p', null, 'THE PICKER') });
-  assert.ok(out.includes('THE PICKER') && out.includes('Failure modes for R7 · Sessions · hussain_5q_v0'));
-  assert.match(out, /aria-label="Open question R3-1"/);
+test('labels: one page with no Sessions | Runs switch; it shows the run picked in the top bar', () => {
+  const page = html(LV.default, { me: TESTER, run: 'R54', picked: 'R54' });
+  assert.ok(!page.includes('What to label') && !page.includes('Run tag'), 'no switch and no second run picker');
+  assert.ok(!/aria-pressed="(true|false)"[^>]*>(Sessions|Runs)</.test(page), 'no Sessions or Runs toggle');
+  assert.equal(LV.LabelsSource, undefined);
+  assert.equal(LV.startSource, undefined);
+  assert.ok(!LABELS_SRC.includes('tracelab.labels.source'), 'no remembered Sessions | Runs choice');
+  assert.ok(!LABELS_SRC.includes("kind: 'sessions'"), 'no separate list of sessions runs');
 });
 
-test('labels for sessions: none yet says so; a list that failed to load says why with Try again; reading says reading', () => {
-  assert.ok(html(LV.LabelsSource, { source: 'sessions', runs: [], run: null, onSource() {}, onRun() {} }).includes('No sessions yet'));
-  const failed = html(LV.LabelsSource, { source: 'sessions', runs: null, error: 'Network down', run: null, onSource() {}, onRun() {}, onRetry() {} });
-  assert.ok(failed.includes('Network down') && failed.includes('>Try again<') && !failed.includes('No sessions yet'));
-  const reading = html(LV.LabelsSource, { source: 'sessions', runs: null, run: null, onSource() {}, onRun() {} });
-  assert.ok(reading.includes('Reading…'));
-  const waitingPage = html(LV.LabelsMatrix, { run: null, me: TESTER, empty: '' });
-  assert.ok(!waitingPage.includes('Pick a run'), 'no stale "Pick a run" while the list is read or failed');
+test('labels: a Codex batch run is labelled like any run, its rows open their question', () => {
+  const out = html(LV.LabelsMatrix, { run: 'R54', data: BATCH_GRID, me: TESTER, onCell() {}, onOpenQuestion() {} });
+  assert.ok(out.includes('Failure modes for R54 · Sessions · hussain_5q_v0'));
+  assert.match(out, /aria-label="Open question R3-1"/);
+  assert.ok(html(LV.LabelsMatrix, { run: null, me: TESTER }).includes('Pick a run'), 'with no run yet, pick one in the top bar');
 });
 
 test('labels: a click is always saved on the question, the one label store', async () => {
@@ -141,11 +136,6 @@ test('labels: a click is always saved on the question, the one label store', asy
   assert.deepEqual(calls, [['question', 'R7-1', 'm1', 'positive']]);
 });
 
-test('labels: a run picked in the top bar or named in the address is the one shown', () => {
-  assert.equal(LV.startSource('sessions', 'R3'), 'runs');
-  assert.equal(LV.startSource('sessions', null), 'sessions');
-  assert.equal(LV.startSource('runs', null), 'runs');
-});
 
 test('labels: a save that fails after the grid changed leaves no error on the new grid', () => {
   assert.equal(LV.saveErrorShown('R7', 'R7'), true);
@@ -266,4 +256,60 @@ test('people: the platform team alone sees platform-wide access, with consultant
   assert.equal(count(table, />Remove</g), 1, 'only an active consultant can be removed');
   assert.match(table, /<input type="email"[^>]*placeholder="name@company\.com"/);
   assert.ok(html(P.PlatformAccess, { rows: [], busy: {} }).includes('No consultants yet.'));
+});
+
+// ── 14 Nov 2026 (Hussain, on R57 showing R51-1 ...): "I need to see the selected run only, not something else; and when
+// I select All runs it should show all runs" ────────────────────────────────────────────────────────────────────────
+const B1 = { id: 'b1', code: 'R51-1', question: 'Which certificates are overdue?', turn_ids: ['t-b1'],
+  session_id: 'scn__spec_v0__SPEC-01__1', turn_id: 't-b1', scenario_id: 'SPEC-01', turn_no: 1, session_turns: 1 };
+const B2 = { id: 'b2', code: 'R51-2', question: 'And which are due next week?', turn_ids: ['t-b2'],
+  session_id: 'scn__spec_mt_v0__MT-001__1', turn_id: 't-b2', scenario_id: 'MT-001', turn_no: 2, session_turns: 3 };
+const LIVE_Q = { id: 'l1', code: 'R53-4', question: 'Which building has the most open work orders?', turn_ids: ['t-l1'],
+  session_id: null, turn_id: null, scenario_id: null, turn_no: null, session_turns: null };
+const R57 = { code: 'R57', title: 'Sessions · spec_v0', kind: 'synthetic', source: 'sync' };
+const R53 = { code: 'R53', title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync' };
+
+test('labels: a Codex row is named by its scenario and turn, never by the run its question was filed in', () => {
+  assert.equal(LV.rowTag(B1), 'SPEC-01');
+  assert.equal(LV.rowTag(B2), 'MT-001 · turn 2');
+  assert.equal(LV.rowTag(Object.assign({}, B1, { scenario_id: null })), 'SPEC-01', 'read from the session id');
+  assert.equal(LV.rowTag(LIVE_Q), 'R53-4', 'a live day or typed run keeps its codes');
+  const out = html(LV.LabelsMatrix, { run: 'R57', data: { run: R57, questions: [B1, B2], modes: MODES, cells: {} }, me: TESTER,
+    onCell() {}, onOpenQuestion() {}, onOpenTurn() {} });
+  assert.ok(!out.includes('R51'), 'nothing on the page names another run');
+  assert.ok(out.includes('>SPEC-01<') && out.includes('>MT-001 · turn 2<'));
+  assert.match(out, /aria-label="Open SPEC-01 in R57"/);
+});
+
+test('labels: a Codex row opens its conversation inside the run on view; a live row opens its question', () => {
+  const calls = [];
+  const on = { onOpenQuestion: (...a) => calls.push(['question', ...a]), onOpenTurn: (...a) => calls.push(['turn', ...a]) };
+  LV.openRow(B1, 'R57', on);
+  LV.openRow(LIVE_Q, 'R53', on);
+  assert.deepEqual(calls, [['turn', 'R57', 'scn__spec_v0__SPEC-01__1', 't-b1'], ['question', 'R53-4']]);
+});
+
+test('labels: All runs shows every run, a heading per run, in the order given', () => {
+  const data = { runs: [{ run: R57, questions: [B1, B2] }, { run: R53, questions: [LIVE_Q] }], modes: MODES, cells: {},
+    total: 3, more: false };
+  const out = html(LV.LabelsMatrix, { all: true, run: null, data, me: TESTER, onCell() {}, onOpenQuestion() {}, onOpenTurn() {} });
+  assert.ok(out.includes('Failure modes for every run') && !out.includes('Pick a run'));
+  const a = out.indexOf('R57 · Sessions · spec_v0'); const b = out.indexOf('R53 · aasim@x.test · 2026-11-13');
+  assert.ok(a > 0 && b > a, 'one heading per run, in order');
+  assert.equal(count(out, /class="lab-lv-group"/g), 2);
+  assert.ok(out.includes('You have labelled 0 of 6 cells'));
+  assert.ok(!out.includes('R51'), 'Codex rows keep their scenario names here too');
+  assert.match(out, /aria-label="Open question R53-4"/);
+  const none = html(LV.LabelsMatrix, { all: true, run: null, data: { runs: [], modes: MODES, cells: {} }, me: TESTER });
+  assert.ok(none.includes('No run has questions to label yet'));
+});
+
+test('labels: All runs is read from its own route and the top bar hands Labels its pick as it is', () => {
+  assert.ok(LABELS_SRC.includes('labApi.allLabels()'));
+  const api = fs.readFileSync(new URL('../labApi.js', import.meta.url), 'utf8');
+  assert.match(api, /allLabels: \(\) => call\('GET', '\/lab\/labels'\)/);
+  const app = fs.readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf8');
+  assert.match(app, /<LabelsView me=\{me\} run=\{run\} /, 'All runs (no run) is All runs, not the newest run');
+  assert.match(app, /onOpenTurn=\{openTurn\}/);
+  assert.match(app, /<RunsPage [^>]*turnAt=\{turnAt\}/);
 });

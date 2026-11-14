@@ -32,7 +32,8 @@ async def test_each_turn_of_a_copied_session_becomes_a_question_in_a_run_named_f
     out = await runs.sync_sessions(None)
     assert out == {"new_questions": 3, "new_runs": 1, "more": False}
     run = await _rows(lab_scratch, "SELECT kind, title, source, organization_id::text FROM tracelab.lab_runs")
-    assert run == [("synthetic", "Sessions · frontend_nov13", "sync", ORG)]
+    # One batch of the tag (14 Nov 2026): its title names when the batch began.
+    assert run == [("synthetic", "Sessions · frontend_nov13 · 11 Nov 09:00", "sync", ORG)]
     asked = await _rows(lab_scratch, "SELECT q.seq_no, l.turn_id, q.source, l.source FROM tracelab.lab_questions q"
                                      " JOIN tracelab.lab_question_traces l ON l.question_id = q.id ORDER BY q.seq_no")
     assert asked == [(1, "turn-p1", "sync", "sync"), (2, "turn-p2", "sync", "sync"), (3, "turn-p3", "sync", "sync")]
@@ -57,8 +58,8 @@ async def test_another_run_tag_and_another_company_each_get_their_own_run(lab_sc
                        turn_ids=("turn-o1",), org=OTHER_ORG)
     assert (await runs.sync_sessions(None))["new_runs"] == 3
     got = await _rows(lab_scratch, "SELECT title, organization_id::text FROM tracelab.lab_runs ORDER BY title, 2")
-    assert sorted(got) == sorted([("Sessions · baseline_v0", ORG), ("Sessions · frontend_nov13", ORG),
-                                  ("Sessions · frontend_nov13", OTHER_ORG)])
+    assert sorted(got) == sorted([("Sessions · baseline_v0 · 11 Nov 09:00", ORG), ("Sessions · frontend_nov13 · 11 Nov 09:00", ORG),
+                                  ("Sessions · frontend_nov13 · 11 Nov 09:00", OTHER_ORG)])
     only = await runs.sync_sessions(OTHER_ORG)
     assert only == {"new_questions": 0, "new_runs": 0, "more": False}
 
@@ -92,7 +93,7 @@ async def test_a_scenario_turn_recorded_here_goes_to_its_run_tags_run_at_once_ne
     assert (await runs.sync_live(None, now=now))["new_questions"] == 0, "not a question of the asker's day"
     assert await runs.sync_sessions(None, now=now) == {"new_questions": 1, "new_runs": 1, "more": False}
     assert await _rows(lab_scratch, "SELECT kind, title, source FROM tracelab.lab_runs") == [
-        ("synthetic", "Sessions · baseline_v0", "sync")]
+        ("synthetic", runs.batch_title("baseline_v0", now - timedelta(minutes=5)), "sync")]
     assert await runs.sync_sessions(None, now=now) == {"new_questions": 0, "new_runs": 0, "more": False}
 
 
@@ -106,10 +107,11 @@ async def test_the_runs_list_can_show_only_the_runs_made_from_sessions(lab_scrat
     await runs.sync_sessions(None)
     batch = await runs.create_run(member(), title="A typed batch", questions=[{"question": "How many floors?"}])
     listed = await runs.list_runs(member(), kind="sessions")
-    assert [(r["title"], r["kind"], r["source"]) for r in listed["runs"]] == [("Sessions · frontend_nov13", "synthetic", "sync")]
+    assert [(r["title"], r["kind"], r["source"]) for r in listed["runs"]] == [
+        ("Sessions · frontend_nov13 · 11 Nov 09:00", "synthetic", "sync")]
     assert listed["total"] == 1
     assert {r["title"] for r in (await runs.list_runs(member(), kind="synthetic"))["runs"]} == {
-        "Sessions · frontend_nov13", "A typed batch"}, "the synthetic filter is unchanged"
+        "Sessions · frontend_nov13 · 11 Nov 09:00", "A typed batch"}, "the synthetic filter is unchanged"
     assert batch and (await runs.list_runs(member(), kind="production"))["runs"] == []
     with pytest.raises(Invalid):
         await runs.list_runs(member(), kind="everything")
@@ -120,7 +122,7 @@ async def test_the_question_of_a_copied_turn_opens_on_its_stored_trace(lab_scrat
     await runs.sync_sessions(None)
     m = member()
     listed = await runs.list_runs(m)
-    code = next(r["code"] for r in listed["runs"] if r["title"] == "Sessions · frontend_nov13")
+    code = next(r["code"] for r in listed["runs"] if r["run_tag"] == "frontend_nov13")
     questions = (await runs.list_questions(m, code))["questions"]
     assert [q["turn_ids"] for q in questions] == [["turn-p1"], ["turn-p2"]]
     got = await runs.get_question(m, questions[1]["code"])

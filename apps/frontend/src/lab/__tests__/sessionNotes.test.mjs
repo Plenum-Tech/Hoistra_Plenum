@@ -75,15 +75,17 @@ test('while a turn\'s notes are read the trace still shows, and says so', () => 
 test('a note saved on the session page pops up the next step: go to Loop', () => {
   assert.ok(src('TraceNotes.jsx').includes("nextStepFor('note_saved')"));
   assert.ok(src('SessionPage.jsx').includes('<NextStep '));
-  assert.ok(/<Sessions [^>]*onOpenLoop=\{\(\) => onView\('loop'\)\}/.test(src('LabApp.jsx')));
+  // The session page opens inside Runs now (14 Nov 2026): Runs hands it the way to Loop.
+  assert.ok(/<RunsPage [^]*?onOpenLoop=\{\(\) => onView\('loop'\)\}/.test(src('LabApp.jsx')));
+  assert.ok(/<SessionPage [^>]*onOpenLoop=\{onOpenLoop\}/.test(src('Runs.jsx')));
 });
 
-test('Runs is back beside Sessions for questions asked by hand: its tab, its page and the question links', () => {
+test('Runs is the first tab and the home page (Sessions moved into it, 14 Nov 2026): its page and the question links', () => {
   assert.ok(existsSync(new URL('../Runs.jsx', import.meta.url)) && existsSync(new URL('../QuestionPage.jsx', import.meta.url)));
-  assert.deepEqual(L.navFor({ manages: false }).map(([k]) => k).slice(0, 2), ['sessions', 'runs']);
-  assert.equal(L.HOME_VIEW, 'sessions');
+  assert.deepEqual(L.navFor({ manages: false }).map(([k]) => k).slice(0, 2), ['runs', 'labels']);
+  assert.equal(L.HOME_VIEW, 'runs');
   const app = src('LabApp.jsx');
-  assert.ok(app.includes("import RunsPage from './Runs.jsx'") && app.includes("current === 'runs' ? <RunsPage"));
+  assert.ok(/^import RunsPage\b[^\n]*from '\.\/Runs\.jsx';$/m.test(app) && app.includes("current === 'runs' ? <RunsPage"));
   ['LabelsView', 'Loop', 'Notes'].forEach((page) => {
     const line = app.split('\n').find((l) => l.includes('<' + page + ' ')) || '';
     assert.ok(line.includes('onOpenQuestion={openQuestion}'), page + ' links a question code to its page again: ' + line);
@@ -124,12 +126,12 @@ test('a label error or busy mode belongs to the turn it happened on', () => {
   assert.ok(page.includes("labelError={label && label.traceId === current.id ? label.error : ''}"));
 });
 
-test('an older link to a run or a question opens Runs, and Sessions keeps its own address', () => {
+test('an older link to a run or a question opens Runs, and a session is part of Runs\' address', () => {
   assert.equal(L.startView({ view: null, run: 'R3', question: 'R3-12' }), 'runs');
-  assert.equal(L.startView({ view: null, run: null, question: null }), 'sessions');
+  assert.equal(L.startView({ view: null, run: null, question: null }), 'runs');
   assert.equal(L.startView({ view: 'labels', run: 'R3', question: null }), 'labels');
-  assert.equal(L.placeQuery('sessions', null, null, null), '');
-  assert.equal(L.placeQuery('sessions', 'R3', null, 'scn__a__SD-1__1'), 'session=scn__a__SD-1__1&view=sessions&run=R3');
+  assert.equal(L.placeQuery('runs', null, null, null), '');
+  assert.equal(L.placeQuery('runs', 'R3', null, 'scn__a__SD-1__1'), 'view=runs&run=R3&session=scn__a__SD-1__1');
   assert.equal(L.placeQuery('runs', 'R3', 'R3-12', null), 'view=runs&run=R3&q=R3-12');
   assert.equal(L.startView({ view: null, run: 'R3', question: null }), 'runs', 'what placeQuery writes reads back the same');
 });

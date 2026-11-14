@@ -20,7 +20,8 @@
 @media (max-width: 900px) { .lab-tt-body { grid-template-columns: minmax(0, 1fr); } }
 .lab-tt-left, .lab-tt-right { min-width: 0; border: 1px solid var(--color-divider); border-radius: 10px; background: var(--color-surface); }
 .lab-tt-left { padding: 10px; display: flex; flex-direction: column; gap: 10px; max-height: 80vh; overflow: auto; overscroll-behavior: contain; }
-.lab-tt-right { padding: 16px 18px; max-height: 80vh; overflow: auto; overscroll-behavior: contain; position: sticky; top: 12px; }
+.lab-tt-right { padding: 16px 18px; max-height: 80vh; overflow: auto; overscroll-behavior: contain; position: sticky; top: 12px;
+  container-type: inline-size; }
 @media (max-width: 900px) { .lab-tt-left { max-height: 60vh; } .lab-tt-right { max-height: none; position: static; } }
 .lab-tt-left, .lab-tt-right, .lab-tt-pre, .lab-tt-md { scrollbar-width: thin; scrollbar-color: var(--color-neutral-700) transparent; }
 
@@ -31,7 +32,8 @@
 .lab-tt-switch button:hover { color: var(--color-text); }
 .lab-tt-switch button.lab-on { background: var(--color-surface); color: var(--color-text); font-weight: 600; box-shadow: var(--shadow-sm); }
 .lab-tt-switch button:focus-visible, .lab-tt-pick:focus-visible, .lab-tt-chev:focus-visible,
-.lab-tt-add:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.lab-tt-add:focus-visible, .lab-tt-iotoggle:focus-visible, .lab-tt-ovtoggle:focus-visible, .lab-tt-ovrow:focus-visible,
+.lab-an-pin:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .lab-tt-views { align-self: flex-start; }
 
 .lab-tt-search { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--color-divider);
@@ -67,11 +69,17 @@ span.lab-tt-chev { cursor: default; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .lab-tt-error .lab-tt-name { color: var(--st-risk); font-weight: 600; }
 
-/* How many notes a step holds: the one human signal in the tree, in the accent. */
-.lab-tt-ncount { flex: none; align-self: center; min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box;
-  display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: var(--color-accent-900);
-  color: var(--color-accent-600); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* How many notes a step holds: the one human signal in the tree, in the accent. A speech bubble and the count (the sides
+   on hover); a collapsed step with notes inside it carries an outlined one. */
+.lab-tt-ncount { flex: none; align-self: center; min-width: 20px; height: 20px; padding: 0 6px 0 5px; box-sizing: border-box; gap: 3px;
+  display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 999px;
+  background: var(--color-accent-900); color: var(--color-text); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lab-tt-ncount svg { flex: none; color: var(--color-accent-600); }
+.lab-tt-ncount-in { background: transparent; border-color: var(--color-accent-700); color: var(--color-neutral-400); }
+.lab-tt-ncount-in svg { color: var(--color-neutral-500); }
+.lab-tt-pick .lab-tt-ncount + .lab-tt-ncount { margin-left: -5px; }
 .lab-tt-row.lab-on .lab-tt-ncount { background: var(--color-surface); }
+.lab-tt-row.lab-on .lab-tt-ncount-in { background: transparent; }
 
 /* ── timeline: a ruler, then one bar per step on the shared axis (Langfuse's layout) ── */
 .lab-tt-tl { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -158,13 +166,16 @@ span.lab-tt-chev { cursor: default; }
 
 .lab-tt-io { display: flex; flex-direction: column; gap: 8px; }
 .lab-tt-io + .lab-tt-io { margin-top: 6px; }
-.lab-tt-io > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; padding: 2px 0;
-  font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-neutral-500); }
-.lab-tt-io > summary::-webkit-details-marker { display: none; }
-.lab-tt-io > summary::before { content: ''; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg); transition: transform 150ms ease-out; margin-right: 2px; }
-.lab-tt-io[open] > summary::before { transform: rotate(45deg); }
-.lab-tt-io > summary:hover { color: var(--color-text); }
+/* A side's heading (Input / Output) opens and closes it; the numbers after it are notes on the whole side, or notes
+   whose quoted text is no longer in it. */
+.lab-tt-iohead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 22px; }
+.lab-tt-iotoggle, .lab-tt-ovtoggle { display: inline-flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; border-radius: 4px;
+  background: transparent; font: inherit; cursor: pointer; transition: color 150ms ease-out; }
+.lab-tt-iotoggle { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-neutral-500); }
+.lab-tt-iotoggle::before, .lab-tt-ovtoggle::before { content: ''; width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 150ms ease-out; margin-right: 2px; }
+.lab-tt-iotoggle[aria-expanded="true"]::before, .lab-tt-ovtoggle[aria-expanded="true"]::before { transform: rotate(45deg); }
+.lab-tt-iotoggle:hover { color: var(--color-text); }
 .lab-tt-io > p.lab-small { margin: 0; }
 
 /* A value people can note: selecting text in it quotes it, a double-click opens a note. */
@@ -200,6 +211,82 @@ span.lab-tt-chev { cursor: default; }
 .lab-tt-add:hover { background: var(--color-accent-900); }
 .lab-tt-other { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--color-divider); }
 
+/* ── where a note is (14 Nov 2026) ──
+   One number per note, in tree order: after its quote in the text (or by the side's heading for a note on the whole
+   side), at the head of its card and on its row in "Notes on this turn". The quote is marked in the accent tint the
+   card's quote already uses, underlined in the accent; hovering any of a note's places lights the others. */
+.lab-an-pin { flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 18px;
+  height: 18px; padding: 0 5px; margin: 0; border: 1px solid var(--color-accent); border-radius: 999px; background: var(--color-accent-900);
+  color: var(--color-text); font: inherit; font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: 0; text-transform: none;
+  font-variant-numeric: tabular-nums; user-select: none; transition: background-color 150ms ease-out; }
+button.lab-an-pin { cursor: pointer; }
+button.lab-an-pin::before { content: attr(data-n); }
+.lab-an-pin:hover, .lab-an-pin[data-hot] { background: var(--color-accent-800); }
+.lab-tt-val .lab-an-pin { min-width: 16px; height: 16px; padding: 0 4px; margin: 0 1px 0 3px; font-size: 10.5px; vertical-align: 0.12em;
+  font-family: inherit; }
+.lab-an-mark { padding: 0 1px; border-radius: 2px; background: var(--color-accent-900); color: inherit; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--color-accent); text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; transition: background-color 150ms ease-out; }
+.lab-an-mark-more, .lab-an-mark:hover, .lab-an-mark[data-hot] { background: var(--color-accent-800); }
+
+/* A card's head: its number, then the span kind, the spans above it, its name and the side, cut from the left end. */
+.lab-an-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; font-size: 12.5px; line-height: 1.4; }
+.lab-an-line { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden;
+  white-space: nowrap; color: var(--color-neutral-400); }
+.lab-an-line .lab-tt-icon { width: 18px; height: 18px; border-radius: 5px; margin-right: 2px; }
+.lab-an-line .lab-tt-icon svg { width: 12px; height: 12px; }
+.lab-an-path { flex: 0 4 auto; min-width: 1.5em; overflow: hidden; text-overflow: ellipsis; color: var(--color-neutral-500); }
+.lab-an-name { flex: 0 1 auto; min-width: 2em; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--color-text); }
+.lab-an-side { flex: none; font-weight: 600; color: var(--color-neutral-400); }
+.lab-an-changed { flex: none; font-size: 12px; color: var(--color-neutral-500); }
+.lab-quote.lab-an-stale { background: var(--color-neutral-900); color: var(--color-neutral-400); }
+.lab-ne-head.lab-an-head { font-size: 12px; color: var(--color-neutral-400); }
+
+/* A card's foot: who (initials, name, role) and when (relative; the exact time on hover), then Edit / Delete. */
+.lab-an-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 2px; font-size: 12px; color: var(--color-neutral-400); }
+.lab-an-avatar { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 999px;
+  background: var(--color-neutral-800); color: var(--color-text); font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em; }
+.lab-an-by { display: inline-flex; flex-wrap: wrap; align-items: baseline; flex: 1 1 auto; min-width: 0; }
+.lab-an-by > * + *::before { content: '·'; margin: 0 6px; color: var(--color-neutral-500); }
+.lab-an-who { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-text); }
+.lab-an-by time { font-variant-numeric: tabular-nums; }
+.lab-an-foot .lab-nt-actions { margin-left: auto; gap: 10px; }
+.lab-tt .lab-nt { scroll-margin: 16px; transition: border-color 150ms ease-out; }
+.lab-tt .lab-nt[data-hot] { border-color: var(--color-accent); }
+.lab-tt .lab-nt:focus { outline: none; }
+.lab-tt .lab-nt:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.lab-tt .lab-nt[data-flash] { animation: lab-an-flash 1400ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes lab-an-flash {
+  0%, 25% { background-color: var(--color-accent-900); outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  100% { background-color: var(--color-surface); outline: 2px solid transparent; outline-offset: 2px; }
+}
+
+/* "Notes on this turn": above the span in view, one row per note in tree order. */
+.lab-tt-ov { display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--color-divider); }
+.lab-tt-ovhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.lab-tt-ovtoggle { font-size: 14px; font-weight: 600; color: var(--color-text); }
+.lab-tt-ovtoggle::before { color: var(--color-neutral-500); }
+.lab-tt-ovcount { font-size: 12.5px; color: var(--color-neutral-400); font-variant-numeric: tabular-nums; }
+.lab-tt-ovlist { list-style: none; margin: 0 -8px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.lab-tt-ovrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 3px 10px; width: 100%;
+  box-sizing: border-box; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: var(--color-text);
+  text-align: left; cursor: pointer; transition: background-color 150ms ease-out; }
+.lab-tt-ovrow:hover, .lab-tt-ovrow[data-hot] { background: var(--color-neutral-900); }
+.lab-tt-ovmain { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 13px; }
+.lab-tt-ovtext { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.45;
+  overflow-wrap: anywhere; }
+.lab-tt-ovquote { margin-right: 6px; padding: 0 3px; border-radius: 3px; background: var(--color-accent-900); color: var(--color-neutral-300);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.lab-tt-ovquote-stale { background: var(--color-neutral-900); color: var(--color-neutral-400); }
+.lab-tt-ovby { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; max-width: 170px; font-size: 12px;
+  color: var(--color-neutral-500); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lab-tt-ovwho { max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--color-neutral-400); }
+@container (max-width: 560px) {
+  .lab-tt-ovrow { grid-template-columns: auto minmax(0, 1fr); }
+  .lab-tt-ovby { grid-column: 2; flex-direction: row; gap: 6px; align-items: baseline; max-width: none; }
+  .lab-tt-ovby time::before { content: '·'; margin-right: 6px; }
+}
+
 /* ── metadata ── */
 .lab-tt-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 18px; margin: 0; font-size: 13px; }
 .lab-tt-meta dt { color: var(--color-neutral-500); }
@@ -208,4 +295,6 @@ span.lab-tt-chev { cursor: default; }
 
 @media (prefers-reduced-motion: reduce) {
   .lab-tt *, .lab-tt *::before { transition: none !important; }
+  /* The note picked holds still, lit, for as long as the highlight lasts. */
+  .lab-tt .lab-nt[data-flash] { animation: none; background-color: var(--color-accent-900); outline: 2px solid var(--color-accent); outline-offset: 2px; }
 }

@@ -199,6 +199,8 @@ NOT_DRIVEN = {
     "/lab/turns/{turn_id}/step-label-groups/{group_id}": "same",
     "/lab/runs": "runs (22 Oct): covered by test_trace_lab_runs_sql", "/lab/runs/sync": "same", "/lab/runs/import": "same",
     "/lab/runs/{code}": "same", "/lab/runs/{code}/questions": "same", "/lab/runs/{code}/labels": "same",
+    "/lab/runs/{code}/sessions": "a run's conversations (14 Nov 2026): covered by test_trace_lab_run_sessions_sql",
+    "/lab/labels": "All runs' labels (14 Nov 2026): covered by test_trace_lab_labels_follow_the_run_sql",
     "/lab/progress": "same", "/lab/q/{code}": "same", "/lab/q/{code}/expected": "same", "/lab/q/{code}/traces": "same", "/lab/q/{code}/candidates": "same",
     "/lab/q/{code}/cells": "same", "/lab/modes": "same", "/lab/modes/{lineage_id}": "same",
     "/lab/q/{code}/tree": "the Trace tab (9 Nov): covered by test_trace_lab_trace_tree_sql",

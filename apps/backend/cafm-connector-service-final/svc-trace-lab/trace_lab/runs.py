@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import PurePath
 from typing import Any
 
+import structlog
 from sqlalchemy import text
 
 from . import conversations, db, golden, labelling, provenance
@@ -60,6 +61,9 @@ CURRENT_EXPECTED_WHERE = ("(e.source <> 'coding_agent' OR EXISTS (SELECT 1 FROM 
 USERS = labelling.USERS
 SOURCES = ("coding_agent", "excel", "manual")
 NONE_ORG = "00000000-0000-0000-0000-000000000000"
+#: The run tag the chat's own conversations are filed under (eval_store.CHAT_TAG): never a run of batches.
+CHAT_TAG = "chat"
+log = structlog.get_logger(__name__)
 
 
 def run_code(no: int) -> str:
@@ -131,23 +135,46 @@ def require_taxonomist(m: labelling.Member) -> None:
 _RUN_COLS = ("r.id::text AS id, r.run_no, r.kind, r.title, r.organization_id::text AS organization_id, r.owner_email, "
              "r.run_day, r.source, r.created_by_email, r.created_at")
 
+#: A question that is a turn of a scenario session (session id scn__<tag>__<scenario>__<n>, asked by the Codex agent).
+#: Scenario turns asked before 13 Nov 2026 were made questions of the asker's live day, and a turn is a synced question
+#: only once, so they stay there; the Runs page reads around them (14 Nov 2026, Hussain): they show under their run
+#: tag's entry, and a live day shows and counts only what people asked by hand. Known by the eval store's trace.
+SCENARIO_Q = ("EXISTS (SELECT 1 FROM tracelab.lab_question_traces lx JOIN tracelab.traces tx ON tx.id = lx.turn_id"
+              " WHERE lx.question_id = q.id AND tx.session_id LIKE 'scn\\_\\_%')")
+#: The questions a run shows and counts: all of them, except a live day's scenario questions.
+KEPT_Q = f"(r.kind <> 'production' OR NOT {SCENARIO_Q})"
+#: A run the sync made from a run tag's sessions: "Sessions · <tag> · <batch start>" (14 Nov 2026), or "Sessions · <tag>"
+#: when it was made before batches (that is the tag's first batch). It is counted from its batch's sessions, not from
+#: the questions linked to it: its turns may already be questions of live days, so it can hold none.
+_SESSIONS_PREFIX = "Sessions · "
+IS_SESSIONS_RUN = (f"(r.kind = 'synthetic' AND r.source = 'sync' AND left(r.title, {len(_SESSIONS_PREFIX)}) = "
+                   f"'{_SESSIONS_PREFIX}')")
+
 _RUN_STATS = """
-    (SELECT count(*) FROM tracelab.lab_questions q WHERE q.run_id = r.id) AS n_questions,
+    (SELECT count(*) FROM tracelab.lab_questions q WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS n_questions,
     (SELECT count(DISTINCT t.question_id) FROM tracelab.lab_question_traces t
-       JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id = r.id) AS n_traced,
+       JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS n_traced,
     (SELECT count(DISTINCT e.question_id) FROM tracelab.lab_expected_answers e
-       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id = r.id AND """ + CURRENT_EXPECTED_WHERE + """) AS n_expected,
+       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id = r.id AND """ + KEPT_Q + """ AND """ + CURRENT_EXPECTED_WHERE + """) AS n_expected,
     (SELECT count(*) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
-      WHERE q.run_id = r.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
+      WHERE q.run_id = r.id AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
     (SELECT count(DISTINCT q.id) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
-      WHERE q.run_id = r.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_reviewed,
-    (SELECT min(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id = r.id) AS first_at,
-    (SELECT max(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id = r.id) AS last_at"""
+      WHERE q.run_id = r.id AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_reviewed,
+    (SELECT min(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS first_at,
+    (SELECT max(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS last_at"""
+
+#: The order of every run list (14 Nov 2026, Hussain): the latest question asked, newest first, whatever the kind - a
+#: sessions run's batch by its sessions' last asked time (bl, from _batches), any other run by its last question's
+#: asked_at; when it was made only when nothing was asked in it. The top-bar picker and the Runs page share it.
+RUN_ORDER = ("coalesce(bl.last_at, (SELECT max(q.asked_at) FROM tracelab.lab_questions q"
+             f" WHERE q.run_id = r.id AND {KEPT_Q}), r.created_at)")
+_BATCH_JOIN = ("LEFT JOIN unnest(CAST(:b_ids AS uuid[]), CAST(:b_last AS timestamptz[])) AS bl(id, last_at)"
+               " ON bl.id = r.id")
 
 
-def run_out(r: Any) -> dict[str, Any]:
+def run_out(r: Any, batch: dict[str, Any] | None = None) -> dict[str, Any]:
     out = {"id": r["id"], "code": run_code(r["run_no"]), "run_no": r["run_no"], "kind": r["kind"], "title": r["title"],
            "organization_id": r.get("organization_id"), "owner_email": r.get("owner_email"),
            "run_day": _iso(r.get("run_day")), "source": r["source"], "created_by_email": r.get("created_by_email"),
@@ -158,13 +185,23 @@ def run_out(r: Any) -> dict[str, Any]:
     for k in ("first_at", "last_at"):
         if k in r:
             out[k] = _iso(r[k])
+    # A sessions run (a batch of a run tag) is counted from its batch's sessions, and was asked when they were.
+    out["run_tag"] = batch["run_tag"] if batch else None
+    if batch:
+        out.update(batch_start=_iso(batch["batch_start"]), n_sessions=batch["n_sessions"], n_turns=batch["n_turns"],
+                   first_at=_iso(batch["first_at"]) or out.get("first_at"), last_at=_iso(batch["last_at"]) or out.get("last_at"))
     return out
 
 
 async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | None = None, company: str | None = None,
-                    limit: int = 100, offset: int = 0) -> dict[str, Any]:
+                    limit: int = 100, offset: int = 0, for_page: bool = False) -> dict[str, Any]:
+    """The runs the caller may see, newest activity first. `for_page` is the Runs page's list (14 Nov 2026): it leaves
+    out a live day that holds only scenario questions. Without it every run is listed (the top-bar picker, Labels)."""
     labelling.require_active(m)
     where, p = _scope(m, "r", company)
+    if for_page:
+        where += (" AND (r.kind <> 'production' OR EXISTS (SELECT 1 FROM tracelab.lab_questions q"
+                  f" WHERE q.run_id = r.id AND {KEPT_Q}))")
     if kind == SESSIONS_KIND:
         # The runs made from a run tag's sessions (sync_sessions): the only synthetic runs the sync itself makes.
         where += " AND r.kind = 'synthetic' AND r.source = 'sync'"
@@ -177,15 +214,132 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
         where += " AND (r.title ILIKE :q OR coalesce(r.owner_email, '') ILIKE :q OR ('R' || r.run_no) ILIKE :q)"
         p["q"] = conversations._like(q.strip())
     limit, offset = max(1, min(int(limit), LIST_MAX)), max(0, int(offset))
+    scope, sp = _scope(m, "r", company)
     async with db.lab_engine().connect() as conn:
+        batches = await _batches(conn, scope, sp)
         total = (await conn.execute(text(f"SELECT count(*) FROM tracelab.lab_runs r WHERE {where}"), p)).scalar_one()
         rows = (await conn.execute(text(
-            f"SELECT {_RUN_COLS}, {_RUN_STATS} FROM tracelab.lab_runs r WHERE {where} "
-            # Newest first by when they were last asked in (3 Nov 2026): a day run that synced a new question rises.
-            "ORDER BY greatest(r.created_at, coalesce((SELECT max(q.asked_at) FROM tracelab.lab_questions q "
-            "WHERE q.run_id = r.id), r.created_at)) DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
-            {**p, "lim": limit, "off": offset})).mappings().all()
-    return {"total": int(total), "runs": [run_out(r) for r in rows]}
+            f"SELECT {_RUN_COLS}, {_RUN_STATS} FROM tracelab.lab_runs r {_BATCH_JOIN} WHERE {where} "
+            f"ORDER BY {RUN_ORDER} DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
+            {**p, **_batch_order(batches), "lim": limit, "off": offset})).mappings().all()
+    return {"total": int(total), "runs": [run_out(r, batches.get(r["id"])) for r in rows]}
+
+
+# ── sessions runs: one per batch of a run tag ─────────────────────────────────────────────────────
+
+#: A tag's sessions (per company) are one batch until one starts this long or more after the one before it.
+BATCH_GAP = timedelta(minutes=60)
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_WHEN_RE = re.compile(r"^(\d{1,2}) ([A-Z][a-z]{2}) (\d{2}):(\d{2})$")
+_EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def batch_title(tag: str, start: datetime) -> str:
+    """ "Sessions · <tag> · 14 Nov 10:02" (UTC): the batch's first session, to the minute. Always with the start, so a
+    title never changes when a later batch appears."""
+    at = start.astimezone(timezone.utc)
+    return f"{_SESSIONS_PREFIX}{tag} · {at.day} {_MONTHS[at.month - 1]} {at:%H:%M}"[:TITLE_MAX]
+
+
+def parse_batch(title: Any, created_at: datetime | None) -> tuple[str, datetime | None] | None:
+    """(run tag, batch start) of a sessions run's title; the start is None for a run made before batches ("Sessions ·
+    <tag>", the tag's first batch). None for any other title, the chat's own tag and sessions with no tag. The year is
+    the run's own: a batch starts before its run is made."""
+    t = str(title or "")
+    if not t.startswith(_SESSIONS_PREFIX):
+        return None
+    rest = t[len(_SESSIONS_PREFIX):]
+    tag, sep, when = rest.rpartition(" · ")
+    found = _WHEN_RE.match(when) if sep else None
+    if not found or found[2] not in _MONTHS or not tag:
+        tag, start = rest, None
+    else:
+        made = created_at or datetime.now(timezone.utc)
+        made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
+        start = None
+        for year in (made.year, made.year - 1):
+            try:
+                at = datetime(year, _MONTHS.index(found[2]) + 1, int(found[1]), int(found[3]), int(found[4]),
+                              tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if at <= made + timedelta(days=1):
+                start = at
+                break
+    if not tag or tag in (NO_TAG, CHAT_TAG):
+        return None
+    return tag, start
+
+
+def _windows(batch_runs: list[dict[str, Any]]) -> dict[str, tuple[datetime | None, datetime | None]]:
+    """Each run of one tag and company with the window of session start times it holds: from its batch start to the
+    next batch's. The first batch (a run made before batches, else the earliest) also holds anything earlier."""
+    starts = sorted({r["start"] for r in batch_runs if r["start"] is not None})
+    legacy = any(r["start"] is None for r in batch_runs)
+    out: dict[str, tuple[datetime | None, datetime | None]] = {}
+    for r in batch_runs:
+        if r["start"] is None:
+            out[r["id"]] = (None, starts[0] if starts else None)
+            continue
+        later = [x for x in starts if x > r["start"]]
+        first = not legacy and r["start"] == starts[0]
+        out[r["id"]] = (None if first else r["start"], later[0] if later else None)
+    return out
+
+
+def _within(at: datetime, window: tuple[datetime | None, datetime | None]) -> bool:
+    since, until = window
+    return (since is None or at >= since) and (until is None or at < until)
+
+
+async def _batches(conn: Any, where: str = "TRUE", p: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Every sessions run within `where` (alias r): its run tag, batch start, window and what its sessions add up to
+    (n_sessions, n_turns, first_at, last_at). Read in two queries; the windows are worked out here."""
+    rows = (await conn.execute(text(
+        f"SELECT r.id::text AS id, r.run_no, r.title, r.organization_id::text AS org, r.created_at"
+        f" FROM tracelab.lab_runs r WHERE ({where}) AND {IS_SESSIONS_RUN}"), dict(p or {}))).mappings().all()
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in rows:
+        parsed = parse_batch(r["title"], r["created_at"])
+        if parsed is None or r["org"] is None:
+            continue
+        groups.setdefault((parsed[0], r["org"]), []).append(
+            {"id": r["id"], "run_no": r["run_no"], "start": parsed[1]})
+    if not groups:
+        return {}
+    sessions = (await conn.execute(text(
+        "SELECT s.run_tag, s.organization_id::text AS org, s.started_at, count(t.id) AS turns,"
+        " max(coalesce(t.started_at, s.started_at)) AS last_at FROM tracelab.sessions s"
+        " LEFT JOIN tracelab.traces t ON t.session_id = s.id AND t.organization_id = s.organization_id"
+        " WHERE s.run_tag = ANY(CAST(:tags AS text[])) AND s.organization_id = ANY(CAST(:orgs AS uuid[]))"
+        " GROUP BY s.id"), {"tags": sorted({k[0] for k in groups}), "orgs": sorted({k[1] for k in groups})})).mappings().all()
+    by_key: dict[tuple[str, str], list[Any]] = {}
+    for x in sessions:
+        by_key.setdefault((x["run_tag"], x["org"]), []).append(x)
+    out: dict[str, dict[str, Any]] = {}
+    for key, its in groups.items():
+        windows = _windows(its)
+        for r in its:
+            window = windows[r["id"]]
+            mine = [x for x in by_key.get(key, []) if _within(x["started_at"], window)]
+            out[r["id"]] = {"run_tag": key[0], "batch_start": r["start"], "since": window[0], "until": window[1],
+                            "n_sessions": len(mine), "n_turns": sum(int(x["turns"] or 0) for x in mine),
+                            "first_at": min((x["started_at"] for x in mine), default=None),
+                            "last_at": max((x["last_at"] for x in mine if x["last_at"] is not None), default=None)}
+    return out
+
+
+def _batch_order(batches: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    known = [(k, v["last_at"]) for k, v in batches.items() if v["last_at"] is not None]
+    return {"b_ids": [k for k, _ in known], "b_last": [at for _, at in known]}
+
+
+async def batch_of(conn: Any, run: Any) -> dict[str, Any] | None:
+    """The batch a run is (_batches), or None when it is not a sessions run."""
+    if not (run["kind"] == "synthetic" and run["source"] == "sync" and str(run["title"]).startswith(_SESSIONS_PREFIX)):
+        return None
+    return (await _batches(conn, "r.organization_id IS NOT DISTINCT FROM CAST(:b_org AS uuid)",
+                           {"b_org": run["organization_id"]})).get(run["id"])
 
 
 async def _run_row(conn: Any, m: labelling.Member, code: str) -> Any:
@@ -201,7 +355,8 @@ async def _run_row(conn: Any, m: labelling.Member, code: str) -> Any:
 async def get_run(m: labelling.Member, code: str) -> dict[str, Any]:
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
-        return run_out(await _run_row(conn, m, code))
+        row = await _run_row(conn, m, code)
+        return run_out(row, await batch_of(conn, row))
 
 
 async def create_run(m: labelling.Member, *, title: str, company: str | None = None,
@@ -292,10 +447,86 @@ def _new_question(q: dict[str, Any], n: int) -> dict[str, Any]:
 
 # ── live traffic: one run per person per day ─────────────────────────────────────────────────────
 
+def _why(exc: BaseException) -> str:
+    """A failure in a few words, for the one line Sync now says about it."""
+    text_ = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+    return str(text_).strip().splitlines()[0][:200]
+
+
+#: Who may have the Codex agent's scenario sessions read in when they press Sync now: the curators, as before.
+CODEX_SKIPPED = "Codex sessions are read in by company admins, the platform team and the consultant."
+
+
 async def sync_production(m: labelling.Member, *, now: datetime | None = None) -> dict[str, Any]:
-    """Sync now: the caller's companies (every company for the platform team and a consultant)."""
+    """Sync now (14 Nov 2026, Hussain: "I only need one button which syncs everything together"): for the caller's
+    company (every company for the platform team and a consultant), in this order, each step in its own try so one
+    that fails never stops the others. Codex sessions are read FIRST, so a scenario turn whose session can be read in
+    becomes a question of its batch and never of the asker's live day (sync_live takes an unread scenario turn once
+    it is past its grace):
+
+        1. Codex sessions        the Codex agent's scenario sessions of the last 90 days filed as sessions, with the
+                                 automatic sync's rule (only a curator's sessions are filed); skipped, and said so,
+                                 for a caller who may not curate, as the old "Read new sessions" was theirs only
+           chat conversations    the chat's conversations of the last week filed as sessions (run tag "chat")
+        2. runs                  the run of every batch of every run tag, and the scenario sessions' turns as their
+                                 questions
+        3. live questions        the chat's newer answers, one run per person per day (sync_live), then any other
+                                 session turn no run holds yet (as the automatic sync always took them)
+
+    Returns new_questions, new_runs, more, chat_sessions, codex_sessions, and failed / skipped: {step: reason} with
+    step one of questions, chat, codex, runs."""
     labelling.require_active(m)
-    return await sync_live(None if m.all_companies else m.org, now=now)
+    from . import eval_store
+
+    org = None if m.all_companies else m.org
+    now = now or datetime.now(timezone.utc)
+    company = {} if org is None else {"org": org}
+    out: dict[str, Any] = {"new_questions": 0, "new_runs": 0, "more": False, "chat_sessions": 0, "codex_sessions": 0,
+                           "failed": {}, "skipped": {}}
+    if not can_curate(m):
+        out["skipped"]["codex"] = CODEX_SKIPPED
+    else:
+        try:
+            codex = await eval_store.ingest_from_main(since=now - timedelta(days=SYNC_DAYS), chat=False, scenarios=True,
+                                                      curators_only=True, by=m, **company)
+            out["codex_sessions"] = int(codex.get("sessions") or 0)
+        except Exception as exc:  # noqa: BLE001
+            out["failed"]["codex"] = _why(exc)
+            log.warning("trace_lab.runs.sync_codex_sessions_failed", error=_why(exc))
+    try:
+        chat = await eval_store.ingest_from_main(since=now - timedelta(days=eval_store.CHAT_SYNC_DAYS), chat=True,
+                                                 scenarios=False, **company)
+        out["chat_sessions"] = int(chat.get("sessions") or 0)
+    except Exception as exc:  # noqa: BLE001
+        out["failed"]["chat"] = _why(exc)
+        log.warning("trace_lab.runs.sync_chat_sessions_failed", error=_why(exc))
+    try:
+        made = await sync_sessions(org, now=now, scenarios_only=True)
+        out["new_questions"] += int(made.get("new_questions") or 0)
+        out["new_runs"] += int(made.get("new_runs") or 0)
+        out["more"] = out["more"] or bool(made.get("more"))
+    except Exception as exc:  # noqa: BLE001
+        out["failed"]["runs"] = _why(exc)
+        log.warning("trace_lab.runs.sync_session_runs_failed", error=_why(exc))
+    try:
+        live = await sync_live(org, now=now)
+        out["new_questions"] += int(live.get("new_questions") or 0)
+        out["new_runs"] += int(live.get("new_runs") or 0)
+        out["more"] = out["more"] or bool(live.get("more"))
+    except Exception as exc:  # noqa: BLE001 - every step is tried
+        out["failed"]["questions"] = _why(exc)
+        log.warning("trace_lab.runs.sync_questions_failed", error=_why(exc))
+    try:
+        # Then the other sessions' turns the live questions did not take (a chat turn no live run takes, a session
+        # copied from another machine), as the automatic sync always has.
+        rest = await sync_sessions(org, now=now)
+        out["new_questions"] += int(rest.get("new_questions") or 0)
+        out["new_runs"] += int(rest.get("new_runs") or 0)
+        out["more"] = out["more"] or bool(rest.get("more"))
+    except Exception as exc:  # noqa: BLE001
+        out["failed"].setdefault("runs", _why(exc))
+        log.warning("trace_lab.runs.sync_session_runs_failed", error=_why(exc))
+    return out
 
 
 async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str, Any]:
@@ -401,7 +632,88 @@ NO_TAG = "(no run tag)"
 LIVE_GRACE = timedelta(hours=1)
 
 
-async def sync_sessions(org: str | None = None, *, now: datetime | None = None) -> dict[str, Any]:
+def _gap_batches(starts: list[datetime]) -> list[tuple[datetime, datetime]]:
+    """A tag's session starts (in order) as batches (first start, last start): a new batch begins with a session that
+    starts BATCH_GAP or more after the one before it."""
+    out: list[tuple[datetime, datetime]] = []
+    for at in starts:
+        if out and at - out[-1][1] < BATCH_GAP:
+            out[-1] = (out[-1][0], at)
+        else:
+            out.append((at, at))
+    return out
+
+
+async def ensure_batch_runs(org: str | None = None) -> int:
+    """Make the run of every batch of every scenario run tag that has none yet (14 Nov 2026, Hussain: "if aasim asked
+    50 questions through his codex that is one run and then again after one hour he asked 100 questions through codex
+    that should be a different run"). A batch is a run of a tag's sessions (per company) with less than BATCH_GAP
+    between one session's start and the next; its run is "Sessions · <tag> · <start>" with no questions linked (its
+    turns may already be questions of live days), read from its sessions (_batches, eval_store.run_sessions). A run
+    made as "Sessions · <tag>" before batches is the tag's first batch and is never made again; a batch that already
+    holds a run's start is covered. Which batch a session is in is worked out when it is read (_windows), so a late
+    turn stays with its session. The chat's own tag is not a run. Same lock as sync_sessions: never made twice.
+    Returns how many runs were made."""
+    where = ["s.run_tag IS NOT NULL", "s.run_tag <> :chat"]
+    p: dict[str, Any] = {"chat": CHAT_TAG}
+    if org is not None:
+        where.append("s.organization_id = CAST(:org AS uuid)")
+        p["org"] = org
+    async with db.lab_engine().connect() as conn:
+        rows = (await conn.execute(text(
+            "SELECT s.run_tag, s.organization_id::text AS org, s.started_at FROM tracelab.sessions s WHERE "
+            + " AND ".join(where) + " ORDER BY 1, 2, 3"), p)).mappings().all()
+    starts: dict[tuple[str, str], list[datetime]] = {}
+    for r in rows:
+        if r["org"] is not None and r["started_at"] is not None and r["run_tag"] not in (NO_TAG,):
+            starts.setdefault((r["run_tag"], r["org"]), []).append(r["started_at"])
+    if not starts:
+        return 0
+    made = 0
+    async with db.lab_engine().begin() as conn:
+        await _limits(conn)
+        await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SYNC_LOCK})
+        have: dict[tuple[str, str], dict[str, Any]] = {}
+        for r in (await conn.execute(text(
+                "SELECT r.title, r.organization_id::text AS org, r.created_at FROM tracelab.lab_runs r WHERE "
+                f"{IS_SESSIONS_RUN}" + ("" if org is None else " AND r.organization_id = CAST(:org AS uuid)")),
+                {} if org is None else {"org": org})).mappings().all():
+            parsed = parse_batch(r["title"], r["created_at"])
+            if parsed is None or r["org"] is None:
+                continue
+            h = have.setdefault((parsed[0], r["org"]), {"legacy": False, "starts": []})
+            if parsed[1] is None:
+                h["legacy"] = True
+            else:
+                h["starts"].append(parsed[1])
+        for (tag, owner), its in sorted(starts.items()):
+            h = have.setdefault((tag, owner), {"legacy": False, "starts": []})
+            for n, (first, last) in enumerate(_gap_batches(its)):
+                if n == 0 and h["legacy"]:
+                    continue                    # the run made before batches is this tag's first batch
+                floor = first.replace(second=0, microsecond=0)
+                if any(floor <= x <= last for x in h["starts"]):
+                    continue
+                await _insert_run(conn, None, kind="synthetic", title=batch_title(tag, first), org=owner, source="sync")
+                h["starts"].append(floor)
+                made += 1
+    return made
+
+
+async def sync_sessions(org: str | None = None, *, now: datetime | None = None,
+                        scenarios_only: bool = False) -> dict[str, Any]:
+    """The run of every batch of every scenario run tag (ensure_batch_runs, 14 Nov 2026), then a question of every
+    session turn that is in no run yet, in its batch's run (_session_questions). new_runs counts both.
+    `scenarios_only` takes only scenario sessions' turns (scn__...): the step that runs BEFORE the live questions, so
+    a turn the chat here recorded by hand is still left to sync_live; the rest are taken after it."""
+    made = await ensure_batch_runs(org)
+    out = await _session_questions(org, now=now, scenarios_only=scenarios_only)
+    out["new_runs"] = int(out.get("new_runs") or 0) + made
+    return out
+
+
+async def _session_questions(org: str | None = None, *, now: datetime | None = None,
+                             scenarios_only: bool = False) -> dict[str, Any]:
     """Make questions of the session turns that are in no run yet (13 Nov 2026).
 
     Runs are built from this environment's chat (sync_live). A session copied here from another Trace Lab
@@ -418,10 +730,12 @@ async def sync_sessions(org: str | None = None, *, now: datetime | None = None) 
     if org is not None:
         where.append("t.organization_id = CAST(:org AS uuid)")
         p["org"] = org
+    if scenarios_only:
+        where.append("t.session_id LIKE 'scn\\_\\_%'")
     async with db.lab_engine().connect() as conn:
         rows = [dict(r) for r in (await conn.execute(text(
             "SELECT t.id AS turn_id, t.session_id, t.organization_id::text AS org, t.input AS q, t.turn_index, "
-            "coalesce(t.started_at, s.started_at) AS at, s.run_tag, s.scenario_id, s.role "
+            "coalesce(t.started_at, s.started_at) AS at, s.started_at AS session_at, s.run_tag, s.scenario_id, s.role "
             "FROM tracelab.traces t JOIN tracelab.sessions s ON s.id = t.session_id "
             f"WHERE {' AND '.join(where)} ORDER BY s.started_at, s.id, t.turn_index LIMIT :lim"), p)).mappings().all()]
     if not rows:
@@ -443,8 +757,34 @@ async def sync_sessions(org: str | None = None, *, now: datetime | None = None) 
                 "SELECT turn_id FROM tracelab.lab_question_traces WHERE source = 'sync' AND turn_id = ANY(:ids)"),
                 {"ids": [r["turn_id"] for r in todo]})).all()}
             runs: dict[tuple[str, str], tuple[str, int]] = {}
+            batches: dict[tuple[str, str], list[dict[str, Any]]] = {}
             for r in todo:
                 if r["turn_id"] in seen:
+                    continue
+                if r["run_tag"] and r["run_tag"] != CHAT_TAG and r["org"]:
+                    # A scenario run tag's turn goes to its session's batch (14 Nov 2026); a batch with no run yet
+                    # waits for the next round's ensure_batch_runs.
+                    bkey = (r["run_tag"], r["org"])
+                    if bkey not in batches:
+                        batches[bkey] = await _batch_runs(conn, *bkey)
+                    found = next((b for b in batches[bkey] if _within(r["session_at"], b["window"])), None)
+                    if found is None:
+                        continue
+                    key = ("#" + found["id"], r["org"])
+                    if key not in runs:
+                        runs[key] = (found["id"], found["top"])
+                    run_id, top = runs[key]
+                    qid = await _insert_question(
+                        conn, None, run_id=run_id, seq=top + 1,
+                        row={"question": ((r["q"] or "").strip() or "(no question recorded)")[:QUESTION_MAX],
+                             "scenario_ref": (r["scenario_id"] or None), "role": ((r["role"] or "").strip()[:200] or None)},
+                        org=r["org"], source="sync", asked_at=r["at"])
+                    await conn.execute(text(
+                        "INSERT INTO tracelab.lab_question_traces (question_id, turn_id, organization_id, source) "
+                        "VALUES (CAST(:qid AS uuid), :tid, CAST(:org AS uuid), 'sync')"),
+                        {"qid": qid, "tid": r["turn_id"], "org": r["org"]})
+                    runs[key] = (run_id, top + 1)
+                    new_q += 1
                     continue
                 title = SESSION_RUN_TITLE.format(tag=r["run_tag"] or NO_TAG)[:TITLE_MAX]
                 key = (title, r["org"] or NONE_ORG)
@@ -475,6 +815,23 @@ async def sync_sessions(org: str | None = None, *, now: datetime | None = None) 
                 runs[key] = (run_id, top + 1)
                 new_q += 1
     return {"new_questions": new_q, "new_runs": new_r, "more": len(rows) >= SYNC_BATCH and new_q > 0}
+
+
+async def _batch_runs(conn: Any, tag: str, org: str) -> list[dict[str, Any]]:
+    """The runs of one tag's batches in one company, each with its window and its highest question number, the run
+    made before batches first, then by start and run number."""
+    found = []
+    for r in (await conn.execute(text(
+            "SELECT r.id::text AS id, r.run_no, r.title, r.created_at, (SELECT coalesce(max(q.seq_no), 0)"
+            " FROM tracelab.lab_questions q WHERE q.run_id = r.id) AS top FROM tracelab.lab_runs r"
+            f" WHERE {IS_SESSIONS_RUN} AND r.organization_id = CAST(:org AS uuid)"), {"org": org})).mappings().all():
+        parsed = parse_batch(r["title"], r["created_at"])
+        if parsed is not None and parsed[0] == tag:
+            found.append({"id": r["id"], "run_no": r["run_no"], "start": parsed[1], "top": int(r["top"] or 0)})
+    windows = _windows(found)
+    for b in found:
+        b["window"] = windows[b["id"]]
+    return sorted(found, key=lambda b: (b["start"] is not None, b["start"] or _EARLIEST, b["run_no"]))
 
 
 async def stored_answer(org: str | None, turn_id: str) -> dict[str, Any] | None:
@@ -530,10 +887,12 @@ async def list_questions(m: labelling.Member, code: str) -> dict[str, Any]:
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
         run = await _run_row(conn, m, code)
+        keep = "" if run["kind"] != "production" else f" AND NOT {SCENARIO_Q}"
         rows = (await conn.execute(text(f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q "
-                                        f"WHERE q.run_id = CAST(:rid AS uuid) ORDER BY {_q_order(run)}"),
+                                        f"WHERE q.run_id = CAST(:rid AS uuid){keep} ORDER BY {_q_order(run)}"),
                                    {"rid": run["id"]})).mappings().all()
-    return {"run": run_out(run), "questions": [question_out(r, run["run_no"]) for r in rows]}
+        batch = await batch_of(conn, run)
+    return {"run": run_out(run, batch), "questions": [question_out(r, run["run_no"]) for r in rows]}
 
 
 async def _question_row(conn: Any, m: labelling.Member, code: str) -> tuple[Any, Any]:
@@ -911,30 +1270,106 @@ async def retire_mode(m: labelling.Member, lineage_id: str) -> dict[str, Any]:
     return {"lineage_id": lin, "retired": True}
 
 
+#: Each person's newest value per cell of the questions named (:qids, the rows label_questions gives a run).
 _CELLS_SQL = """
     SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
            c.question_id::text AS question_id, c.mode_lineage_id::text AS mode, c.value, c.author_id::text AS author_id,
            c.author_email, c.author_role, c.source, c.created_at
-      FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q ON q.id = c.question_id
-     WHERE q.run_id = CAST(:rid AS uuid)
+      FROM tracelab.lab_label_cells c
+     WHERE c.question_id = ANY(CAST(:qids AS uuid[]))
      ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email), c.created_at DESC, c.id DESC"""
 
+#: Per failure mode, how many of the questions named (:qids) a person marked positive (their newest value; agents'
+#: suggestions never count).
+_POSITIVES_SQL = """
+    SELECT mode, count(DISTINCT question_id) FILTER (WHERE value = 'positive') AS positives
+      FROM (SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
+                   c.mode_lineage_id::text AS mode, c.question_id, c.value
+              FROM tracelab.lab_label_cells c
+             WHERE c.question_id = ANY(CAST(:qids AS uuid[])) AND c.source = 'manual'
+             ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email),
+                      c.created_at DESC, c.id DESC) x
+     GROUP BY mode"""
 
-async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
-    """A run's labels view: its questions as rows, the failure modes as columns, and each person's newest value per cell."""
-    labelling.require_active(m)
-    async with db.lab_engine().connect() as conn:
-        run = await _run_row(conn, m, code)
-        questions = (await conn.execute(text(
-            f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q WHERE q.run_id = CAST(:rid AS uuid) "
-            f"ORDER BY {_q_order(run)} LIMIT :lim"), {"rid": run["id"], "lim": MATRIX_MAX})).mappings().all()
-        total = int((await conn.execute(text("SELECT count(*) FROM tracelab.lab_questions WHERE run_id = CAST(:rid AS uuid)"),
-                                        {"rid": run["id"]})).scalar_one())
-        modes = await _live_modes(conn)
-        cells = (await conn.execute(text(_CELLS_SQL), {"rid": run["id"]})).mappings().all()
-        last = (await conn.execute(text(
-            "SELECT max(c.created_at) FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q ON q.id = c.question_id "
-            "WHERE q.run_id = CAST(:rid AS uuid)"), {"rid": run["id"]})).scalar_one()
+#: A Codex batch's questions: the turns of its sessions (the latest attempt of each scenario, as run_sessions lists
+#: them), wherever each turn is a question, in the order they were asked. Each row names its own session and turn
+#: (session_id, turn_id, scenario_id, turn_no of session_turns): the page names it by its scenario and opens it inside
+#: the batch, never by the code of the run its question row was filed in (14 Nov 2026, Hussain).
+_BATCH_Q_SQL = f"""
+    WITH s AS (
+      SELECT s.id, s.started_at, s.scenario_id,
+             row_number() OVER (PARTITION BY s.run_tag, s.scenario_id
+                                ORDER BY s.attempt DESC, s.created_at DESC, s.id DESC) AS rn
+        FROM tracelab.sessions s
+       WHERE s.run_tag = :tag AND s.organization_id IS NOT DISTINCT FROM CAST(:org AS uuid)
+         AND (CAST(:since AS timestamptz) IS NULL OR s.started_at >= CAST(:since AS timestamptz))
+         AND (CAST(:until AS timestamptz) IS NULL OR s.started_at < CAST(:until AS timestamptz))),
+    picked AS (
+      SELECT DISTINCT ON (q.id) q.id AS qid, s.started_at AS s_at, s.id AS sid, s.scenario_id AS scen, t.id AS tid,
+             t.turn_index AS ti
+        FROM s JOIN tracelab.traces t ON t.session_id = s.id
+        JOIN tracelab.lab_question_traces l ON l.turn_id = t.id
+        JOIN tracelab.lab_questions q ON q.id = l.question_id
+       WHERE (s.rn = 1 OR s.scenario_id IS NULL) AND q.organization_id IS NOT DISTINCT FROM CAST(:org AS uuid)
+       ORDER BY q.id, s.started_at, t.turn_index)
+    SELECT {_Q_COLS}, {_Q_STATS}, r.run_no AS q_run_no, count(*) OVER () AS n_all,
+           p.sid AS session_id, p.tid AS turn_id, p.scen AS scenario_id,
+           (SELECT count(*) FROM tracelab.traces tt WHERE tt.session_id = p.sid AND tt.turn_index <= p.ti) AS turn_no,
+           (SELECT count(*) FROM tracelab.traces tt WHERE tt.session_id = p.sid) AS session_turns
+      FROM picked p JOIN tracelab.lab_questions q ON q.id = p.qid JOIN tracelab.lab_runs r ON r.id = q.run_id
+     ORDER BY p.s_at, p.sid, p.ti, r.run_no, q.seq_no"""
+
+#: The runs Labels shows for All runs: the ones the top bar lists (its limit), in its order.
+ALL_RUNS_MAX = 200
+_UNSET: Any = object()
+
+
+async def label_questions(conn: Any, run: Any, *, limit: int | None = None,
+                          batch: Any = _UNSET) -> tuple[list[Any], int]:
+    """The questions a run's Labels and Progress show and count, and how many there are (14 Nov 2026, Hussain: one
+    Labels page, the run picked in the top bar). The same rows the run opens on the Runs page:
+
+      * a Codex batch ("Sessions · <tag>[ · <start>]"): the turns of its sessions, latest attempt of each scenario
+        (run_sessions). A turn is a question once only, so a turn synced into a live day before 13 Nov, or into the
+        tag's old run, is that question: its code names the run it is in, and a label on it is the one label store;
+      * a live day: what people asked by hand (KEPT_Q), newest first;
+      * a run typed on the page or imported: its own questions, in order.
+
+    Each row has q_run_no, the run number its code is made from, and a batch's rows their session and turn.
+    `batch` is the run's batch when the caller has read it already (None: not a batch)."""
+    lim = "" if limit is None else f" LIMIT {int(limit)}"
+    if batch is _UNSET:
+        batch = await batch_of(conn, run)
+    if batch is not None:
+        rows = (await conn.execute(text(_BATCH_Q_SQL + lim), {
+            "tag": batch["run_tag"], "org": run["organization_id"], "since": batch["since"],
+            "until": batch["until"]})).mappings().all()
+    else:
+        keep = f" AND NOT {SCENARIO_Q}" if run["kind"] == "production" else ""
+        rows = (await conn.execute(text(
+            f"SELECT {_Q_COLS}, {_Q_STATS}, CAST(:no AS int) AS q_run_no, count(*) OVER () AS n_all,"
+            " NULL::text AS session_id, NULL::text AS turn_id, NULL::text AS scenario_id, NULL::int AS turn_no,"
+            " NULL::int AS session_turns"
+            f" FROM tracelab.lab_questions q WHERE q.run_id = CAST(:rid AS uuid){keep} ORDER BY {_q_order(run)}{lim}"),
+            {"rid": run["id"], "no": run["run_no"]})).mappings().all()
+    return list(rows), int(rows[0]["n_all"]) if rows else 0
+
+
+def label_row(q: Any) -> dict[str, Any]:
+    """One row of a labels grid: the question (its code names the run it is filed in, which is what a cell is saved
+    on) and, for a batch's row, the session and turn it is, so the page names and opens it inside the batch."""
+    out = question_out(q, q["q_run_no"])
+    out.update({"session_id": q.get("session_id"), "turn_id": q.get("turn_id"), "scenario_id": q.get("scenario_id"),
+                "turn_no": int(q["turn_no"]) if q.get("turn_no") is not None else None,
+                "session_turns": int(q["session_turns"]) if q.get("session_turns") is not None else None})
+    return out
+
+
+async def _grid_cells(conn: Any, m: labelling.Member, qids: list[str]) -> tuple[dict[str, Any], Any]:
+    """Each person's newest value per cell of these questions, by question and mode, and when the newest was set."""
+    cells = (await conn.execute(text(_CELLS_SQL), {"qids": qids})).mappings().all() if qids else []
+    # Each person's newest cell is kept, so the newest of those is the newest cell of all (a clearing one included).
+    last = max((c["created_at"] for c in cells), default=None)
     by: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for c in cells:
         if c["value"] is None:
@@ -943,8 +1378,45 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
             "value": c["value"], "author_id": c.get("author_id"), "author_email": c.get("author_email"),
             "author_role": c.get("author_role"), "source": c["source"], "at": _iso(c["created_at"]),
             "mine": c.get("author_id") == m.user_id, "suggestion": c["source"] == "coding_agent"})
-    return {"run": run_out(run), "questions": [question_out(q, run["run_no"]) for q in questions], "modes": modes,
+    return by, last
+
+
+async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
+    """A run's labels view: its questions as rows, the failure modes as columns, and each person's newest value per cell."""
+    labelling.require_active(m)
+    async with db.lab_engine().connect() as conn:
+        run = await _run_row(conn, m, code)
+        questions, total = await label_questions(conn, run, limit=MATRIX_MAX)
+        modes = await _live_modes(conn)
+        by, last = await _grid_cells(conn, m, [q["id"] for q in questions])
+    return {"run": run_out(run), "questions": [label_row(q) for q in questions], "modes": modes,
             "cells": by, "last_updated": _iso(last), "me": m.user_id, "total": total, "more": total > len(questions)}
+
+
+async def matrix_all(m: labelling.Member) -> dict[str, Any]:
+    """Labels for All runs (14 Nov 2026, Hussain: "when I select All runs it should show all runs"): every run the top
+    bar lists, in its order, each with the rows its own Labels shows (label_questions); a run with none is left out.
+    At most MATRIX_MAX rows in all; `total` counts every row and `more` says some are not shown."""
+    labelling.require_active(m)
+    listed = (await list_runs(m, limit=ALL_RUNS_MAX))["runs"]
+    groups: list[dict[str, Any]] = []
+    total = shown = 0
+    async with db.lab_engine().connect() as conn:
+        batches: dict[str, dict[str, Any]] = {}
+        for org in sorted({str(r.get("organization_id")) for r in listed if r.get("organization_id")}):
+            batches.update(await _batches(conn, "r.organization_id = CAST(:b_org AS uuid)", {"b_org": org}))
+        for r in listed:
+            room = max(MATRIX_MAX - shown, 0)
+            rows, n = await label_questions(conn, r, limit=max(room, 1), batch=batches.get(r["id"]))
+            total += n
+            rows = rows[:room]
+            if rows:
+                shown += len(rows)
+                groups.append({"run": r, "questions": [label_row(q) for q in rows]})
+        modes = await _live_modes(conn)
+        by, last = await _grid_cells(conn, m, [q["id"] for g in groups for q in g["questions"]])
+    return {"runs": groups, "modes": modes, "cells": by, "last_updated": _iso(last), "me": m.user_id,
+            "total": total, "more": total > shown}
 
 
 async def set_cell(m: labelling.Member, code: str, *, mode: str, value: str | None) -> dict[str, Any]:
@@ -983,32 +1455,31 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
             if run is None:
                 return {"run": None, "tiles": None, "modes": [], "runs": []}
         modes = await _live_modes(conn)
+        # The same questions as the run's Labels (label_questions, 14 Nov 2026): a Codex batch counts its sessions' turns.
+        questions, n_q = await label_questions(conn, run)
+        qids = [q["id"] for q in questions]
         # People's values only: a coding agent's label is a suggestion until a person sets it (3 Nov 2026).
-        cells = [c for c in (await conn.execute(text(_CELLS_SQL), {"rid": run["id"]})).mappings().all()
-                 if c["value"] and c["source"] == "manual"]
+        cells = [c for c in (await conn.execute(text(_CELLS_SQL), {"qids": qids})).mappings().all()
+                 if c["value"] and c["source"] == "manual"] if qids else []
         recent = [dict(r) for r in (await conn.execute(text(
-            f"SELECT r.id::text AS id, r.run_no, r.title FROM tracelab.lab_runs r WHERE {where} AND r.run_no <= :top "
+            f"SELECT {_RUN_COLS} FROM tracelab.lab_runs r WHERE {where} AND r.run_no <= :top "
             "ORDER BY r.run_no DESC LIMIT :n"), {**p, "top": run["run_no"], "n": TREND_RUNS})).mappings().all()]
-        trend_rows = (await conn.execute(text("""
-            SELECT run_id, mode, count(DISTINCT question_id) FILTER (WHERE value = 'positive') AS positives
-              FROM (SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
-                           q.run_id::text AS run_id, c.mode_lineage_id::text AS mode, c.question_id, c.value
-                      FROM tracelab.lab_label_cells c JOIN tracelab.lab_questions q ON q.id = c.question_id
-                     WHERE q.run_id = ANY(CAST(:runs AS uuid[])) AND c.source = 'manual'
-                     ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email),
-                              c.created_at DESC, c.id DESC) x
-             GROUP BY run_id, mode"""), {"runs": [r["id"] for r in recent]})).mappings().all()
+        trend: dict[tuple[str, str], int] = {}
+        for r in recent:
+            ids = qids if r["id"] == run["id"] else [q["id"] for q in (await label_questions(conn, r))[0]]
+            if ids:
+                for t in (await conn.execute(text(_POSITIVES_SQL), {"qids": ids})).mappings().all():
+                    trend[(r["id"], t["mode"])] = int(t["positives"] or 0)
         notes = (await conn.execute(text(
             "SELECT t.question_id::text AS question_id, s.note, s.reviewer_email, s.created_at "
             "FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id "
-            "JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id = CAST(:rid AS uuid) "
+            "WHERE t.question_id = ANY(CAST(:qids AS uuid[])) "
             "AND s.superseded_by IS NULL AND NOT s.tombstone AND s.note IS NOT NULL ORDER BY s.created_at DESC"),
-            {"rid": run["id"]})).mappings().all()
+            {"qids": qids})).mappings().all() if qids else []
     filled = {(c["question_id"], c["mode"]) for c in cells}
     noted = {n["question_id"] for n in notes}
     reviewed = noted | {c["question_id"] for c in cells}
-    n_q = int(run.get("n_questions") or 0)
-    trend = {(t["run_id"], t["mode"]): int(t["positives"] or 0) for t in trend_rows}
+    traced = sum(1 for q in questions if q.get("turn_ids"))
     out_modes = []
     for md in modes:
         pos = sorted({c["question_id"] for c in cells if c["mode"] == md["lineage_id"] and c["value"] == "positive"})
@@ -1019,7 +1490,7 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
                           "trend": [{"run": run_code(r["run_no"]), "positives": trend.get((r["id"], md["lineage_id"]), 0)}
                                     for r in reversed(recent)]})
     return {"run": run_out(run),
-            "tiles": {"questions": n_q, "reviewed": len(reviewed), "traced": int(run.get("n_traced") or 0),
+            "tiles": {"questions": n_q, "reviewed": len(reviewed), "traced": traced,
                       "modes": len(modes), "cells_filled": len(filled), "cells_total": n_q * len(modes),
                       "notes": len(notes)},
             "modes": out_modes, "runs": [{"code": run_code(r["run_no"]), "title": r["title"]} for r in reversed(recent)]}

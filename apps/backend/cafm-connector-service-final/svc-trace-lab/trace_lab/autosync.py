@@ -49,6 +49,7 @@ STATUS: dict[str, Any] = {"enabled": False, "every_s": 0, "last_run_at": None, "
                           "last_new_questions": 0, "last_error": None, "next_at": None,
                           "sessions_ok": None, "last_new_sessions": 0, "sessions_error": None,
                           "session_runs_ok": None, "last_session_questions": 0, "session_runs_error": None,
+                          "batch_runs_ok": None, "last_new_batch_runs": 0, "batch_runs_error": None,
                           "scenario_sessions_ok": None, "last_new_scenario_sessions": 0,
                           "scenario_sessions_error": None, "scenario_sessions_waiting": 0,
                           "scenario_sessions_skipped": 0, "scenario_sessions_other_company": 0,
@@ -62,8 +63,10 @@ def session_runs_on() -> bool:
     return os.environ.get("TRACE_LAB_AUTO_SYNC_SESSION_RUNS", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
-async def sync_session_runs(now: datetime | None = None) -> int:
-    """Sessions -> Runs, for every company, until nothing is left or MAX_BATCHES ran. Its own try, as above."""
+async def sync_session_runs(now: datetime | None = None, *, scenarios_only: bool = False, before: int = 0) -> int:
+    """Sessions -> Runs, for every company, until nothing is left or MAX_BATCHES ran. Its own try, as above.
+    `scenarios_only`: the scenario sessions' turns only (the step before the live questions); `before` is what an
+    earlier step of the same round made, so the status counts the round."""
     if not session_runs_on():
         return 0
     from . import runs
@@ -71,11 +74,11 @@ async def sync_session_runs(now: datetime | None = None) -> int:
     total = 0
     try:
         for _ in range(MAX_BATCHES):
-            out = await runs.sync_sessions(None, now=now)
+            out = await runs.sync_sessions(None, now=now, **({"scenarios_only": True} if scenarios_only else {}))
             total += int(out.get("new_questions") or 0)
             if not out.get("more"):
                 break
-        STATUS.update(session_runs_ok=True, last_session_questions=total, session_runs_error=None)
+        STATUS.update(session_runs_ok=True, last_session_questions=before + total, session_runs_error=None)
         if total:
             log.info("trace_lab.autosync.session_runs", new_questions=total)
     except Exception as exc:  # noqa: BLE001 - the next round tries again
@@ -108,6 +111,24 @@ async def sync_chat_sessions(now: datetime | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - the next round tries again
         STATUS.update(sessions_ok=False, sessions_error=str(exc)[:300])
         log.warning("trace_lab.autosync.chat_sessions_failed", error=str(exc)[:300])
+        return 0
+
+
+async def sync_batch_runs(now: datetime | None = None) -> int:
+    """The run of every batch of every scenario run tag, for every company (runs.ensure_batch_runs, 14 Nov 2026), the
+    same step Sync now takes. Always on: a run with no questions costs nothing, and TRACE_LAB_AUTO_SYNC_SESSION_RUNS
+    only says whether session turns are also made questions. Its own try, as above."""
+    from . import runs
+
+    try:
+        made = await runs.ensure_batch_runs(None)
+        STATUS.update(batch_runs_ok=True, last_new_batch_runs=made, batch_runs_error=None)
+        if made:
+            log.info("trace_lab.autosync.batch_runs", new_runs=made)
+        return made
+    except Exception as exc:  # noqa: BLE001 - the next round tries again
+        STATUS.update(batch_runs_ok=False, last_new_batch_runs=0, batch_runs_error=str(exc)[:300])
+        log.warning("trace_lab.autosync.batch_runs_failed", error=str(exc)[:300])
         return 0
 
 
@@ -151,9 +172,15 @@ _task: asyncio.Task | None = None
 
 
 async def tick(now: datetime | None = None) -> dict[str, Any]:
-    """One round: sync every company until nothing is left or MAX_BATCHES ran."""
+    """One round for every company, each step in its own try. Codex sessions and chat conversations are read in
+    first, then the batch runs and their questions, and only then the live questions (14 Nov 2026, Hussain), so a
+    scenario turn whose session can be read in becomes a question of its batch, never of the asker's live day."""
     from . import runs
 
+    await sync_scenario_sessions(now)
+    await sync_chat_sessions(now)
+    await sync_batch_runs(now)
+    first = await sync_session_runs(now, scenarios_only=True)
     total = 0
     started = now or datetime.now(timezone.utc)
     try:
@@ -168,9 +195,8 @@ async def tick(now: datetime | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - the next round tries again
         STATUS.update(last_run_at=started.isoformat(), last_ok=False, last_error=str(exc)[:300])
         log.warning("trace_lab.autosync.failed", error=str(exc)[:300])
-    await sync_chat_sessions(now)
-    await sync_scenario_sessions(now)
-    await sync_session_runs(now)
+    # Then any other session turn no run holds yet (a chat turn no live run takes), as before.
+    await sync_session_runs(now, before=first)
     return dict(STATUS)
 
 

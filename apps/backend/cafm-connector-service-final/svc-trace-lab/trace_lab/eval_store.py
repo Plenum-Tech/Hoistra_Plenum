@@ -574,7 +574,10 @@ _SESSION_STATS = (
     "  OR EXISTS (SELECT 1 FROM tracelab.observations o JOIN tracelab.traces t ON t.id = o.trace_id"
     "             WHERE t.session_id = s.id AND o.level = 'ERROR')) AS failed,"
     f" (SELECT count(*) FROM tracelab.traces t WHERE t.session_id = s.id AND {expected_flags.flagged_sql('t')})"
-    " AS expected_flagged")
+    " AS expected_flagged,"
+    # The conversation's first question (its first turn's input), to title its row by (14 Nov 2026).
+    " (SELECT left(t.input, 500) FROM tracelab.traces t WHERE t.session_id = s.id"
+    "  AND t.organization_id = s.organization_id ORDER BY t.turn_index LIMIT 1) AS first_question")
 
 
 def _stats(spec_version: str | None) -> str:
@@ -605,23 +608,40 @@ def _session_out(r: Mapping[str, Any]) -> dict[str, Any]:
         out["status"] = "failed" if r["failed"] else "ok"
         out["stale"] = bool(r["stale"])
         out["expected_flagged"] = int(r.get("expected_flagged") or 0)
+        out["first_question"] = r.get("first_question")
+    # Asked on this environment, or copied here from another (its origin is then a machine name, not a place).
+    out["asked_here"] = r["origin"] == origin()
     return out
 
 
 async def list_sessions(m: labelling.Member, *, run_tag: str | None = None, type: str | None = None,  # noqa: A002
                         status: str | None = None, level: str | None = None, verdict: str | None = None,
                         needs_sme: bool = False, stale: bool = False, origin: str | None = None,
-                        all_attempts: bool = False, before: datetime | None = None, limit: int = 50) -> dict[str, Any]:
+                        all_attempts: bool = False, before: datetime | None = None, limit: int = 50,
+                        ids: Sequence[str] | None = None, company: str | None = None,
+                        since: datetime | None = None, until: datetime | None = None) -> dict[str, Any]:
     """The sessions the caller may open, newest first: {"sessions": [...], "next": cursor or None}.
 
     A scenario asked more than once under one run tag shows its latest attempt only, unless all_attempts. A session's
-    status is "failed" when a turn did not end ok or any step in it failed, else "ok"."""
+    status is "failed" when a turn did not end ok or any step in it failed, else "ok". `ids` narrows the list to those
+    sessions and `company` to one company (only for the platform team and a consultant; anyone else sees their own
+    company's anyway): a run's conversations (run_sessions, 14 Nov 2026)."""
     labelling.require_active(m)
     if status not in (None, "", "ok", "failed"):
         raise Invalid("bad_status", "A session's status is ok or failed.")
-    scope, p = runs._scope(m, "s")
+    scope, p = runs._scope(m, "s", company)
     inner, outer = [scope], ["(CAST(:all AS boolean) OR x.rn = 1 OR x.scenario_id IS NULL OR x.run_tag IS NULL)"]
     p["all"] = bool(all_attempts)
+    if ids is not None:
+        inner.append("s.id = ANY(CAST(:ids AS text[]))")
+        p["ids"] = list(ids)
+    # A batch's window of session starts (a sessions run, 14 Nov 2026).
+    if since is not None:
+        inner.append("s.started_at >= :since")
+        p["since"] = since
+    if until is not None:
+        inner.append("s.started_at < :until")
+        p["until"] = until
     if run_tag:
         inner.append("s.run_tag = :run_tag")
         p["run_tag"] = run_tag
@@ -675,6 +695,93 @@ async def list_sessions(m: labelling.Member, *, run_tag: str | None = None, type
             x["scores"] = scores.session_scores(of.get(x["id"], []))
     more = len(sessions) == p["lim"]
     return {"sessions": sessions, "next": sessions[-1]["started_at"] if more else None}
+
+
+#: The title prefix of a run the sync makes from a run tag's sessions (runs.sync_sessions).
+async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = False,
+                       before: datetime | None = None) -> dict[str, Any]:
+    """A run's conversations, one row per session (14 Nov 2026, Hussain: the Sessions tab moved into Runs):
+
+        mode       "sessions" for a run made from a run tag's sessions: the sessions of its batch (runs._batches: the
+                   tag's sessions of the run's company that started within the batch's window, 14 Nov 2026),
+                   latest attempt only unless all_attempts, as the Sessions list showed them;
+                   "live" for a person's day: the sessions (chat conversations, run tag "chat") its questions' turns
+                   are traces of; a conversation that spans two days is a row of both, naming only that day's turns;
+                   "questions" for a run typed on the page or imported: no rows, it keeps its questions view.
+        sessions   rows shaped as GET /eval/sessions rows, each with the run's own "codes" and "turn_ids" in it
+        waiting    the run's questions whose conversation is not filed yet: code, question, asked_at, turn_id
+        elsewhere  a live day's scenario questions (asked by the Codex agent before 13 Nov 2026 and synced into the
+                   day): not rows of the day, which keeps only what people asked by hand, but where each is filed
+                   (code, session_id, turn_id), so a link to one still opens its conversation. A turn not filed yet
+                   is known as a scenario turn by the chat's own record of its session id. For a sessions run made
+                   before batches, its questions whose conversation is in a later batch (or not on this page).
+        next       the cursor for older rows, as list_sessions
+
+    Read only, and only the run's own company: the run is found within the caller's scope (another company's is not
+    found), and every session and trace read is narrowed to the run's company."""
+    labelling.require_active(m)
+    async with conversations._lab_read() as conn:
+        run = await runs._run_row(conn, m, code)
+        batch = await runs.batch_of(conn, run)
+        out_run = runs.run_out(run, batch)
+        tag = batch["run_tag"] if batch else None
+        mode = "live" if run["kind"] == "production" else "sessions" if tag else "questions"
+        if mode == "questions":
+            return {"run": out_run, "mode": mode, "sessions": [], "waiting": [], "elsewhere": [], "next": None}
+        qs = (await conn.execute(text(
+            "SELECT q.seq_no, q.question, q.asked_at, l.turn_id FROM tracelab.lab_questions q"
+            " JOIN tracelab.lab_question_traces l ON l.question_id = q.id"
+            " WHERE q.run_id = CAST(:rid AS uuid) ORDER BY q.seq_no, l.created_at, l.turn_id"),
+            {"rid": run["id"]})).mappings().all()
+        org = run["organization_id"]
+        filed = {r[0]: r[1] for r in (await conn.execute(text(
+            "SELECT t.id, t.session_id FROM tracelab.traces t WHERE t.id = ANY(CAST(:ids AS text[]))"
+            " AND t.organization_id IS NOT DISTINCT FROM CAST(:org AS uuid)"),
+            {"ids": [q["turn_id"] for q in qs], "org": org})).all()} if qs else {}
+    scenario_turns: set[str] = set()
+    if mode == "live":
+        scenario_turns = {t for t, sid in filed.items() if str(sid).startswith(PREFIX + SEP)}
+        unfiled = [q["turn_id"] for q in qs if q["turn_id"] not in filed and not str(q["turn_id"]).startswith("browser:")]
+        if unfiled:
+            async with conversations._read() as conn:
+                scenario_turns |= {r[0] for r in (await conn.execute(text(
+                    f"SELECT tt.turn_id FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
+                    " AND tt.session_id LIKE 'scn\\_\\_%'"), {"ids": unfiled})).all()}
+    mine: dict[str, dict[str, list[str]]] = {}
+    waiting: list[dict[str, Any]] = []
+    elsewhere: list[dict[str, Any]] = []
+    for q in qs:
+        qcode = runs.question_code(run["run_no"], q["seq_no"])
+        sid = filed.get(q["turn_id"])
+        if q["turn_id"] in scenario_turns:
+            if sid is not None:
+                elsewhere.append({"code": qcode, "session_id": sid, "turn_id": q["turn_id"]})
+            continue
+        if sid is None:
+            waiting.append({"code": qcode, "question": q["question"], "asked_at": runs._iso(q["asked_at"]),
+                            "turn_id": q["turn_id"]})
+            continue
+        got = mine.setdefault(sid, {"codes": [], "turn_ids": []})
+        if qcode not in got["codes"]:
+            got["codes"].append(qcode)
+        got["turn_ids"].append(q["turn_id"])
+    if org is None:
+        listed: dict[str, Any] = {"sessions": [], "next": None}
+    elif mode == "sessions":
+        listed = await list_sessions(m, run_tag=tag, all_attempts=all_attempts, before=before, limit=LIST_MAX,
+                                     company=org, since=batch["since"], until=batch["until"])
+    else:
+        listed = await list_sessions(m, ids=sorted(mine), all_attempts=True, before=before, limit=LIST_MAX,
+                                     company=org) if mine else {"sessions": [], "next": None}
+    sessions = [s for s in listed["sessions"] if s.get("organization_id") == org]
+    for s in sessions:
+        s.update(mine.get(s["id"]) or {"codes": [], "turn_ids": []})
+    if mode == "sessions":
+        shown = {s["id"] for s in sessions}
+        elsewhere += [{"code": c, "session_id": sid, "turn_id": t} for sid, got in mine.items() if sid not in shown
+                      for c, t in zip(got["codes"], got["turn_ids"])]
+    return {"run": out_run, "mode": mode, "sessions": sessions, "waiting": waiting, "elsewhere": elsewhere,
+            "next": listed["next"]}
 
 
 async def _session_row(conn: Any, m: labelling.Member, session_id: str) -> Mapping[str, Any]:

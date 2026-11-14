@@ -149,10 +149,12 @@ export function SyncBar({ status, busy, said, error, onPush, onCheck }) {
   );
 }
 
-// The sessions as a table. `rows` null while reading.
-export function SessionsTable({ rows, runTag, onOpen }) {
-  if (rows == null) return <p className="lab-small" role="status">{'Reading the sessions…'}</p>;
-  if (!rows.length) {
+// The sessions as a table. `rows` null while reading. `waiting` (a run's questions whose conversation is not filed yet,
+// 14 Nov 2026) are rows that cannot be opened until a sync files them: the question, its code and "Reading in…".
+export function SessionsTable({ rows, runTag, onOpen, waiting, readingText }) {
+  if (rows == null) return <p className="lab-small" role="status">{readingText || 'Reading the sessions…'}</p>;
+  const held = waiting || [];
+  if (!rows.length && !held.length) {
     return (
       <div className="lab-empty lab-empty-big">
         <h2>{runTag ? 'No sessions for ' + runTag + ' yet.' : 'No sessions yet.'}</h2>
@@ -170,14 +172,31 @@ export function SessionsTable({ rows, runTag, onOpen }) {
             <th scope="col">{'Started'}</th></tr>
         </thead>
         <tbody>
+          {held.map((w) => (
+            <tr key={'w-' + (w.turn_id || w.code)} className="lab-ses-waiting">
+              <td>
+                <strong>{w.question || '—'}</strong>
+                <div className="lab-small lab-mono">{w.code}</div>
+                <div className="lab-small">{'Its conversation is filed by the next sync.'}</div>
+              </td>
+              <td>{'—'}</td>
+              <td>{'—'}</td>
+              <td>{'—'}</td>
+              <td><span className="lab-chip">{'Reading in…'}</span></td>
+              {SHOW_SCORES ? <><td>{'—'}</td><td>{'—'}</td><td>{'—'}</td></> : null}
+              <td>{fmtWhen(w.asked_at) || '—'}</td>
+            </tr>
+          ))}
           {rows.map((raw) => {
             const r = sessionRow(raw);
             return (
               <tr key={r.id}>
                 <td>
-                  <button type="button" className="lab-link lab-ses-open" onClick={() => onOpen(r.id)}>{r.title}</button>
-                  <div className="lab-small lab-mono">{r.id}</div>
-                  {r.origin ? <div className="lab-small">{'asked on ' + r.origin + (r.attempt > 1 ? ' · attempt ' + r.attempt : '')}</div> : null}
+                  <button type="button" className="lab-link lab-ses-open" onClick={() => onOpen(r.id)}
+                    title={r.question ? r.questionFull : undefined}>{r.question || r.title}</button>
+                  {r.question && r.scenario ? <> <span className="lab-chip lab-chip-synth">{r.scenario}</span></> : null}
+                  <div className="lab-small lab-mono" style={{ userSelect: 'all' }} title="Session id">{r.id}</div>
+                  {r.askedText ? <div className="lab-small">{r.askedText}</div> : null}
                   {raw.stale ? <div className="lab-small">{'Expected outcome is out of date'}</div> : null}
                   {r.expectedFlagged ? <span className="lab-chip lab-ses-bad">{'Expected outcome flagged on ' + plural(r.expectedFlagged, 'turn', 'turns')}</span> : null}
                 </td>

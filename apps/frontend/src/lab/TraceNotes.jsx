@@ -11,7 +11,8 @@ import { nextStepFor } from './NextStep.jsx';
 import { NOTE_MAX, ROLE_TEXT, errText, isStale, selectedIn } from './logic/labelling.js';
 import { SCENARIO } from './logic/steps.js';
 import { fmtWhen } from './logic/format.js';
-import { keyTitles, nodeKeys, traceNotesIndex } from './logic/traceNotes.js';
+import { keyTitles, nodeKeys, stepOfKey, traceNotesIndex } from './logic/traceNotes.js';
+import { AnchorLine, NotePin, quoteAt, relTime } from './TraceTab.jsx';
 
 const ROLES = Object.assign({ consultant: 'Consultant' }, ROLE_TEXT);
 const TURN_TITLE = 'Turn as a whole';
@@ -24,8 +25,94 @@ export function noteView(x, me) {
     id: x.id, lineage: x.lineage_id || x.id, key: x.step_key, block: '', note: x.note || '', quote: x.quote || '',
     who: x.reviewer_email || 'Someone', role: ROLES[x.reviewer_role] || x.reviewer_role || '', at: x.at || '',
     when: fmtWhen(x.at), edited: !!x.edited, mine: !!me && x.reviewer_id === me, expected: x.expected || '',
-    onlyIf: x.only_if || ''
+    onlyIf: x.only_if || '', title: x.step_title || ''
   };
+}
+
+// ── Where a note is (14 Nov 2026) ────────────────────────────────────────────────────────────────────────────────────
+// Every card names the span its note is on and the side: the span's kind, the spans above it (chat aside), its name and
+// "Input" / "Output" ("compliance › analyst › Output"). Notes are numbered in tree order, the same numbers the trace
+// view puts in the text, by the block headings and in "Notes on this turn".
+const TURN_ANCHOR = Object.freeze({ type: null, path: [], name: TURN_TITLE, side: null, text: TURN_TITLE });
+const SIDE_TEXT = { in: 'Input', out: 'Output' };
+const atOf = (n) => { const t = Date.parse(n.at || ''); return Number.isNaN(t) ? 0 : t; };
+
+// The anchor of one span's side: { type, path (the spans above it, chat aside), name, side, text }.
+export function anchorOfNode(nodes, id, side) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const byId = new Map(list.map((n) => [String(n.id), n]));
+  const node = byId.get(String(id));
+  if (!node) return null;
+  const path = [];
+  const seen = new Set([String(node.id)]);
+  for (let p = byId.get(String(node.parent_id)); p && p.parent_id != null && !seen.has(String(p.id)); p = byId.get(String(p.parent_id))) {
+    seen.add(String(p.id));
+    path.unshift(String(p.name || ''));
+  }
+  const name = String(node.name || '');
+  const s = SIDE_TEXT[side] ? side : null;
+  return { type: node.type || 'span', path, name, side: s, text: path.concat([name]).join(' › ') + (s ? ' › ' + SIDE_TEXT[s] : '') };
+}
+
+// The anchor of a note key: its span and side, the turn as a whole, the orchestrator (older notes), or the title it was
+// saved with when its span is no longer in the trace.
+export function noteAnchor(key, record, nodes, turnId, title) {
+  const k = String(key || '');
+  if (turnId && k === turnId + SCENARIO) return TURN_ANCHOR;
+  const at = k ? stepOfKey(record, nodes, k) : null;
+  const a = at ? anchorOfNode(nodes, at.id, at.side) : null;
+  if (a) return a;
+  if (/:orchestrator$/.test(k)) return { type: 'agent', path: [], name: 'Orchestrator', side: null, text: 'Orchestrator' };
+  const name = String(title || '') || 'A span no longer in this trace';
+  return { type: 'span', path: [], name, side: null, text: name };
+}
+
+// The notes index (logic/traceNotes.js) numbered and anchored. In tree order, Input before Output; on one side the notes
+// on the whole block first, then quotes in the order they sit in the text, then quotes no longer there; Other notes last.
+// Each note gains { n, nodeId, side, anchor, found (its quote is still in the text; null without a quote) }.
+// Returns { list (every numbered note), slots, other, scenario (the turn's comments: anchored, not numbered) }.
+export function placeNotes(ix, record, nodes, turnId) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const index = ix || { slots: {}, other: [], scenario: [] };
+  const root = list.find((n) => n && n.parent_id == null) || null;
+  const out = { list: [], slots: {}, other: [], scenario: [] };
+  let n = 0;
+  list.forEach((node) => {
+    const id = String(node.id);
+    ['in', 'out'].forEach((side) => {
+      const items = (index.slots || {})[id + ':' + side] || [];
+      if (!items.length) return;
+      const value = side === 'in' ? node.input : node.output;
+      const anchor = anchorOfNode(list, id, side);
+      const ranked = items.map((x) => {
+        const at = x.quote ? quoteAt(value, x.quote) : -1;
+        return { x, at, group: !x.quote ? 0 : at >= 0 ? 1 : 2 };
+      });
+      ranked.sort((a, b) => a.group - b.group || (a.group === 1 ? a.at - b.at : 0) || atOf(a.x) - atOf(b.x));
+      out.slots[id + ':' + side] = ranked.map(({ x, at }) => {
+        n += 1;
+        const v = Object.assign({}, x, { n, nodeId: id, side, anchor, found: x.quote ? at >= 0 : null });
+        out.list.push(v);
+        return v;
+      });
+    });
+  });
+  out.other = (index.other || []).slice().sort((a, b) => atOf(a) - atOf(b)).map((x) => {
+    n += 1;
+    const v = Object.assign({}, x, { n, nodeId: root ? String(root.id) : null, side: null,
+      anchor: noteAnchor(x.key, record, list, turnId, x.title), found: null });
+    out.list.push(v);
+    return v;
+  });
+  out.scenario = (index.scenario || []).map((x) => Object.assign({}, x, { anchor: TURN_ANCHOR }));
+  return out;
+}
+
+// "AS" for aasim.shaik@…, "S" for sme@….
+export function initialsOf(who) {
+  const local = String(who || '').split('@')[0];
+  const parts = local.split(/[._\-\s]+/).filter(Boolean);
+  return parts.slice(0, 2).map((p) => p[0].toUpperCase()).join('') || '?';
 }
 
 function clearPageSelection() {
@@ -38,7 +125,7 @@ export const NOTES_ON = Object.freeze({
 });
 
 // The note editor, in the notes column beside its block: free text, Save / Cancel, Escape cancels, Ctrl/Cmd+Enter saves.
-export function NoteEditor({ value, quote, target, editing, saving, error, onChange, onSave, onCancel }) {
+export function NoteEditor({ value, quote, target, anchor, editing, saving, error, onChange, onSave, onCancel }) {
   const ref = React.useRef(null);
   React.useEffect(() => {
     const el = ref.current;
@@ -59,7 +146,8 @@ export function NoteEditor({ value, quote, target, editing, saving, error, onCha
   const label = editing ? 'Edit your note' : 'New note';
   return (
     <div className="lab-ne" onKeyDown={onKey}>
-      <div className="lab-ne-head">{label + (target ? ' · ' + target : '')}</div>
+      {anchor ? <div className="lab-ne-head lab-an-head"><span>{label + ' on'}</span><AnchorLine anchor={anchor} /></div>
+        : <div className="lab-ne-head">{label + (target ? ' · ' + target : '')}</div>}
       {quote ? <blockquote className="lab-quote lab-quote-small">{quote}</blockquote> : null}
       <textarea ref={ref} className="lab-note lab-ne-text" rows={4} maxLength={NOTE_MAX} value={text} aria-label={label}
         placeholder="What you notice here, in your own words" onChange={(e) => change(e.target.value)} disabled={!!saving} />
@@ -73,33 +161,52 @@ export function NoteEditor({ value, quote, target, editing, saving, error, onCha
   );
 }
 
+// One note: where it is (its number, the span and side), what it quotes and says, then who wrote it and when (the exact
+// time on hover), with Edit / Delete on the reader's own. A quote no longer in the span's text says so.
 function NoteItem({ n, busy, confirming, on }) {
+  const changed = !!n.quote && n.found === false;
+  const rel = relTime(n.at);
   return (
-    <li className={'lab-nt' + (n.mine ? ' lab-nt-mine' : '')}>
-      {n.quote ? <blockquote className="lab-quote lab-quote-small">{n.quote}</blockquote> : null}
+    <li className={'lab-nt' + (n.mine ? ' lab-nt-mine' : '')} data-note={n.n ? n.id : undefined} data-note-card={n.id} tabIndex={-1}>
+      {n.anchor ? (
+        <div className="lab-an-head">
+          {n.n ? <NotePin n={n.n} id={n.id} /> : null}
+          <AnchorLine anchor={n.anchor} />
+          {changed ? <span className="lab-an-changed">{'(quoted text changed)'}</span> : null}
+        </div>
+      ) : null}
+      {n.quote ? <blockquote className={'lab-quote lab-quote-small' + (changed ? ' lab-an-stale' : '')}>{n.quote}</blockquote> : null}
       {n.note ? <div className="lab-nt-text"><Clamp text={n.note}>{n.note}</Clamp></div>
         : (n.quote || n.expected ? null : <div className="lab-small">{'No note written.'}</div>)}
       {n.expected ? <div className="lab-small lab-rule"><strong>{'Should: '}</strong>{n.expected}</div> : null}
       {n.onlyIf ? <div className="lab-small lab-rule"><strong>{'Only if: '}</strong>{n.onlyIf}</div> : null}
-      <div className="lab-nt-by">{n.mine ? 'You' : n.who}{n.role ? <span className="lab-nt-role">{' · ' + n.role}</span> : null}</div>
-      <div className="lab-small">{'Annotated at ' + (n.when || '—') + (n.edited ? ' · edited' : '')}</div>
-      {n.mine ? (confirming ? (
-        <div className="lab-row lab-nt-actions" role="group" aria-label="Delete this note?">
-          <span className="lab-small">{'Delete this note?'}</span>
-          <button type="button" className="lab-link lab-danger" onClick={() => on.deleteNote(n)} disabled={busy}>{'Delete'}</button>
-          <button type="button" className="lab-link" onClick={() => on.askDelete(null)} disabled={busy}>{'Keep'}</button>
-        </div>
-      ) : (
-        <div className="lab-row lab-nt-actions">
-          <button type="button" className="lab-link" onClick={() => on.editNote(n)} disabled={busy}>{'Edit'}</button>
-          <button type="button" className="lab-link lab-danger" onClick={() => on.askDelete(n)} disabled={busy}>{'Delete'}</button>
-        </div>
-      )) : null}
+      <div className="lab-an-foot">
+        <span className="lab-an-avatar" aria-hidden="true">{initialsOf(n.who)}</span>
+        <span className="lab-an-by">
+          <span className="lab-an-who" title={n.who}>{n.mine ? 'You' : n.who}</span>
+          {n.role ? <span className="lab-nt-role">{n.role}</span> : null}
+          {rel ? <time dateTime={n.at} title={n.when || undefined}>{rel}</time> : null}
+          {n.edited ? <span>{'edited'}</span> : null}
+        </span>
+        {n.mine ? (confirming ? (
+          <span className="lab-row lab-nt-actions" role="group" aria-label="Delete this note?">
+            <span className="lab-small">{'Delete this note?'}</span>
+            <button type="button" className="lab-link lab-danger" onClick={() => on.deleteNote(n)} disabled={busy}>{'Delete'}</button>
+            <button type="button" className="lab-link" onClick={() => on.askDelete(null)} disabled={busy}>{'Keep'}</button>
+          </span>
+        ) : (
+          <span className="lab-row lab-nt-actions">
+            <button type="button" className="lab-link" onClick={() => on.editNote(n)} disabled={busy}>{'Edit'}</button>
+            <button type="button" className="lab-link lab-danger" onClick={() => on.askDelete(n)} disabled={busy}>{'Delete'}</button>
+          </span>
+        )) : null}
+      </div>
     </li>
   );
 }
 
-// Everyone's notes on one place, the reader's own first; the one being edited is its editor.
+// Everyone's notes on one place, in number order (the order their marks sit in the text); the one being edited is its
+// editor.
 export function NoteList({ items, editor, busy, confirming, on }) {
   const h = Object.assign({}, NOTES_ON, on || {});
   if (!items || !items.length) return null;
@@ -107,7 +214,7 @@ export function NoteList({ items, editor, busy, confirming, on }) {
     <ul className="lab-nts" aria-label="Notes">
       {items.map((n) => (editor && editor.edit && editor.edit.lineage === n.lineage ? (
         <li key={n.id} className="lab-nt lab-nt-editing">
-          <NoteEditor value={editor.text} quote={editor.quote} editing saving={editor.saving} error={editor.error}
+          <NoteEditor value={editor.text} quote={editor.quote} anchor={n.anchor} editing saving={editor.saving} error={editor.error}
             onChange={h.editorText} onSave={h.editorSave} onCancel={h.editorCancel} />
         </li>
       ) : <NoteItem key={n.id} n={n} busy={!!busy} confirming={confirming === n.id} on={h} />))}
@@ -117,13 +224,13 @@ export function NoteList({ items, editor, busy, confirming, on }) {
 
 // The notes on one side (Input or Output) of a span: the editor when a note is being written there, everyone's notes,
 // an error, and Add note.
-function NotesSlot({ noteKey, title, items, editor, busy, error, confirming, on }) {
+function NotesSlot({ noteKey, title, anchor, items, editor, busy, error, confirming, on }) {
   const writing = editor && !editor.edit && editor.block === noteKey ? editor : null;
   return (
     <div className="lab-tt-notes" aria-label={'Notes on ' + title}>
       {writing ? (
-        <NoteEditor value={writing.text} quote={writing.quote} target={writing.target} saving={writing.saving} error={writing.error}
-          onChange={on.editorText} onSave={on.editorSave} onCancel={on.editorCancel} />
+        <NoteEditor value={writing.text} quote={writing.quote} target={writing.target} anchor={anchor} saving={writing.saving}
+          error={writing.error} onChange={on.editorText} onSave={on.editorSave} onCancel={on.editorCancel} />
       ) : null}
       <NoteList items={items} editor={editor} busy={busy} confirming={confirming} on={on} />
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
@@ -184,6 +291,7 @@ export function useTraceNotes({ turnId, org, record, nodes, me, labels, onSaved 
   const keys = React.useMemo(() => nodeKeys(record, list), [record, list]);
   const titles = React.useMemo(() => keyTitles(keys), [keys]);
   const notes = React.useMemo(() => traceNotesIndex(rows, record, list, me, noteView), [rows, record, list, me]);
+  const placed = React.useMemo(() => placeNotes(notes, record, list, turnId), [notes, record, list, turnId]);
   const targetOf = (key) => (turnId && key === turnId + SCENARIO ? TURN_TITLE : titles[key] || '');
   const reload = async () => {
     try {
@@ -286,24 +394,25 @@ export function useTraceNotes({ turnId, org, record, nodes, me, labels, onSaved 
     render: (id, side) => {
       const key = keyOf(id, side);
       const k = keys.get(String(id)) || {};
-      const items = notes.slots[String(id) + ':' + side] || [];
-      return <NotesSlot noteKey={key} title={side === 'in' ? k.inTitle : k.outTitle} items={items} editor={editor} busy={busy}
-        error={errors[key] || ''} confirming={confirmIn(items)} on={on} />;
+      const items = placed.slots[String(id) + ':' + side] || [];
+      return <NotesSlot noteKey={key} title={side === 'in' ? k.inTitle : k.outTitle} anchor={anchorOfNode(list, id, side)} items={items}
+        editor={editor} busy={busy} error={errors[key] || ''} confirming={confirmIn(items)} on={on} />;
     },
-    other: () => (notes.other.length ? (
+    other: () => (placed.other.length ? (
       <section className="lab-tt-other" aria-label="Other notes">
         <h3 className="lab-qp-h">{'Other notes'}</h3>
         <p className="lab-small">{'Notes on spans this trace does not show on their own.'}</p>
-        <NoteList items={notes.other} editor={editor} busy={busy} confirming={confirmIn(notes.other)} on={on} />
+        <NoteList items={placed.other} editor={editor} busy={busy} confirming={confirmIn(placed.other)} on={on} />
         {errors.other ? <div role="alert" className="lab-error">{errors.other}</div> : null}
       </section>
-    ) : null)
+    ) : null),
+    notes: placed.list
   };
   const comment = (
     <TurnComment onSave={on.saveTurnComment}>
-      <NoteList items={notes.scenario} editor={editor} busy={busy} confirming={confirmIn(notes.scenario)} on={on} />
+      <NoteList items={placed.scenario} editor={editor} busy={busy} confirming={confirmIn(placed.scenario)} on={on} />
       {errors.scenario ? <div role="alert" className="lab-error">{errors.scenario}</div> : null}
     </TurnComment>
   );
-  return { annotate, comment, notes, on, editor, busy, errors, confirming };
+  return { annotate, comment, notes, placed, on, editor, busy, errors, confirming };
 }

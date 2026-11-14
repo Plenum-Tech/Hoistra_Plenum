@@ -36,6 +36,15 @@ button.lab-lv-code:focus-visible, .lab-lv-scroll:focus-visible { outline: 2px so
 .lab-lv-matrix tbody th { position: sticky; left: 0; z-index: 1; width: 320px; min-width: 260px; max-width: 360px; background: var(--color-surface);
   font-weight: 400; }
 .lab-lv-matrix tbody tr:hover th { background: var(--color-neutral-900); }
+/* All runs (14 Nov 2026): a heading row per run. It spans the grid; its name stays in view while the grid scrolls
+   sideways. */
+.lab-lv-matrix tbody tr.lab-lv-group th { position: static; width: auto; min-width: 0; max-width: none; padding: 9px 12px 8px;
+  background: var(--color-bg); border-top: 1px solid var(--color-divider); }
+.lab-lv-matrix tbody tr.lab-lv-group:first-child th { border-top: none; }
+.lab-lv-matrix tbody tr.lab-lv-group:hover th { background: var(--color-bg); }
+.lab-lv-group-label { position: sticky; left: 12px; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.lab-lv-group-name { font-size: 13px; font-weight: 600; color: var(--color-text); }
+.lab-lv-group-count { font-size: 12px; color: var(--color-neutral-500); }
 .lab-lv-mode { min-width: 176px; }
 .lab-lv-mode-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 700; line-height: 1.4;
   color: var(--color-text); overflow-wrap: anywhere; }

@@ -97,7 +97,10 @@ def test_the_lab_engine_is_its_own_pool_and_not_read_only(monkeypatch):
     lab = db.lab_engine()
     assert lab is db.lab_engine() and lab is not db.main_engine() and lab is not database._engine
     call = calls[-1]
-    assert call["pool_size"] == 3 and call["connect_args"]["server_settings"] == {"application_name": "trace-lab"}
+    # JIT off (14 Nov 2026): the runs list's plan crossed Postgres's JIT threshold and spent ~1.2 s compiling a ~30 ms
+    # query; Trace Lab's reads are all short, so compiling never pays.
+    assert call["pool_size"] == 3 and call["connect_args"]["server_settings"] == {"application_name": "trace-lab",
+                                                                                  "jit": "off"}
     assert "ssl" not in call["connect_args"]      # a local host with no sslmode: plain connection
     assert lab.pool.size() == 3
 

@@ -172,7 +172,7 @@ test('a question whose answer was asked on another machine shows its stored trac
   const data = Object.assign({}, DATA, { active: { turn_id: 'turn-p1', organization_id: 'o-1', conversation_key: null, trace: null, stored } });
   const out = html(Q.QuestionView, { data, tree: Object.assign({}, TREE_OK, { stored: true }) });
   assert.ok(out.includes('asked on ubuntu-4gb-hel1-2'));
-  assert.ok(out.includes('?view=sessions&amp;session=scn__frontend_nov13__frontend-pilot-001__1'));
+  assert.ok(out.includes('?view=runs&amp;session=scn__frontend_nov13__frontend-pilot-001__1'), 'the session inside Runs (14 Nov 2026)');
   assert.ok(out.includes('run tag frontend_nov13'));
   assert.ok(!out.includes('This answer can no longer be read'));
   // an answer the chat here recorded says nothing of the kind
@@ -211,16 +211,17 @@ test('runs: the sessions run of a tag is known by its title and the sync that ma
   assert.equal(R.sessionsTagOf(null), null);
 });
 
-test('runs: clicking a sessions run opens its tag; any other run opens as a run', () => {
+// 14 Nov 2026 (Hussain): the Sessions tab is gone, so every run opens inside Runs; a sessions run and a live run open
+// there as their conversations (runSessions.test.mjs).
+test('runs: clicking any run opens it inside Runs, a sessions run too', () => {
   const opened = [];
   const out = html(R.RunsList, { runs: [
     { code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync', n_questions: 40 },
     { code: 'R48', title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync', n_questions: 4 }],
-  onOpen: (c) => opened.push(['run', c]), onOpenTag: (t) => opened.push(['tag', t]) });
+  onOpen: (c) => opened.push(['run', c]) });
   assert.ok(out.includes('Sessions · frontend_nov13_202718'));
   assert.equal(typeof R.openRow, 'function');
-  R.openRow({ code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync' }, (c) => opened.push(['run', c]), (t) => opened.push(['tag', t]));
-  R.openRow({ code: 'R48', title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync' }, (c) => opened.push(['run', c]), (t) => opened.push(['tag', t]));
-  R.openRow({ code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync' }, (c) => opened.push(['run', c]), undefined);
-  assert.deepEqual(opened, [['tag', 'frontend_nov13_202718'], ['run', 'R48'], ['run', 'R47']], 'with nowhere to open a tag it opens as a run');
+  R.openRow({ code: 'R47', title: 'Sessions · frontend_nov13_202718', kind: 'synthetic', source: 'sync' }, (c) => opened.push(['run', c]));
+  R.openRow({ code: 'R48', title: 'aasim@x.test · 2026-11-13', kind: 'production', source: 'sync' }, (c) => opened.push(['run', c]));
+  assert.deepEqual(opened, [['run', 'R47'], ['run', 'R48']]);
 });
