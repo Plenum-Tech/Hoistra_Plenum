@@ -69,6 +69,13 @@ export const labApi = {
   // The Trace tab (9 Nov 2026): the question's answer as Langfuse's tree of steps, read only when the tab opens.
   qTree: (code, turn) => call('GET', '/lab/q/' + enc(code) + '/tree', { query: turn ? { turn } : {} }),
   setExpected: (code, body) => call('PUT', '/lab/q/' + enc(code) + '/expected', { body }),
+  // A turn's expected answer for the session page: a live question's draft from SPEC.md, or a person's (14 Nov 2026).
+  turnExpected: (id) => call('GET', '/lab/turns/' + enc(id) + '/expected'),
+  // Run again now: the answer key's values read afresh, read-only, nothing stored (16 Nov 2026).
+  turnExpectedCheck: (id) => call('POST', '/lab/turns/' + enc(id) + '/expected/check'),
+  // Correcting Hoistra's query: its records query as fields, and that query with a person's changes, read again.
+  turnExpectedQuery: (id) => call('GET', '/lab/turns/' + enc(id) + '/expected/query'),
+  turnExpectedTry: (id, body) => call('POST', '/lab/turns/' + enc(id) + '/expected/query', { body }),
   linkTrace: (code, turnId) => call('POST', '/lab/q/' + enc(code) + '/traces', { body: { turn_id: turnId } }),
   answerCandidates: (code, q) => call('GET', '/lab/q/' + enc(code) + '/candidates', { query: q ? { q } : {} }),
   setCell: (code, mode, value) => call('PUT', '/lab/q/' + enc(code) + '/cells', { body: { mode, value } }),
@@ -120,6 +127,8 @@ export const labApi = {
   evalSessions: (query) => call('GET', '/eval/sessions', { query }),
   evalSession: (id) => call('GET', '/eval/sessions/' + enc(id)),
   evalTraceTree: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/tree', { timeoutMs: 60000 }),
+  // The answer as Hoistra showed it: its cards and layout from the chat's own record of the turn (16 Nov 2026).
+  evalTraceAsShown: (traceId) => call('GET', '/eval/traces/' + enc(traceId) + '/as-shown'),
   evalScenarios: (query) => call('GET', '/eval/scenarios', { query }),
   evalImportScenarios: (file, dryRun) => {
     const form = new FormData();

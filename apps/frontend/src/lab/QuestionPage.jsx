@@ -604,7 +604,8 @@ export function QuestionView(props) {
   else if (!tr) answer = <p className="lab-small" role="status">{'Reading the trace…'}</p>;
   else {
     const v = traceView || {};
-    answer = <TraceView key={turnId} tree={tr} annotate={annotate} selectedId={v.selectedId} view={v.view} pane={v.pane} mode={v.mode} />;
+    answer = <TraceView key={turnId} tree={tr} annotate={annotate} selectedId={v.selectedId} view={v.view} pane={v.pane} mode={v.mode}
+      loadShown={() => labApi.evalTraceAsShown(turnId)} />;
   }
   return (
     <article className="lab-qp" aria-label={'Question ' + (q.code || '')}>

@@ -44,6 +44,9 @@ SCENARIO_LOOKBACK = timedelta(hours=48)
 #: The most questions one labels grid shows (13 Nov 2026); the answer says how many there are.
 MATRIX_MAX = 2000
 SYNC_LOCK = 4_201_011
+#: Held only while one expected-answer version is written (16 Nov 2026): a person's save and the drafting round's
+#: check-then-insert queue behind each other, so a draft never lands on top of a person's answer written meanwhile.
+EXPECTED_LOCK = 4_201_019
 IMPORT_MAX = 2000
 TITLE_MAX = 200
 QUESTION_MAX = 4000
@@ -408,8 +411,8 @@ async def _insert_expected(conn: Any, m: labelling.Member | None, *, question_id
                            expected_id: str | None, evidence: Any, source: str) -> None:
     await conn.execute(text(
         "INSERT INTO tracelab.lab_expected_answers (question_id, expected, expected_id, evidence, source, author_email, "
-        "created_by) VALUES (CAST(:qid AS uuid), :expected, :eid, CAST(:evidence AS jsonb), :source, :email, "
-        "CAST(:by AS uuid))"),
+        "created_by, created_at) VALUES (CAST(:qid AS uuid), :expected, :eid, CAST(:evidence AS jsonb), :source, :email, "
+        "CAST(:by AS uuid), clock_timestamp())"),
         {"qid": question_id, "expected": expected, "eid": expected_id,
          "evidence": json.dumps(evidence) if evidence is not None else None, "source": source,
          "email": m.email if m else None, "by": m.user_id if m else None})
@@ -473,8 +476,10 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
         3. live questions        the chat's newer answers, one run per person per day (sync_live), then any other
                                  session turn no run holds yet (as the automatic sync always took them)
 
-    Returns new_questions, new_runs, more, chat_sessions, codex_sessions, and failed / skipped: {step: reason} with
-    step one of questions, chat, codex, runs."""
+        4. expected answers      each new live question's expected answer, drafted from SPEC.md (auto_expected)
+
+    Returns new_questions, new_runs, more, chat_sessions, codex_sessions, drafted_expected, and failed / skipped:
+    {step: reason} with step one of questions, chat, codex, runs, expected."""
     labelling.require_active(m)
     from . import eval_store
 
@@ -482,7 +487,7 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
     now = now or datetime.now(timezone.utc)
     company = {} if org is None else {"org": org}
     out: dict[str, Any] = {"new_questions": 0, "new_runs": 0, "more": False, "chat_sessions": 0, "codex_sessions": 0,
-                           "failed": {}, "skipped": {}}
+                           "drafted_expected": 0, "failed": {}, "skipped": {}}
     if not can_curate(m):
         out["skipped"]["codex"] = CODEX_SKIPPED
     else:
@@ -526,6 +531,15 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
     except Exception as exc:  # noqa: BLE001
         out["failed"].setdefault("runs", _why(exc))
         log.warning("trace_lab.runs.sync_session_runs_failed", error=_why(exc))
+    try:
+        # Last, the new live questions' expected answers, drafted from SPEC.md (auto_expected): live only.
+        from . import auto_expected
+
+        drafted = await auto_expected.draft_for_live(org, now=now)
+        out["drafted_expected"] = int(drafted.get("drafted") or 0)
+    except Exception as exc:  # noqa: BLE001
+        out["failed"]["expected"] = _why(exc)
+        log.warning("trace_lab.runs.sync_expected_failed", error=_why(exc))
     return out
 
 
@@ -993,9 +1007,55 @@ async def set_expected(m: labelling.Member, code: str, *, expected: str, expecte
                 raise Invalid("rule_not_found", f"{rule} is not a rule of the approved specification.")
             evidence = {**evidence, "spec_rule": rule}
         await loop.refuse_copy(conn, row["id"], expected)
+        await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": EXPECTED_LOCK})
         await _insert_expected(conn, m, question_id=row["id"], expected=expected,
                                expected_id=_opt(expected_id, 200, "expected_id"), evidence=evidence, source="manual")
     return (await get_question(m, code))["expected"]
+
+
+async def turn_expected(m: labelling.Member, turn_id: str) -> dict[str, Any]:
+    """A turn's expected answer for the session page (14 Nov 2026): the newest one of the question the turn is, of any
+    source. `draft` is true for one the coding agent drafted from SPEC.md (auto_expected), with the spec version and the
+    rules it cites; `from_draft` for a person's version saved from such a draft (Accept on the session page). `live` is
+    true only for a question of a live day asked by hand: the page shows this on live turns only, never on Codex ones. A
+    turn of another company is not found."""
+    labelling.require_active(m)
+    where, p = _scope(m, "r")
+    empty = {"question": None, "expected": None, "draft": False, "from_draft": False, "decision": None,
+             "spec_version": None, "rules": [], "live": False, "kind": None, "company": None, "text": None}
+    pick = ("SELECT q.id::text AS id, q.seq_no, q.question AS text, q.organization_id::text AS org, r.run_no, r.kind, "
+            + SCENARIO_Q
+            + " AS scenario"
+            " FROM tracelab.lab_question_traces l JOIN tracelab.lab_questions q ON q.id = l.question_id"
+            " JOIN tracelab.lab_runs r ON r.id = q.run_id WHERE l.turn_id = :t")
+    order = " ORDER BY (l.source = 'sync') DESC, l.created_at, q.id LIMIT 1"
+    async with db.lab_engine().connect() as conn:
+        row = (await conn.execute(text(f"{pick} AND {where}{order}"), {**p, "t": turn_id})).mappings().first()
+        if row is None:
+            if (await conn.execute(text(pick + order), {"t": turn_id})).first() is not None:
+                raise NotFound("turn_not_found", "That turn is not in Trace Lab.")
+            return empty
+        e = (await conn.execute(text(
+            "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence, e.source, e.author_email, e.created_at"
+            " FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:q AS uuid)"
+            " ORDER BY e.created_at DESC, e.id DESC LIMIT 1"), {"q": row["id"]})).mappings().first()
+        decision = (await conn.execute(text(
+            "SELECT v.decision FROM tracelab.lab_reviews v WHERE v.subject_kind = 'expected_answer'"
+            " AND v.subject_id = CAST(:e AS uuid) ORDER BY v.created_at DESC LIMIT 1"),
+            {"e": e["id"]})).scalar_one_or_none() if e is not None else None
+    out = dict(empty, question=question_code(row["run_no"], row["seq_no"]), company=row["org"], text=row["text"],
+               live=row["kind"] == "production" and not row["scenario"])
+    if e is not None:
+        exp = expected_out(e)
+        ev = exp["evidence"] if isinstance(exp["evidence"], dict) else {}
+        draft = e["source"] == "coding_agent"
+        # Accepted on the session page: the person's own version of a draft (SPEC.md, or the answer key's values).
+        taken = not draft and ev.get("drafted_from") in ("SPEC.md", "answer_key")
+        out["kind"] = {"SPEC.md": "spec", "answer_key": "answer_key"}.get(ev.get("drafted_from"), "person")
+        rules = [str(x) for x in ev.get("rules") or []] if draft else ([str(ev["spec_rule"])] if ev.get("spec_rule") else [])
+        out.update(expected=exp, draft=draft, from_draft=taken, decision=decision,
+                   spec_version=ev.get("spec_version") if (draft or taken) else None, rules=rules)
+    return out
 
 
 async def link_trace(m: labelling.Member, code: str, turn_id: str) -> dict[str, Any]:

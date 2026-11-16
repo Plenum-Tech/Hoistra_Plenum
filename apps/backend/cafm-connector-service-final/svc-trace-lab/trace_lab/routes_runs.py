@@ -11,6 +11,10 @@ progress, under /api/trace-lab (trace_lab.app ROUTERS):
     GET    /lab/runs/{code}/sessions          its conversations: a sessions run's or a live day's sessions, and waiting rows
     GET    /lab/runs/{code}/labels            its labels view: questions x failure modes, each person's newest cell
     GET    /lab/labels                        All runs' labels: every run the top bar lists, each with its own rows
+    GET    /lab/turns/{turn_id}/expected      a turn's expected answer (a live question's draft from SPEC.md, or a person's)
+    POST   /lab/turns/{turn_id}/expected/check  Run again now: the answer key's values read afresh, nothing stored
+    GET    /lab/turns/{turn_id}/expected/query  the orchestrator's records queries for the turn, as plain fields
+    POST   /lab/turns/{turn_id}/expected/query  that query with a person's changes (states, building, dates), read again
     GET    /lab/progress                      review completion and failure-mode counts (?run=R3, default newest)
     GET    /lab/q/{code}                      one question: expected answer, answers, the active answer's steps, notes
     GET    /lab/q/{code}/tree                 the Trace tab: one answer as Langfuse's tree of steps (read only)
@@ -140,6 +144,44 @@ async def lab_run_questions(code: str, m: labelling.Member = Depends(_wide)) -> 
 async def lab_run_sessions(code: str, all_attempts: bool = Query(False), m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
     """A run's conversations as session rows (eval_store.run_sessions, 14 Nov 2026); a typed run says "questions"."""
     return {"ok": True, **await _call(eval_store.run_sessions(m, code, all_attempts=all_attempts))}
+
+
+@router.get("/lab/turns/{turn_id}/expected")
+async def lab_turn_expected(turn_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """A turn's expected answer for the session page (runs.turn_expected, 14 Nov 2026): live turns only show it."""
+    return {"ok": True, **await _call(runs.turn_expected(m, turn_id))}
+
+
+@router.post("/lab/turns/{turn_id}/expected/check")
+async def lab_turn_expected_recheck(turn_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """Run again now: the turn's answer-key values read afresh, read-only, nothing stored (answer_key.recheck)."""
+    from . import answer_key
+
+    return {"ok": True, **await _call(answer_key.recheck(m, turn_id))}
+
+
+class QueryChange(BaseModel):
+    """A person's changes to the orchestrator's records query: its states, building and dates (answer_key.apply_fields)."""
+    index: int = 0
+    states: list[str] = []
+    building: str | None = None
+    dates: list[dict[str, Any]] = []
+
+
+@router.get("/lab/turns/{turn_id}/expected/query")
+async def lab_turn_expected_query(turn_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """The records queries the orchestrator made for this live turn, as plain fields (answer_key.orchestrator_query)."""
+    from . import answer_key
+
+    return {"ok": True, **await _call(answer_key.orchestrator_query(m, turn_id))}
+
+
+@router.post("/lab/turns/{turn_id}/expected/query")
+async def lab_turn_expected_try(turn_id: str, body: QueryChange, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """The orchestrator's query with a person's changes, read again read-only; nothing stored (answer_key.try_query)."""
+    from . import answer_key
+
+    return {"ok": True, **await _call(answer_key.try_query(m, turn_id, index=body.index, fields=body.model_dump()))}
 
 
 @router.get("/lab/labels")

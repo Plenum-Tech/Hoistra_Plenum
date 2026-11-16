@@ -13,6 +13,7 @@
 // in that turn. A turn's notes and labels are read when its tab is opened, like its tree.
 import React from 'react';
 import { labApi } from './labApi.js';
+import TurnExpected from './TurnExpected.jsx';
 import { errText } from './logic/labelling.js';
 import { TraceView } from './TraceTab.jsx';
 import { FAILURE_TEXT, FORMAT_TEXT, LEVELS, LEVEL_TEXT, TRACE_STATUS_TEXT, TYPE_TEXT, canScoreDomain, modeRows, needsRead, planLines,
@@ -313,6 +314,8 @@ function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel,
         </div>
       ) : null}
       <WhyFailed trace={trace} nodes={nodes} />
+      {/* A live question's expected answer, drafted from SPEC.md (14 Nov 2026); nothing on Codex turns. */}
+      <TurnExpected turnId={trace.id} />
       {canFlag ? <ExpectedFlag data={flag && !flag.loading && !flag.error ? flag : null} busy={flagBusy}
         error={(flag && flag.error) || flagError || ''} onSet={onFlag} /> : null}
       {/* Hidden for now (Hussain, 13 Nov 2026): the failure modes with their Present / Absent buttons. FailureModes is
@@ -327,7 +330,8 @@ function Trace({ trace, tree, me, notes, labels, labelBusy, labelError, onLabel,
       {t && t.tree && ready && n.record ? <p className="lab-small lab-tt-hint">{'Pick a span, then press Add note under its input or output, select text in it to quote it, or double-click it.'}</p> : null}
       {!t || t.loading ? <p className="lab-small" role="status">{'Reading the trace…'}</p> : null}
       {t && t.error ? <div role="alert" className="lab-error">{t.error}</div> : null}
-      {t && t.tree ? <TraceView key={trace.id} tree={t.tree} annotate={ready && n.record ? noted.annotate : undefined} /> : null}
+      {t && t.tree ? <TraceView key={trace.id} tree={t.tree} annotate={ready && n.record ? noted.annotate : undefined}
+        loadShown={() => labApi.evalTraceAsShown(trace.id)} /> : null}
     </div>
   );
 }

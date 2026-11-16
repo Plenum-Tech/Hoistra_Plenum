@@ -6,6 +6,7 @@
     GET    /eval/sessions                     sessions, newest first, filtered
     GET    /eval/sessions/{session_id}        one session: its scenario, its traces in turn order, their scores
     GET    /eval/traces/{trace_id}/tree       one trace as the tree view reads it
+    GET    /eval/traces/{trace_id}/as-shown   the answer as Hoistra showed it (cards + layout from chat_turns)
     GET    /eval/traces/{trace_id}/notes      the chat record and everyone's notes on a trace's spans
     GET    /eval/traces/{trace_id}/labels     the failure modes and everyone's label on a trace
     PUT    /eval/traces/{trace_id}/labels/{mode}  the caller's label: positive, negative or null to clear
@@ -176,6 +177,14 @@ async def eval_trace_tree(trace_id: str, request: Request, m: labelling.Member =
     """One trace's tree. Gzipped here, as the Trace tab's own route is: a tree can be megabytes."""
     tree = await _call(eval_store.trace_tree_of(m, trace_id))
     return trace_tree.json_answer({"ok": True, "tree": tree}, request.headers.get("accept-encoding"))
+
+
+@router.get("/eval/traces/{trace_id}/as-shown")
+async def eval_trace_as_shown(trace_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """The answer as Hoistra showed it: its cards and layout from the chat's own row of the turn (shown_answer.py)."""
+    from . import shown_answer
+
+    return {"ok": True, **await _call(shown_answer.as_shown(m, trace_id))}
 
 
 # ── scenarios ────────────────────────────────────────────────────────────────────────

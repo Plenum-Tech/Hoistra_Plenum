@@ -277,3 +277,9 @@ test('back and forward: going back restores the page, run, question and session 
   for (const set of ['setRun(', 'setQuestion(', 'setSession(', 'setTag(', 'onView(']) assert.ok(pop.includes(set), set + ' on popstate');
   assert.match(app, /window\.history\.pushState\(/);
 });
+
+test('Sync now says how many expected answers it drafted, and why it could not', () => {
+  const said = R.syncLines({ new_questions: 2, drafted_expected: 2, failed: { expected: 'model down' } });
+  assert.equal(said.line, '2 new questions · 2 expected answers drafted');
+  assert.deepEqual(said.problems, ['Expected answers could not be drafted: model down']);
+});

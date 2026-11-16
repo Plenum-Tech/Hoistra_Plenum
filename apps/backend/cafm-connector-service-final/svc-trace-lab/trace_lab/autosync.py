@@ -50,6 +50,7 @@ STATUS: dict[str, Any] = {"enabled": False, "every_s": 0, "last_run_at": None, "
                           "sessions_ok": None, "last_new_sessions": 0, "sessions_error": None,
                           "session_runs_ok": None, "last_session_questions": 0, "session_runs_error": None,
                           "batch_runs_ok": None, "last_new_batch_runs": 0, "batch_runs_error": None,
+                          "expected_ok": None, "last_new_expected": 0, "expected_error": None,
                           "scenario_sessions_ok": None, "last_new_scenario_sessions": 0,
                           "scenario_sessions_error": None, "scenario_sessions_waiting": 0,
                           "scenario_sessions_skipped": 0, "scenario_sessions_other_company": 0,
@@ -197,7 +198,24 @@ async def tick(now: datetime | None = None) -> dict[str, Any]:
         log.warning("trace_lab.autosync.failed", error=str(exc)[:300])
     # Then any other session turn no run holds yet (a chat turn no live run takes), as before.
     await sync_session_runs(now, before=first)
+    await draft_expected(now)
     return dict(STATUS)
+
+
+async def draft_expected(now: datetime | None = None) -> int:
+    """The live questions' expected answers, drafted from SPEC.md (auto_expected, 14 Nov 2026): live only, never the
+    Codex flow. Its own try, as above."""
+    from . import auto_expected
+
+    try:
+        out = await auto_expected.draft_for_live(None, now=now)
+        made = int(out.get("drafted") or 0)
+        STATUS.update(expected_ok=True, last_new_expected=made, expected_error=None)
+        return made
+    except Exception as exc:  # noqa: BLE001 - the next round tries again
+        STATUS.update(expected_ok=False, last_new_expected=0, expected_error=str(exc)[:300])
+        log.warning("trace_lab.autosync.expected_failed", error=str(exc)[:300])
+        return 0
 
 
 async def _loop(every: float) -> None:

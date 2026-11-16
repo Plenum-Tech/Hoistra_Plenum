@@ -7,6 +7,7 @@ import React from 'react';
 import { axisOf, flowOf, fmtCost, fmtDur, fmtStart, fmtTime, fmtTokens, fmtTotalCost, subtreeCost, timeTicks, timelineBars,
   visibleRows } from './logic/traceTree.js';
 import { parseMarkdown } from './logic/miniMarkdown.js';
+import HoistraAnswer, { stepDetail } from './HoistraAnswer.jsx';
 import './traceTab.css';
 
 // Line icons drawn inline (Trace Lab has no icon library of its own): agent, model call, tool, step, and the
@@ -418,8 +419,11 @@ function TreeView({ nodes, selected, onSelect, tallyOf, reveal, jump }) {
                     <span className="lab-tt-name">{n.name}</span>
                     <span className="lab-tt-sub">
                       <span>{fmtTime(n.latency_ms)}</span>
+                      {n.model ? <span>{n.model}</span> : null}
                       {n.type === 'generation' && n.cost_usd != null ? <span>{fmtCost(n.cost_usd)}</span> : null}
                     </span>
+                    {/* What Hoistra's run trace says under the step (16 Nov 2026): rows, the plan, the tool chosen. */}
+                    {stepDetail(n) ? <span className="lab-tt-line">{stepDetail(n)}</span> : null}
                   </span>
                   {tallyOf ? <NoteBadges tally={tallyOf(id)} closed={r.hasKids && !r.open} /> : null}
                 </button>
@@ -599,7 +603,7 @@ function Meta({ node, turn }) {
   );
 }
 
-function Detail({ node, turn, pane, setPane, mode, setMode, annotate, notes, shut, setShut }) {
+function Detail({ node, turn, pane, setPane, mode, setMode, annotate, notes, shut, setShut, shown }) {
   const f = node.filled || {};
   const id = String(node.id);
   const on = (side) => (notes ? notes.filter((x) => String(x.nodeId) === id && x.side === side) : null);
@@ -630,6 +634,7 @@ function Detail({ node, turn, pane, setPane, mode, setMode, annotate, notes, shu
           <Side node={node} side="in" title="Input" mode={mode} annotate={annotate} notes={on('in')} open={!shut.in} onToggle={toggle('in')}
             filled={f.input_from ? 'Filled from ' + f.input_from + ' (this span recorded no input of its own).' : ''} />
           <Side node={node} side="out" title="Output" mode={mode} annotate={annotate} notes={on('out')} open={!shut.out} onToggle={toggle('out')}
+            shown={node.parent_id == null ? shown : null}
             filled={f.output_from ? 'Filled from ' + f.output_from + '.' : ''} />
           {annotate && node.parent_id == null && annotate.other ? annotate.other() : null}
         </>
@@ -641,13 +646,21 @@ function Detail({ node, turn, pane, setPane, mode, setMode, annotate, notes, shu
 // One side of a step (Input or Output): its heading (with the numbers of notes on the whole side, or whose quote is no
 // longer in it), its value with each quote marked and, when the page annotates, the notes on that side under it.
 // Selecting text in the value or double-clicking it hands the side's note key to the page (today's note gestures).
-function Side({ node, side, title, mode, annotate, filled, notes, open, onToggle }) {
+function Side({ node, side, title, mode, annotate, filled, notes, open, onToggle, shown }) {
   const id = String(node.id);
   const key = annotate ? annotate.keyOf(id, side) : null;
   const v = side === 'in' ? node.input : node.output;
   const view = viewOf(v, mode);
   const { hits, missing } = placeMarks(view.pieces, notes);
   const pins = (notes || []).filter((x) => !x.quote).concat(missing).sort((a, b) => a.n - b.n);
+  // The whole answer's Output, Formatted: drawn as Hoistra showed it, with its cards and layout (HoistraAnswer.jsx).
+  // Raw keeps the recorded text, with any quotes marked.
+  // `shown` undefined: still being read. The recorded text is not drawn meanwhile, so the answer does not jump from the
+  // text to the cards (16 Nov 2026, "the ui is a bit glitchy").
+  const waiting = side === 'out' && mode === 'formatted' && shown === undefined;
+  const asShown = side === 'out' && mode === 'formatted' && !!shown && !!shown.found;
+  const body = waiting ? <p className="lab-small lab-tt-wait" role="status">{'Reading the answer as Hoistra showed it…'}</p>
+    : asShown ? <HoistraAnswer shown={shown} /> : <Value view={view} hits={hits} />;
   return (
     <div className="lab-tt-io" role="group" aria-label={title}>
       <div className="lab-tt-iohead">
@@ -660,12 +673,13 @@ function Side({ node, side, title, mode, annotate, filled, notes, open, onToggle
       {open ? (
         <>
           {filled ? <p className="lab-small">{filled}</p> : null}
+          {asShown ? <p className="lab-small">{'As Hoistra showed it. Raw shows the recorded text.'}</p> : null}
           {key ? (
-            <div className="lab-tt-val" data-note-key={key} title="Select text to note it, or double-click to add a note"
+            <div className={'lab-tt-val' + (asShown || waiting ? ' lab-tt-shown' : '')} data-note-key={key} title="Select text to note it, or double-click to add a note"
               onMouseUp={(e) => annotate.up(key, e.currentTarget, e)} onDoubleClick={(e) => annotate.double(key, e)}>
-              <Value view={view} hits={hits} />
+              {body}
             </div>
-          ) : <Value view={view} hits={hits} />}
+          ) : body}
           {key ? annotate.render(id, side) : null}
         </>
       ) : null}
@@ -684,7 +698,7 @@ const holds = (el, attr, id) => (el.getAttribute(attr) || '').split(' ').indexOf
 // [{ id, n, nodeId, side ('in' | 'out' | null for Other notes), anchor, quote, note, who, mine, at, when }]. With it the
 // view marks quotes, numbers notes, tells the sides apart in the tree and lists "Notes on this turn"; without it (the
 // question page) the tree shows counts as before.
-export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', mode = 'formatted', annotate }) {
+export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', mode = 'formatted', annotate, loadShown, shown: given }) {
   const tr = tree || {};
   const t = tr.turn || {};
   const nodes = Array.isArray(tr.nodes) ? tr.nodes : [];
@@ -696,6 +710,14 @@ export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', m
   const [shut, setShut] = React.useState({});
   const [ovOpen, setOvOpen] = React.useState(true);
   const [jump, setJump] = React.useState(null);
+  // The answer as Hoistra showed it (GET /eval/traces/{turn_id}/as-shown), read once; none when it cannot be read.
+  const [shown, setShown] = React.useState(given !== undefined ? given : (loadShown ? undefined : null));
+  React.useEffect(() => {
+    if (given !== undefined || !loadShown) return undefined;
+    let live = true;
+    Promise.resolve().then(loadShown).then((out) => { if (live) setShown(out || null); }).catch(() => { if (live) setShown(null); });
+    return () => { live = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const node = nodes.find((n) => String(n.id) === sel) || nodes[0] || null;
   const notes = annotate && Array.isArray(annotate.notes) && annotate.notes.length ? annotate.notes : null;
   const tally = React.useMemo(() => (notes ? noteTally(notes, nodes) : null), [notes, nodes]);
@@ -782,7 +804,7 @@ export function TraceView({ tree, view = 'tree', selectedId, pane = 'preview', m
         <div className="lab-tt-right">
           <NotesOverview notes={notes} open={ovOpen} onToggle={() => setOvOpen(!ovOpen)} go={nav.go} />
           {node ? <Detail node={node} turn={t} pane={p} setPane={setP} mode={md} setMode={setMd} annotate={annotate}
-            notes={notes} shut={shut} setShut={setShut} />
+            notes={notes} shut={shut} setShut={setShut} shown={shown} />
             : <p className="lab-small">{'This trace has no spans.'}</p>}
         </div>
       </div>

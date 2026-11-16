@@ -7,9 +7,14 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<!-- The icons on Hoistra's answer cards, drawn on the session page as Hoistra showed them (16 Nov 2026). -->
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
 </head>
 <body>
 <div id="root"></div>
+<!-- OpenUI (Hoistra's answers are drawn with it) mounts a devtools panel in development by running JavaScript
+     fetched from a CDN. Switched off before the app's first import, as on Hoistra's own page. -->
+<script>globalThis[Symbol.for("openui.devtools.autoMount")] = true;</script>
 <script type="module" src="/src/lab/main.jsx"></script>
 </body>
 </html>

@@ -71,9 +71,11 @@ export function questionItem(q) {
 // What Sync now did (14 Nov 2026, Hussain: one button syncs everything): one line of what is new, the parts that are
 // zero left out ("Up to date" when nothing is), and one short line for each part that failed or was skipped.
 const SYNC_PARTS = [['new_questions', 'new question', 'new questions'], ['chat_sessions', 'conversation', 'conversations'],
-  ['codex_sessions', 'Codex session', 'Codex sessions'], ['new_runs', 'new run', 'new runs']];
+  ['codex_sessions', 'Codex session', 'Codex sessions'], ['new_runs', 'new run', 'new runs'],
+  ['drafted_expected', 'expected answer drafted', 'expected answers drafted']];
 const SYNC_FAILED = [['questions', 'Live questions could not be synced: '], ['chat', 'Chat conversations could not be read: '],
-  ['codex', 'Codex sessions could not be read: '], ['runs', 'Runs could not be made: ']];
+  ['codex', 'Codex sessions could not be read: '], ['runs', 'Runs could not be made: '],
+  ['expected', 'Expected answers could not be drafted: ']];
 export function syncLines(out) {
   const o = out || {};
   const parts = SYNC_PARTS.filter(([k]) => Number(o[k]) > 0).map(([k, one, many]) => plural(o[k], one, many));

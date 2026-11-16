@@ -410,6 +410,8 @@ async def proposals(m: labelling.Member) -> dict[str, Any]:
               FROM tracelab.lab_expected_answers e JOIN tracelab.lab_questions q ON q.id = e.question_id
               JOIN tracelab.lab_runs r ON r.id = q.run_id
              WHERE e.source = 'coding_agent' AND {where}
+               -- Drafted from SPEC.md for a live question (auto_expected, 14 Nov 2026): accepted on the session page.
+               AND coalesce(e.evidence->>'drafted_from', '') NOT IN ('SPEC.md', 'answer_key')
                AND NOT EXISTS (SELECT 1 FROM tracelab.lab_reviews v WHERE v.subject_kind = 'expected_answer'
                                 AND v.subject_id = e.id)
                AND NOT EXISTS (SELECT 1 FROM tracelab.lab_expected_answers n WHERE n.question_id = e.question_id
