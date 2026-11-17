@@ -3,8 +3,11 @@
 import React from 'react';
 
 export default function TopBar({ vals }) {
+  // Beside the open dock the bar is narrow and wraps; the wrapped row lines up with the
+  // controls above it on the right, not under the logo (17 Nov 2026). The spacer after the
+  // logo still takes the first row's slack, so the first row is unchanged.
   return (
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px 18px", padding: "9px 26px", minHeight: "62px", boxSizing: "border-box", flexShrink: "0", borderBottom: "1px solid var(--color-divider)", position: "sticky", top: "0", background: "var(--color-bg)", zIndex: "40" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: "10px 18px", padding: "9px 26px", minHeight: "62px", boxSizing: "border-box", flexShrink: "0", borderBottom: "1px solid var(--color-divider)", position: "sticky", top: "0", background: "var(--color-bg)", zIndex: "40" }}>
         <div className="hv9" onClick={vals.goHome} style={{ display: "flex", alignItems: "center", gap: "11px", cursor: "pointer" }}>
           <div style={{ width: "26px", height: "26px", borderRadius: "7px", border: "1.5px solid var(--color-accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ width: "9px", height: "9px", borderRadius: "50%", background: "var(--color-accent)" }}></div>

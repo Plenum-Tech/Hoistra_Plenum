@@ -8,6 +8,9 @@ import EmailComposer from './EmailComposer.jsx';
 import HoistBuildingCard from './HoistBuildingCard.jsx';
 import VendorHoistChat from './VendorHoistChat.jsx';
 import { useFollowBottom } from './useFollowBottom.js';
+import RunTrace from './RunTrace.jsx';
+import CorrectionDrawer from './CorrectionDrawer.jsx';
+import { useTraceSpy } from './useTraceSpy.js';
 // Answers the orchestrator wrote as OpenUI, drawn with the Hoistra components (src/openui).
 import LazyOpenUIAnswer from '../../openui/LazyOpenUIAnswer.jsx';
 // Every other answer is Markdown, drawn with the same components (openui/fromMarkdown.js).
@@ -19,6 +22,18 @@ export default function OrchestratorDock({ vals }) {
   // and stop following while the reader has scrolled up.
   const scrollRef = useRef(null);
   const follow = useFollowBottom({ container: scrollRef, end: null, busy: vals.orchBusy, count: (vals.orchChat || []).length });
+  // Full screen, the run's trace sits in a rail on the right (17 Nov 2026) and follows the answer
+  // scrolled to, as the Chat page's rail does — measured in this region, not the window.
+  const rail = !!vals.orchRail;
+  useTraceSpy(vals.orchTraceFollow, [(vals.orchChat || []).length, vals.orchBusy, rail], { container: scrollRef, attr: "data-dock-turn", enabled: rail });
+  // "Follow latest" on the rail: drop the pin and bring this region's newest turn into view.
+  const unpin = () => {
+    // orchTraceFollow(null) clears the pin; orchTraceUnpin would also scroll the window, which
+    // here is the page hidden under the dock.
+    if (typeof vals.orchTraceFollow === "function") vals.orchTraceFollow(null);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
   // A draft or card that opens sits above the conversation; bring it into view, even when it was
   // opened from a button at the bottom of a long answer. Declared after the follow, so it wins.
   useEffect(() => {
@@ -44,7 +59,10 @@ export default function OrchestratorDock({ vals }) {
         title={vals.orchAtMax ? "Maximum width — drag left to narrow it" : "Drag to resize · double-click to reset"}
         style={{ display: vals.orchResizeShow, position: "fixed", top: "0", bottom: "0", left: vals.orchHandleLeft, width: "6px", zIndex: "61", cursor: "col-resize", background: vals.orchHandleTint, opacity: "0.5" }}
       ></div>
-      <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", padding: vals.orchPad, overflow: "hidden", transition: "left 0.2s ease" }}>
+      <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "row", padding: vals.orchPad, overflow: "hidden", transition: "left 0.2s ease" }}>
+        {/* The conversation column. Beside the page it is the whole dock; full screen it shares
+            the row with the trace rail. */}
+        <div style={{ flex: "1", minWidth: "0", display: "flex", flexDirection: "column" }}>
         {/* Only this region scrolls. The composer below is a footer, so the send / stop
             button stays put however long the answer grows. */}
         <div ref={scrollRef} style={{ flex: "1", minHeight: "0", overflowY: "auto", display: "flex", flexDirection: "column", margin: "0 -28px", padding: "0 28px" }}>
@@ -733,7 +751,16 @@ export default function OrchestratorDock({ vals }) {
                       </span>
                     </div>
                   ) : (
-                    <div style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: m.bg, color: m.fg, boxShadow: "var(--shadow-sm)", fontSize: "11.5px", lineHeight: "1.5", textWrap: "pretty", animation: m.enter }}>
+                    <div data-dock-turn={rail && m.traceShow === "inline-flex" ? m.key : undefined} style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: m.bg, color: m.fg, boxShadow: "var(--shadow-sm)", fontSize: "11.5px", lineHeight: "1.5", textWrap: "pretty", animation: m.enter }}>
+                      {/* Full screen, an answer can send its own run to the rail, as on the Chat page. */}
+                      {rail ? (
+                        <div style={{ display: m.traceShow === "inline-flex" ? "flex" : "none", justifyContent: "flex-end", marginBottom: "6px" }}>
+                          <button type="button" className={m.traceSelected ? "rt-pick is-on" : "rt-pick"} style={{ display: "inline-flex" }} onClick={m.selectTrace}>
+                            <i className="ph ph-path" style={{ fontSize: "10.5px" }}></i>
+                            {m.traceSelected ? "In the trace" : "Show the run"}
+                          </button>
+                        </div>
+                      ) : null}
                       {m.rich
                         ? <ComplianceAnswer rich={m.rich} ms={m.ms} open={m.stepsOpen} onToggle={m.toggleSteps} fallbackText={m.text} view={m.view} viewTail={m.viewTail} />
                         : m.isNote
@@ -832,7 +859,11 @@ export default function OrchestratorDock({ vals }) {
         <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "8px" }}>
           {"Every instruction is stored as a session, whichever page it was raised from."}
         </div>
+        </div>
+        {rail ? <RunTrace vals={vals} className="rt-dock" onUnpin={unpin} /> : null}
       </div>
+      {/* The rail's Correct buttons open the drawer; it portals into <body>, over the dock. */}
+      {rail ? <CorrectionDrawer vals={vals} /> : null}
     </OpenUIHostContext.Provider>
   );
 }

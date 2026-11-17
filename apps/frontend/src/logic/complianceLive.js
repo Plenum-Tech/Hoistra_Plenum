@@ -37,6 +37,12 @@ const COUNTRY = {
   AE: { code: "AE", api: "UAE", flag: "🇦🇪", name: "UAE" },
   SG: { code: "SG", api: "SG", flag: "🇸🇬", name: "Singapore" }
 };
+// A streamed note as the reader sees it: "data.. Answering" → "data. Answering". Exactly two
+// dots only, so an ellipsis ("...") someone wrote on purpose is left alone.
+export function tidyNote(raw) {
+  return String(raw || "").replace(/(^|[^.])\.\.(?!\.)/g, "$1.");
+}
+
 export function normCountry(raw) {
   const u = String(raw || "UK").trim().toUpperCase();
   if (u === "UAE" || u === "AE" || u === "ARE") return "AE";
@@ -1807,8 +1813,11 @@ export const complianceLiveMethods = {
           }
           if (d.type === "compliance_zone" && d.zone) { partial.zones[d.zone] = d.data; paint(); return; }
           if (d.type === "reasoning") {
-            partial.reasoning = (d.label ? d.label + " — " : "") + (d.text || "");
-            push({ kind: "reason", label: d.label || "Thinking", text: d.text || "", domain: d.domain || "" });
+            // A reason that already ends in a full stop, joined to a sentence that adds one,
+            // read "lifecycle data.. Answering" (17 Nov 2026). Collapse exactly two dots.
+            const text = tidyNote(d.text);
+            partial.reasoning = (d.label ? d.label + " — " : "") + text;
+            push({ kind: "reason", label: d.label || "Thinking", text: text, domain: d.domain || "" });
             paint();
             return;
           }

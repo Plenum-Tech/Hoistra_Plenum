@@ -29,7 +29,10 @@ function Label({ r }) {
     : <><span className="rt-tool">{breakable(name.slice(0, at))}</span><span className="rt-tool-note">{name.slice(at)}</span></>;
 }
 
-export default function RunTrace({ vals }) {
+// className   an extra class on the rail — "rt-dock" in the full-screen dock (17 Nov 2026),
+//             where the rail fills its column instead of sticking to the window's scroll.
+// onUnpin     replaces vals.orchTraceUnpin, for a host that scrolls its own region.
+export default function RunTrace({ vals, className, onUnpin }) {
   const listRef = useRef(null);
   const scrollRef = useRef(null);
   const [travelled, setTravelled] = useState(0);
@@ -65,7 +68,7 @@ export default function RunTrace({ vals }) {
   const idle = !live && !rows.length;
 
   return (
-    <aside className={idle ? 'rt is-idle' : 'rt'} aria-label="Run trace">
+    <aside className={(idle ? 'rt is-idle' : 'rt') + (className ? ' ' + className : '')} aria-label="Run trace">
       <div className="rt-head">
         <span className={live ? 'rt-title is-live' : 'rt-title'}>{vals.orchTraceTitle}</span>
         <span className="rt-clock">
@@ -169,7 +172,7 @@ export default function RunTrace({ vals }) {
       ) : vals.orchTraceUnpinShow ? (
         <div className="rt-foot">
           <span className="rt-note">{'Showing an earlier run.'}</span>
-          <button type="button" className="rt-btn" onClick={vals.orchTraceUnpin}>{'Follow latest'}</button>
+          <button type="button" className="rt-btn" onClick={onUnpin || vals.orchTraceUnpin}>{'Follow latest'}</button>
         </div>
       ) : null}
     </aside>

@@ -17,36 +17,47 @@ import { useEffect } from 'react';
 // treating it as "in view" rather than "about to scroll past".
 const FOCUS_LINE = 130;
 
-export function useTraceSpy(follow, deps) {
+//   opts     optional { container, attr, enabled } — the full-screen dock (17 Nov 2026)
+//            scrolls its own region, not the window: `container` is a ref to that region,
+//            the focus line is measured from its top, and only markers named `attr` inside
+//            it count, so the dock and the Chat page can never steer each other's rail.
+export function useTraceSpy(follow, deps, opts) {
+  const container = opts && opts.container;
+  const attr = (opts && opts.attr) || 'data-trace-turn';
+  const enabled = !opts || opts.enabled !== false;
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof follow !== 'function') return undefined;
+    if (typeof window === 'undefined' || typeof follow !== 'function' || !enabled) return undefined;
+    const box = container ? container.current : null;
+    if (container && !box) return undefined;
+    const target = box || window;
     let raf = 0;
     const compute = () => {
       raf = 0;
-      const nodes = document.querySelectorAll('[data-trace-turn]');
+      const nodes = (box || document).querySelectorAll('[' + attr + ']');
       if (!nodes.length) return;
+      const line = box ? box.getBoundingClientRect().top + 60 : FOCUS_LINE;
       // The last node whose top has already crossed the focus line — i.e. the turn the
       // reader has scrolled down into. Above the first one yet, default to it anyway: an
       // empty rail while sitting just above the first question reads as broken, not idle.
       let active = nodes[0];
       for (let i = 0; i < nodes.length; i += 1) {
-        if (nodes[i].getBoundingClientRect().top <= FOCUS_LINE) active = nodes[i];
+        if (nodes[i].getBoundingClientRect().top <= line) active = nodes[i];
         else break;
       }
-      const idx = Number(active.getAttribute('data-trace-turn'));
+      const idx = Number(active.getAttribute(attr));
       if (Number.isFinite(idx)) follow(idx);
     };
     const onScroll = () => { if (!raf) raf = requestAnimationFrame(compute); };
-    window.addEventListener('scroll', onScroll, { passive: true });
+    target.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll, { passive: true });
     compute();
     return () => {
-      window.removeEventListener('scroll', onScroll);
+      target.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
     // `deps` is the caller's explicit recompute trigger; `follow` itself is stable in effect
     // (it only ever closes over the controller, never per-render locals).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, (deps || []).concat([enabled, attr]));
 }

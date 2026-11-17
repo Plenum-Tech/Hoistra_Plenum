@@ -491,3 +491,26 @@
 .rt-query-meta { color: var(--color-neutral-500); white-space: nowrap; }
 .rt-query-go { margin-left: auto; color: var(--rt-live-ink); opacity: 0; white-space: nowrap; }
 .rt-query:hover .rt-query-go, .rt-query:focus-visible .rt-query-go { opacity: 1; }
+
+/* ── in the full-screen dock (17 Nov 2026) ─────────────────────────────────
+   The dock scrolls its own region, not the window, so the rail is a column beside the
+   conversation that runs the dock's full height: not sticky, no window-based max height.
+   Its own list scrolls inside it (.rt-scroll). Hidden on a window too narrow for two
+   columns, where the conversation needs the room more. */
+.rt.rt-dock {
+  position: relative;
+  top: auto;
+  align-self: stretch;
+  max-height: none;
+  min-height: 0;
+  flex: 0 0 clamp(300px, 27vw, 400px);
+  margin-left: 28px;
+}
+@media (max-width: 1100px) {
+  .rt.rt-dock { display: none; }
+}
+/* The rail runs the dock's height, so its list takes the room and its foot (Stop / Follow
+   latest) sits at the bottom of the column rather than straight under the last row. */
+.rt.rt-dock .rt-body-swap { flex: 1 1 auto; }
+.rt.rt-dock .rt-scroll { flex: 1 1 auto; min-height: 0; }
+.rt.rt-dock.is-idle .rt-empty { margin-top: 4px; }

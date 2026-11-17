@@ -337,6 +337,8 @@ export const renderValsMethods = {
     // whole screen whether or not it came from a session (1 Nov 2026).
     const orchFull = !!(s.orchOpen && (s.orchFullManual
       || (s.orchFull && s.orchTask && s.orchFullTask === s.orchTask.id && s.orchFullView === s.view)));
+    // The full dock's trace rail: only full, and only while it holds a conversation (orchChatShow).
+    const dockRail = orchFull && chatView && ((s.ccChat || []).length > 0 || !!s.ccBusy);
 
     const detail = s.detail;
     const modKey = s.module;
@@ -2121,8 +2123,12 @@ export const renderValsMethods = {
       navClip: s.navOpen ? "inset(0 0 0 0)" : "inset(0 196px 0 0)",
       orchWidth: orchFull ? "calc(100vw - " + navW + "px)" : orchW + "px",
       orchFull,
-      // Full, the dock's content keeps a readable column instead of running the width of the screen.
-      orchPad: orchFull ? "22px max(28px, calc((100vw - " + navW + "px - 880px) / 2)) 24px" : "22px 28px 24px",
+      // Full screen with a conversation on it, the run's trace sits in a rail to the right of
+      // it (17 Nov 2026). Only full: beside the page the dock is too narrow for two columns.
+      orchRail: dockRail,
+      // Full, the dock's content keeps a readable column instead of running the width of the
+      // screen; with the rail, the column and the rail (≤ 400px + 28px gap) are centred together.
+      orchPad: orchFull ? "22px max(28px, calc((100vw - " + navW + "px - " + (dockRail ? 1310 : 880) + "px) / 2)) 24px" : "22px 28px 24px",
       // The navigator behaves the same on every page, Home included: open, it sits beside the
       // content (never over it), and the dock sits beside the navigator. A full dock covers the
       // page, so the page is not pushed aside by it.
@@ -2972,8 +2978,11 @@ export const renderValsMethods = {
       orchSendBg: (s.ccBusy && chatView) ? "var(--st-risk)" : "var(--color-accent)",
       orchSendTitle: (s.ccBusy && chatView) ? "Stop this answer" : "Send",
       orchSendClick: () => ((s.ccBusy && chatView) ? this.ccStop() : this.orchSubmitNow()),
-      orchLiveDot: s.orchTask && s.orchDone < s.orchTask.steps.length ? "block" : "none",
-      orchStatus: !s.orchTask ? "Idle — instruct it below, or trigger any action on the page." : (s.orchDone < s.orchTask.steps.length ? "Running · step " + (s.orchDone + 1) + " of " + s.orchTask.steps.length : "Complete · logged to the Activity Log and stored as a session"),
+      // A conversation's answer still streaming is not "Complete" (17 Nov 2026): a question has
+      // no task steps, so the step count alone called it done the moment it was asked.
+      orchLiveDot: (s.orchTask && s.orchDone < s.orchTask.steps.length) || (chatView && s.ccBusy) ? "block" : "none",
+      orchStatus: chatView && s.ccBusy ? "Answering" + (s.ccTick ? " · " + s.ccTick + " s" : "…") + " · stored as a session when it lands"
+        : !s.orchTask ? "Idle — instruct it below, or trigger any action on the page." : (s.orchDone < s.orchTask.steps.length ? "Running · step " + (s.orchDone + 1) + " of " + s.orchTask.steps.length : "Complete · logged to the Activity Log and stored as a session"),
       navOpen: s.navOpen, navClosed: !s.navOpen,
       toggleNav: () => this.setState((p) => ({ navOpen: !p.navOpen })),
       closeNav: () => this.setState({ navOpen: false }),
