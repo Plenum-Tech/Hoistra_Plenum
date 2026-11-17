@@ -9380,7 +9380,9 @@ class DeepAgentOrchestrator:
                     "text": (
                         f"{'Read the question' if routing.get('source') == 'llm' else 'Matched intent keywords'}"
                         f" → {phase2_engine} engine"
-                        + (f" — {routing.get('reason')}" if routing.get("reason") else "")
+                        # The router's reason is usually a sentence with its own full stop;
+                        # strip it, or the note reads "lifecycle data.. Answering".
+                        + (f" — {str(routing.get('reason')).rstrip(' .')}" if routing.get("reason") else "")
                         + ". Answering with its tools only (live from plenum_cafm, not Fiix)."
                     ),
                     "domain": phase2_engine,
