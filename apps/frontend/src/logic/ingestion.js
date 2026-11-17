@@ -19,8 +19,9 @@ export const ingestionMethods = {
     // that may not add data.
     if (!accountCanIngest(this.state)) return;
     clearInterval(this._ingT);
-    const names = this.ingBldList ? this.ingBldList() : AX_BUILDINGS;
-    const b = names.indexOf(this.state.ingB) > -1 ? this.state.ingB : (names[0] || "Riverside Court");
+    const names = this.ingBldList ? this.ingBldList() : [];
+    // Nothing to pick from yet: nothing is pre-selected (never a sample building).
+    const b = names.indexOf(this.state.ingB) > -1 ? this.state.ingB : (names[0] || "");
     this.setState({
       ingOn: true, ingPhase: "setup", ingB: b, ingDoc: 0, ingChecked: 0, ingSwitched: false, ingReason: "", ingOutcome: null,
       // live-run slices (ingestionLive.js), reset so a reopened modal starts clean
@@ -76,7 +77,7 @@ export const ingestionMethods = {
     const bName = s.ingB;
     const docLabel = s.ingFile ? s.ingFile.name : doc.file;
     const detail = (d) => d.detail.split("{b}").join(bName).split("{h}").join(home || "");
-    const bldNames = this.ingBldList ? this.ingBldList() : AX_BUILDINGS;
+    const bldNames = this.ingBldList ? this.ingBldList() : [];
 
     const msgs = [];
     const actions = [];
@@ -207,7 +208,11 @@ export const ingestionMethods = {
         if (f) this.setState({ ingFile: f });
         if (e && e.target) e.target.value = "";
       },
-      ingGo: () => (this.ingRunLive ? this.ingRunLive() : this.ingRun({ ingSwitched: false })),
+      ingGo: () => (!this.state.ingB ? this.flash("Pick a building first — the document is checked against it.")
+        : this.ingRunLive ? this.ingRunLive() : this.ingRun({ ingSwitched: false })),
+      // No building to pick: say why, rather than an empty row (17 Nov 2026).
+      ingBuildingsEmpty: bldNames.length ? ""
+        : "No buildings to check against yet. Hoist a building first, or wait for your buildings to load.",
       ingChecksOn: s.ingPhase !== "setup",
       ingChecks: AX_CHECKS.map((label, i) => {
         const state = s.ingPhase === "run" ? (i < s.ingChecked ? "done" : i === s.ingChecked ? "busy" : "wait") : "done";

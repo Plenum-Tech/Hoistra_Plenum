@@ -276,6 +276,13 @@ export default function Chat({ vals }) {
                             : (m.choices || []).length
                               ? <ChoiceCards intro={m.choiceIntro} cards={m.choices} />
                               : m.view ? <LazyOpenUIAnswer text={m.view} tail={m.viewTail} fallbackText={m.text} /> : <AnyAnswer text={m.text} />}
+                        {/* A failed answer: the server's message, small, and Retry (17 Nov 2026). */}
+                        {m.errorDetail ? <div style={{ fontSize: "11px", color: "var(--color-neutral-400)", marginTop: "6px", fontFamily: "ui-monospace,monospace" }}>{"Details: " + m.errorDetail}</div> : null}
+                        {m.retryShow ? (
+                          <button type="button" className="hv13" onClick={m.retry} style={{ font: "inherit", display: "inline-flex", alignItems: "center", gap: "6px", marginTop: "10px", fontSize: "12px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", cursor: "pointer" }}>
+                            <i className="ph ph-arrow-clockwise" aria-hidden="true"></i>{"Retry"}
+                          </button>
+                        ) : null}
                         <div className="ans-paused" style={{ display: m.interruptShow, fontSize: "10.5px", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
                         {/* Teach from this answer: was it right, and if not, what should change
                             (logic/corrections.js). Shown once the turn is on record. */}

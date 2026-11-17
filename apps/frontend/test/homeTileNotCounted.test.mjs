@@ -45,9 +45,10 @@ test('no buildings hoisted shows "—" and says to hoist one', () => {
   assert.equal(v.hoistScoreNote, 'No buildings hoisted yet — hoist one and ingest against it');
 });
 
-test('a coverage read that did not answer still falls back to the labelled seed', () => {
+// 17 Nov 2026: no sample score any more — a coverage read that did not answer shows "—".
+test('a coverage read that did not answer shows a dash, never the sample 78', () => {
   c.setState({ signedIn: true, view: 'home', homeRaw: { fetchedAt: '2026-09-23T10:00:00Z', errors: { coverage: 'HTTP 503' }, coverage: null, approvals: { ok: true, count: 0, items: [] } } });
   const v = c.renderVals();
-  assert.equal(v.hoistScore.value, '78');
-  assert.match(v.hoistScoreNote, /^Seed figures/);
+  assert.equal(v.hoistScore.value, '—');
+  assert.doesNotMatch(v.hoistScoreNote, /Seed figures/);
 });

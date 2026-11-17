@@ -308,7 +308,18 @@ function JobList({ vals }) {
           <span>{"Job"}</span><span>{"When"}</span><span>{"Next run"}</span><span>{"Last run"}</span><span>{"Last 14 days"}</span><span>{"Scheduled by"}</span><span style={{ textAlign: "right" }}>{"Actions"}</span>
         </div>
         {vals.cpLoading ? <div style={{ padding: "16px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Reading the jobs…"}</div> : null}
-        {vals.cpError ? <div style={{ padding: "16px", fontSize: "12px", color: "var(--st-risk)" }}>{"The jobs could not be read: " + vals.cpError}</div> : null}
+        {vals.cpError ? (
+          <div role="status" style={{ padding: "16px", fontSize: "12.5px", color: "var(--color-text)", lineHeight: "1.5", display: "flex", gap: "12px", alignItems: "flex-start", flexWrap: "wrap" }}>
+            <i className="ph ph-warning-circle" style={{ fontSize: "15px", color: "var(--st-risk)", marginTop: "2px" }} aria-hidden="true"></i>
+            <div style={{ flex: "1", minWidth: "200px" }}>
+              <div>{vals.cpErrorText}</div>
+              <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "4px", fontFamily: "ui-monospace,monospace" }}>{"Details: " + vals.cpErrorDetail}</div>
+            </div>
+            <button type="button" className="hv13" onClick={vals.cpRetry} style={{ font: "inherit", display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", cursor: "pointer" }}>
+              <i className="ph ph-arrow-clockwise" aria-hidden="true"></i>{"Retry"}
+            </button>
+          </div>
+        ) : null}
         {vals.cpEmpty && !vals.cpLoading && !vals.cpError ? (
           <div style={{ padding: "18px 16px", fontSize: "12.5px", color: "var(--color-neutral-400)", lineHeight: "1.55" }}>
             {"No jobs scheduled yet. Use New job, or ask in the chat — “Run an energy anomaly scan every hour”."}
@@ -326,7 +337,7 @@ function JobList({ vals }) {
             </div>
             <span style={{ color: "var(--color-neutral-400)" }}>{j.cadence}</span>
             <span style={{ ...MONO, fontSize: "11.5px" }}>{j.next}</span>
-            <span style={{ fontSize: "11.5px", color: j.lastTone, lineHeight: "1.4" }}>{j.last}</span>
+            <span title={j.lastTitle || undefined} style={{ fontSize: "11.5px", color: j.lastTone, lineHeight: "1.4" }}>{j.last}</span>
             <span style={{ display: "flex", gap: "2px" }} aria-label={"Last 14 days for " + j.name}>
               {j.days.map((d) => (<span key={d.date} title={d.title} style={{ width: "6px", height: "14px", borderRadius: "2px", background: d.tone }}></span>))}
             </span>

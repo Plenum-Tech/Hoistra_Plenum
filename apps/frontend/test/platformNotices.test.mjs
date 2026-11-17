@@ -86,13 +86,11 @@ test('the drawer has a Platform filter, counts only actions, and each notice ope
     usageRaw: { totals: { credits_this_month: 1240, queries: 980, ingests: 52 } },
     homeRaw: { approvals: { items: [] }, anomalies: { anomalies: [] }, coverage: { buildings: 4, domains: [
       { key: 'contracts', covered: 0, of: 4 }, { key: 'assets', covered: 1, of: 4 }, { key: 'energy', covered: 1, of: 4 }, { key: 'compliance', covered: 3, of: 4 }] } } });
-  const v = c.renderVals();
-  const platform = v.queueFilterOpts.find((o) => o.label === 'Platform');
-  assert.ok(platform, 'a Platform filter');
-  assert.equal(platform.n, '4', 'score, failed cron, schedule suggestion, usage');
-  assert.equal(c.queueModel().count, 2, 'the badge counts what needs acting on: the score and the failed cron');
-  platform.pick();
-  const items = c.renderVals().queueItems;
+  // 17 Nov 2026: the drawer lists urgent items only, so the notices are checked on the model and
+  // opened through the same queueOpenItem the drawer calls.
+  assert.equal(c.queueModel().items.filter((i) => i.module === 'Platform').length, 4, 'score, failed cron, schedule suggestion, usage');
+  assert.equal(c.queueModel().count, 2, 'the model counts what needs acting on: the score and the failed cron');
+  const items = c.queueModel().items.filter((i) => i.module === 'Platform').map((i) => ({ title: i.title, click: () => c.queueOpenItem(i) }));
   const open = (re) => items.find((i) => re.test(i.title)).click();
   open(/Hoist Score/);
   assert.equal(c.state.flow, 'ingest');

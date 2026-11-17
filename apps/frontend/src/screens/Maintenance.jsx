@@ -1,22 +1,14 @@
 // Maintenance — maintenance: grouped decisions with bulk actions, inspection intelligence panel, PPM health
 // Ported from the Hoistra design reference. `vals` is the view model from useHoistra().
 import React from 'react';
+import UnreachableState from '../components/shell/UnreachableState.jsx';
 
 export default function Maintenance({ vals }) {
   return (
     <>
       {/* Nothing answered at all: one panel saying which service, not four empty ones. */}
-      <div style={{ display: vals.mxEmptyShow, marginTop: "32px", padding: "26px 22px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
-        <div style={{ fontSize: "14px" }}>
-          {vals.mxEmptyTitle}
-        </div>
-        <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "7px 0 0", maxWidth: "76ch", lineHeight: "1.55" }}>
-          {vals.mxEmptyNote}
-        </p>
-        <div className="hv4" onClick={vals.mxLiveRetry} style={{ display: vals.mxLiveRetryShow === "none" ? "none" : "inline-block", marginTop: "13px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
-          {"Try the read again"}
-        </div>
-      </div>
+      <UnreachableState show={vals.mxEmptyShow} title={vals.mxEmptyTitle} note={vals.mxEmptyNote} detail={vals.mxEmptyDetail} icon={vals.mxEmptyIcon}
+        retryShow={vals.mxLiveRetryShow} onRetry={vals.mxLiveRetry} style={{ marginTop: "32px" }} />
       <div style={{ display: vals.mxBodyShow }}>
       <div style={{ marginTop: "32px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "9px", marginBottom: "12px", flexWrap: "wrap" }}>

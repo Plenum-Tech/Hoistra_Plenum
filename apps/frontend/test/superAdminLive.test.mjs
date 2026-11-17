@@ -310,13 +310,14 @@ test('saCreate goes to the API once live: canonical country code, admin_email, n
   assert.ok(c._saLiveRefresh, 'a re-read is scheduled to swap the optimistic row');
 });
 
-test('saCreate stays local-only while the platform has never answered — the offline demo keeps working', () => {
+// 17 Nov 2026: no offline demo — nothing is created and nothing is pretended.
+test('saCreate while the platform has never answered creates nothing and says so', () => {
   fresh({});
   c.setState({ saName: 'Local Demo Co', saCc: 'UK', saEmail: '' });
   c.saVals(c.state).saCreate();
-  assert.equal(calls.length, 0, 'no API call for a pure-seed console');
-  assert.ok(c.state.saCompanies.some((r) => r.name === 'Local Demo Co'));
-  assert.match(c.state.toast, /Invite its administrator when ready/);
+  assert.equal(calls.length, 0, 'no API call without a platform to call');
+  assert.ok(!c.state.saCompanies.some((r) => r.name === 'Local Demo Co'), 'no local company minted');
+  assert.match(c.state.toast, /nothing was created/);
 });
 
 test('invite on a company with no admin_email on record instructs instead of calling the API', async () => {
@@ -351,13 +352,14 @@ test('invite re-sends to the admin_email on the record and reports the send', as
   assert.match(c.state.toast, /Admin invitation sent for Plenum Group/);
 });
 
-test('a failed load keeps the seed, surfaces the error and schedules a retry — except on 403', async () => {
+test('a failed load shows no seed, surfaces the error and schedules a retry — except on 403', async () => {
   fresh({});
   await c.saLiveLoad();
-  assert.equal(c.state.saCompanies[0].id, 'c1', 'the seed survives the outage');
   assert.match(c.state.saLiveError, /no stub/);
   assert.ok(c._saLiveRetry, 'a retry timer is running');
-  assert.match(c.saVals(c.state).saLiveError, /Showing sample data/);
+  // 17 Nov 2026: the seed rows stay in state but are never shown; the message is plain words.
+  assert.deepEqual(c.saVals(c.state).saCompanies, []);
+  assert.match(c.saVals(c.state).saLiveError, /^The companies could not be read — /);
 
   fresh({ ['GET ' + B + '/companies']: { __status: 403, __body: { detail: { ok: false, error: 'Requires the superadmin role.', reason: 'forbidden', required_role: 'superadmin', your_role: 'admin' } } } });
   await c.saLiveLoad();

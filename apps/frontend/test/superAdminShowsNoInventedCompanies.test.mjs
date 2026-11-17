@@ -51,9 +51,8 @@ test('a genuinely empty platform still says so once the read has answered', () =
   assert.ok(JSON.stringify(v).includes('No companies yet'));
 });
 
-test('sample rows never appear without the sentence that explains them', () => {
-  // The only state that puts them on screen is a failed read, and that state also
-  // produces the banner. If one is ever true without the other, this fails.
+// 17 Nov 2026: sample rows never appear at all, even after a failed read.
+test('sample rows never appear, even after a failed read', () => {
   const failed = {
     ...FRESH,
     saLiveLoading: false,
@@ -62,9 +61,9 @@ test('sample rows never appear without the sentence that explains them', () => {
     saSel: SA_COMPANIES[0].id,
   };
   const v = vals(failed);
-  assert.ok(v.saCompanies.length > 0, 'the fallback still fills a blank console');
-  assert.match(v.saLiveError, /Showing sample data/,
-    'sample rows were on screen with nothing saying they were samples');
+  assert.deepEqual(v.saCompanies, [], 'no sample company on screen');
+  assert.match(v.saLiveError, /could not be read/);
+  assert.doesNotMatch(v.saLiveError, /sample/i);
 });
 
 test('a console already showing real companies is never replaced by samples', () => {

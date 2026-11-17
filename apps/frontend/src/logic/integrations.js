@@ -38,9 +38,10 @@ export const integrationsMethods = {
   },
 
   intVals(s) {
-    // Connections are not read from anywhere yet, so there are none to show: every count that
-    // depends on them is 0 and every time is "—", never a stand-in.
-    const conn = [];
+    // Connections are not read from anywhere yet (the connector service's list is not scoped to
+    // a company, so it is not wired here). A count of them is unknown, not zero: every figure
+    // that depends on them is "—" and the table says why (17 Nov 2026; was 0, which claimed
+    // "none connected"). The tiles, tabs and table keep their places (6 Oct 2026).
     const q = (s.intQ || "").trim().toLowerCase();
     const hit = (t) => !q || (t.name + " " + t.reads).toLowerCase().indexOf(q) > -1;
     const cats = GROUPS
@@ -61,14 +62,15 @@ export const integrationsMethods = {
     return {
       isInteg: s.signedIn && s.view === "integ",
       navAdmin: s.role !== "admin" ? [] : [{
-        label: "Integrations", icon: "ph-plugs-connected", badge: String(conn.length),
+        label: "Integrations", icon: "ph-plugs-connected", badge: "—",
         color: s.view === "integ" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "integ" ? "var(--color-accent-900)" : "transparent",
         click: () => { window.scrollTo(0, 0); this.setState({ view: "integ", role: "admin", navOpen: true, detail: null }); }
       }, {
         // "0" is a finding nobody has established while the read is still out; the count
         // appears once a read has answered (or failed and filled the labelled samples).
-        label: "Users & access", icon: "ph-users-three", badge: s.usLiveLoadedAt || s.usLiveError ? String(s.users.length) : "…",
+        // Server rows only (live: true): never the count of the sample people (17 Nov 2026).
+        label: "Users & access", icon: "ph-users-three", badge: s.usLiveLoadedAt ? String((s.users || []).filter((u) => u.live).length) : s.usLiveError ? "—" : "…",
         color: s.view === "users" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "users" ? "var(--color-accent-900)" : "transparent",
         click: () => { window.scrollTo(0, 0); this.setState({ view: "users", role: "admin", navOpen: true, detail: null }); }
@@ -113,14 +115,14 @@ export const integrationsMethods = {
       }],
 
       intTiles: [
-        { value: conn.length, label: "Connected", hint: "sources landing rows", color: "var(--color-accent)", click: () => this.setState({ intTab: 0, intQ: "" }) },
-        { value: 0, label: "Tables fed", hint: "in the Hoist Graph", color: "var(--color-neutral-300)", click: () => this.setState({ intTab: 0, intQ: "" }) },
-        { value: 0, label: "Need attention", hint: "none", color: "var(--color-neutral-300)", click: () => this.setState({ intTab: 0, intQ: "" }) },
+        { value: "—", label: "Connected", hint: "not listed here yet", color: "var(--color-neutral-500)", click: () => this.setState({ intTab: 0, intQ: "" }) },
+        { value: "—", label: "Tables fed", hint: "in the Hoist Graph", color: "var(--color-neutral-500)", click: () => this.setState({ intTab: 0, intQ: "" }) },
+        { value: "—", label: "Need attention", hint: "not listed here yet", color: "var(--color-neutral-500)", click: () => this.setState({ intTab: 0, intQ: "" }) },
         { value: SOURCE_TYPES.length, label: "Available", hint: "source types the connector service reads", color: "var(--color-neutral-300)", click: () => this.setState({ intTab: 1, intQ: "" }) }
       ],
       intLastSync: "—",
 
-      intTabs: [["Connected", conn.length], ["Available sources", SOURCE_TYPES.length], ["Custom API", 0]].map((t, i) => ({
+      intTabs: [["Connected", "—"], ["Available sources", SOURCE_TYPES.length], ["Custom API", "—"]].map((t, i) => ({
         label: t[0], n: t[1], pick: () => this.setState({ intTab: i, intQ: "" }),
         edge: (s.intTab || 0) === i ? "var(--color-accent)" : "transparent",
         fg: (s.intTab || 0) === i ? "var(--color-accent)" : "var(--color-neutral-400)"
@@ -130,8 +132,8 @@ export const integrationsMethods = {
       intQ: s.intQ || "",
       intSetQ: (e) => this.setState({ intQ: e.target.value }),
       intRows: [],
-      intConnSummary: "0 of 0 shown · 0 tables fed",
-      intConnEmpty: "No sources connected.",
+      intConnSummary: "Connections are not listed here yet",
+      intConnEmpty: "Connections can't be listed on this page yet, so an empty table does not mean nothing is connected. Ask Plenum support which sources feed your Hoist Graph, or connect one from Available sources.",
       intExpandLabel: "Expand all",
       intExpandAll: () => {},
 

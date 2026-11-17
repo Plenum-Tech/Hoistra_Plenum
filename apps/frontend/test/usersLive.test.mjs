@@ -308,41 +308,24 @@ test('rapid allocation clicks are latest-wins and serialised: full id lists in c
   clearTimeout(c._tt);
 });
 
-test('once the read has failed the screen is the offline demo: local invite, local toggles, seed chips', async () => {
+// 17 Nov 2026: there is no offline demo any more. A failed read shows no sample people and no
+// sample building chips, and Invite sends nothing and says so instead of adding a local row.
+test('once the read has failed nothing invented is on screen, and nothing can be pretended', async () => {
   routes = {}; // any network call would throw 'unexpected'
   const c = new HoistraLogic();
-  // The demo now starts at the failure rather than at mount. With no backend that is the
-  // same moment in practice — the page loads, the read is attempted, it fails at once and
-  // the samples fill — but it is no longer possible to sit looking at invented people
-  // while the read is still in flight and nothing has gone wrong.
   assert.equal(c.state.users.length, 0, 'nothing invented before the attempt');
   await c.usLiveLoad();
-  // The failure arms a retry; left running it holds the process open after the test ends.
   clearTimeout(c._usLiveRetry);
   const v = c.usersVals(c.state);
-  assert.ok(c.state.users.length > 0, 'the fallback fills a blank table');
-  assert.deepEqual(v.usFormBlds.map((b) => b.name).slice(0, 2), ['Bishopsgate Tower', 'Riverside Court'], 'AX_BUILDINGS still feeds the chips');
-  assert.match(v.usLiveSourceLabel, /showing sample data/,
-    'sample people on screen with nothing saying they are samples');
-  const before = c.state.users.length;
-  c.setState({ usName: 'Demo', usEmail: 'demo@co.com', usBlds: ['Town Hall'] });
-  c.usersVals(c.state).usSend();
-  assert.equal(c.state.users.length, before + 1, 'the local append still works');
-  assert.equal(c.state.users[before].status, 'Invited');
-  c.usersVals(c.state).axUsers[0].toggleIngest(null);
-  assert.notEqual(c.state.users[0].ingest, undefined, 'the seed toggle flips locally without a network call');
-  clearTimeout(c._tt);
-});
-
-test('the offline demo also allows an invite with no buildings picked', async () => {
-  routes = {};
-  const c = new HoistraLogic();
+  assert.deepEqual(v.axUsers, [], 'no sample people in the table');
+  assert.deepEqual(v.usFormBlds, [], 'no sample building chips');
+  assert.match(v.usLiveSourceLabel, /could not be read/);
+  assert.doesNotMatch(v.usLiveSourceLabel, /sample/i);
   const before = c.state.users.length;
   c.setState({ usName: 'Demo', usEmail: 'demo@co.com', usBlds: [] });
   c.usersVals(c.state).usSend();
-  assert.equal(c.state.users.length, before + 1);
-  assert.deepEqual(c.state.users[before].buildings, []);
-  assert.match(c.state.toast, /no buildings allocated/i);
+  assert.equal(c.state.users.length, before, 'no local row appended');
+  assert.match(c.state.toast, /nothing was sent/);
   clearTimeout(c._tt);
 });
 

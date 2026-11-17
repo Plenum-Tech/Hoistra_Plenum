@@ -26,12 +26,19 @@ export default function TopBar({ vals }) {
             </React.Fragment>
           ))}
         </div>
-        <div className="hv7" onClick={vals.toggleQueue} style={{ animation: "pendingBlink 2.4s ease-in-out infinite", display: "flex", alignItems: "center", gap: "8px", whiteSpace: "nowrap", flexShrink: "0", fontSize: "13px", padding: "8px 15px", borderRadius: "7px", cursor: "pointer", background: "var(--st-warn)", color: "var(--accent-ink)" }}>
-          <i className="ph ph-bell-ringing" style={{ fontSize: "15px" }}></i>
-          <span>
-            {vals.queueCount}{" Pending"}
+        {/* The Decision queue pill (17 Nov 2026): "1 urgent · 734 pending". Filled and pulsing
+            only while something urgent waits; otherwise a quiet outline, so a big standing count
+            no longer shouts on every page. "— Pending" until the queue has been read. */}
+        <button type="button" className="hv7" onClick={vals.toggleQueue} title={vals.queueBadgeTitle} aria-label={"Decision queue: " + vals.queueBadgeText}
+          style={{ font: "inherit", margin: "0", animation: vals.queueBadgeHot ? "pendingBlink 2.4s ease-in-out infinite" : "none", display: "flex", alignItems: "center", gap: "8px", whiteSpace: "nowrap", flexShrink: "0", fontSize: "13px", padding: "8px 15px", borderRadius: "7px", cursor: "pointer",
+            border: vals.queueBadgeHot ? "1px solid transparent" : "1px solid var(--color-divider)",
+            background: vals.queueBadgeHot ? "var(--st-warn)" : "var(--color-surface)",
+            color: vals.queueBadgeHot ? "var(--accent-ink)" : "var(--color-text)" }}>
+          <i className={vals.queueBadgeHot ? "ph ph-bell-ringing" : "ph ph-bell"} style={{ fontSize: "15px" }}></i>
+          <span style={{ fontVariantNumeric: "tabular-nums" }}>
+            {vals.queueBadgeText}
           </span>
-        </div>
+        </button>
         <div style={{ width: "1px", height: "16px", background: "var(--color-divider)" }}></div>
         <div style={{ display: vals.tenantShow, alignItems: "center", gap: "6px", whiteSpace: "nowrap", flexShrink: "0", fontSize: "11px", color: "var(--color-neutral-500)" }}>
           <i className="ph ph-buildings" style={{ fontSize: "12px" }}></i>

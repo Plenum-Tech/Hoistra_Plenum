@@ -178,7 +178,10 @@ export const ingestionLiveMethods = {
     if (Array.isArray(s.axBldsLive)) return s.axBldsLive.map((b) => b && b.name).filter(Boolean);
     const acc = s.account && s.account.buildings;
     if (Array.isArray(acc) && acc.length) return acc.map((b) => (typeof b === "string" ? b : b && b.name)).filter(Boolean);
-    return AX_BUILDINGS;
+    // The Buildings page's register, when it has loaded. Never the sample names: a pick
+    // there resolved to no building and read as this company's (17 Nov 2026).
+    if (Array.isArray(s.bldLive)) return s.bldLive.map((b) => b && b.name).filter(Boolean);
+    return [];
   },
 
   // Name → the id the API keys by: axBldsLive, the account's allocation, then the buildings

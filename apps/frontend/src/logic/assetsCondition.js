@@ -62,6 +62,7 @@ import { assetChain, canAct } from './accessRoles.js';
 import { actionCtx, actionSteps, mailDraft, investigationQuestion as shapeQuery, investigationSteps, shapeInvestigation, investigationError,
   datasetOf, datasetFailure, summaryBody, summaryReply } from './assetsActions.js';
 import { deepAgentsApi } from '../api/deepAgents.js';
+import { plainFailure } from './plainErrors.js';
 
 // What is still unknown says so. These are claims about the data, not decoration.
 // One inspection report as a note under its asset. Pure, so the tests can hold it to the
@@ -1158,7 +1159,14 @@ export const assetsConditionMethods = {
     return {
       asThreatN: threats.length,
       asAll: all,
-      asCards: [
+      // Until the register has answered the cards say "—", never "0" or "0 of 0" in green: a
+      // count of nothing read is not a count of nothing (17 Nov 2026).
+      asCards: (s.asLive ? (cards) => cards : (cards) => cards.map((c) => Object.assign({}, c, {
+        v: '—', color: 'var(--color-neutral-500)',
+        s: s.asLiveLoading ? 'Reading the asset register…'
+          : s.asLiveError ? 'The asset register could not be read — ' + plainFailure(s.asLiveError).text
+          : 'The asset register has not answered yet'
+      })))([
         // Counts are over the rows on screen, not the engine's summary, so a card can never
         // disagree with the list beneath it — health_score can raise a band here and the
         // engine's rule does not carry that signal. Where the two differ, the card says so
@@ -1190,7 +1198,7 @@ export const assetsConditionMethods = {
               // building EUI the condition rule reads. Without saying so, a portfolio under
               // reference everywhere reads as "in control" and "money at risk" at once.
               + ' · from each asset\u2019s worst anomaly, not the building EUI'
-            : (s.asVarError ? 'Value engine unreachable — ' + s.asVarError : s.asCondLoading ? 'Reading…' : NOT_COMPUTABLE),
+            : (s.asVarError ? 'The value engine could not be read — ' + plainFailure(s.asVarError).text : s.asCondLoading ? 'Reading…' : NOT_COMPUTABLE),
           color: t('risk').color },
         // "In control" is the card most able to mislead. On the deployed database most assets
         // sit in a section with no sub-meter, so they were banded on the anomaly signal alone
@@ -1206,10 +1214,10 @@ export const assetsConditionMethods = {
                 anomCovered + ' with an anomaly attributed'
               ].join(' · ')
             : (s.asCondSummaryError
-               ? 'Band summary unreachable — ' + s.asCondSummaryError + ' · '
+               ? 'Band summary could not be read — ' + plainFailure(s.asCondSummaryError).text + ' · '
                : '') + euiCovered + ' with a section intensity · ' + anomCovered + ' with an anomaly attributed',
           color: t('ok').color }
-      ],
+      ]),
       asPct: pct + '%', asWeeks: String(wks), asWeeksUnit: wks === 1 ? 'week' : 'weeks',
       asPctDown: () => this.asRuleStep('asPct', -1), asPctUp: () => this.asRuleStep('asPct', 1),
       asWkDown: () => this.asRuleStep('asWeeks', -1), asWkUp: () => this.asRuleStep('asWeeks', 1),
@@ -1240,8 +1248,10 @@ export const assetsConditionMethods = {
         + ' returning them — a count above zero means the asset register is scoping differently from your login.',
       asEmpty: groups.length ? 'none' : 'block',
       asEmptyText: s.asLiveLoading ? 'Reading the asset register…'
-        : s.asLiveError ? 'Unreachable — ' + s.asLiveError
+        : s.asLiveError ? 'The asset register could not be read — ' + plainFailure(s.asLiveError).text + '. Nothing is shown in its place; use Reload register to try again.'
         : (s.asLive || []).length ? 'No asset in scope matches the “' + (f || 'All') + '” filter.'
+        // Not read yet is not "none in scope" (17 Nov 2026).
+        : !Array.isArray(s.asLive) ? 'The asset register has not answered yet.'
         : 'No assets are in scope for your account.',
       asSummary: (() => {
         const idn = groups.filter((g) => !g.unnamed).length;

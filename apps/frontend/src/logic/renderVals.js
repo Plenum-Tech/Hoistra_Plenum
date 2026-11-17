@@ -1,6 +1,7 @@
 import { docLabel } from './chatCases.js';
 import { choiceCards, choiceIntro } from './choiceCards.js';
-import { filterQueue, queueFiltersFor } from './queueLive.js';
+import { filterQueue, queueFiltersFor, queueBadge, isUrgent } from './queueLive.js';
+import { plainFailure } from './plainErrors.js';
 import { instanceReports, instanceShowsModule, instanceShowsSession } from './instances.js';
 import { sessionVisible } from './accessRoles.js';
 // renderVals — the view model — everything the templates read.
@@ -29,6 +30,7 @@ import { accountCanIngest } from './auth.js';
 import { evidencePane } from './vendorsEvidence.js';
 import { evidenceForMonth } from './vendorsLive.js';
 import { scrubInternal } from './publicText.js';
+import { hgAllowed } from './hoistGraph.js';
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -232,7 +234,29 @@ export const renderValsMethods = {
     const GRAPH_EDGES_V = ccOn ? GRAPH_EDGES : GRAPH_EDGES.filter((e) => e[0] !== "certificate" && e[1] !== "certificate");
     const gTableId = !ccOn && s.gTable === "certificate" ? "document" : s.gTable;
     const vpTab = !ccOn && VP_CC_TABS.indexOf(s.vpTab) > -1 ? 0 : s.vpTab;
-    const qPool = qlm.live ?qlm.items : D.decisions.filter((d) => instanceShowsModule(instReports, d.module));
+    // Nothing until a read answers (17 Nov 2026): the seed cards (LOLER, Gas Safe…) read as the
+    // company's own decisions. Snoozed cards (this browser's, per company) leave the list and the
+    // count unless the reader asks to see them.
+    const qSnoozes = this.queueSnoozesHere();
+    const qBadge = queueBadge(qlm, qSnoozes);
+    // Every item is listed; only the urgent ones are counted on the pill (Hussain, 17 Nov 2026:
+    // "show all the items but only the urgent ones' count in the pending pill"). The drawer shows
+    // Urgent first (the pill's number) and then Everything else; the chips count the cards on
+    // screen. Snoozed items sit apart, outside every count.
+    const qAllItems = qlm.live ? qlm.items : [];
+    const qPool = qAllItems.filter((d) => !qSnoozes[d.key]);
+    const qSnoozedPool = qAllItems.filter((d) => qSnoozes[d.key]);
+    // One card shape for the counted list and the snoozed one.
+    const qCard = (d) => {
+      const open = () => this.queueOpenItem(d);
+      return {
+        key: d.key, title: d.title, meta: d.meta, money: d.money, icon: d.icon, module: d.module,
+        color: t(d.tone).color, bg: t(d.tone).bg, click: open, open: open,
+        urgent: isUrgent(d), snoozable: !d.info, snoozed: !!qSnoozes[d.key],
+        snooze: () => this.queueSnooze(d.key),
+        unsnooze: () => this.queueUnsnooze(d.key)
+      };
+    };
     const qFilter = queueFiltersFor(instReports).indexOf(s.queueFilter) > -1 ? s.queueFilter : "All";
     // Sessions and reports are one shared browser store, not per-account (see
     // makeSession()'s own comment) — every account that has ever signed in in this tab,
@@ -433,6 +457,10 @@ export const renderValsMethods = {
     // different claims and only one of them is true.
     const hmValue = hmLive && hm.value && hm.value.answered;
     const hmPnl = hmLive && hm.pnl && hm.pnl.answered;
+    // What a Home figure says before its read answers: never a sample figure (17 Nov 2026).
+    const homeUnread = s.homeLoading ? "Reading the operations backend…"
+      : s.homeError ? "The operations backend could not be read — " + plainFailure(s.homeError).text + ". Nothing is shown in its place."
+      : "The operations backend has not answered yet.";
 
     // Documents section — search + pagination over the same portfolio, independent of the
     // buildings table's own (docQuery/docPage) so paging one list never moves the other.
@@ -464,14 +492,16 @@ export const renderValsMethods = {
             hm.hero.certificates + (hm.hero.certificates === 1 ? " certificate on record" : " certificates on record"),
             hm.hero.countries.length ? hm.hero.countries.map((c) => COUNTRY_SHORT[c] || c).join(", ") : hm.hero.vendors + " vendors"
           ]
-        : [D.portfolio.buildings + " buildings hoisted", D.portfolio.area, "UK, US, Singapore, UAE"],
+        : [s.homeLoading ? "Reading your portfolio…" : "Your portfolio has not been read yet"],
       heroLive: heroLive,
       // Home's four tiles. All drawn, except for a user with an access role, whose tiles with
       // nothing of theirs in them are left out (accessRoles.js roleHome, via instVals).
       homeTiles: { score: true, pnl: true, value: true },
       // A compliance page reached in an instance without Compliance (an old link, a stored view)
       // shows Home rather than the console or a blank page (ccBlocked).
-      isHome: s.signedIn && (s.view === "home" || ccBlocked), isAnswer: s.signedIn && s.view === "answer", isModule: s.signedIn && s.view === "module" && !ccBlocked,
+      // A page the instance does not offer (the graph after a switch of instance) falls back Home
+      // rather than rendering nothing (17 Nov 2026).
+      isHome: s.signedIn && (s.view === "home" || ccBlocked || (s.view === "hg" && !hgAllowed(s))), isAnswer: s.signedIn && s.view === "answer", isModule: s.signedIn && s.view === "module" && !ccBlocked,
       isChat: s.signedIn && s.view === "chat",
       // The chat page's connection line and its empty-state copy.
       chatLinkLabel: s.chatLink === "connected"
@@ -497,7 +527,18 @@ export const renderValsMethods = {
         else if (this.state.queueOpen) { this.queueSeenInit(); this.queueModel().items.forEach((i) => { if (this._qSeen) this._qSeen[i.key] = true; }); }
       }),
       closeQueue: () => this.setState({ queueOpen: false }),
-      queueCount: qlm.live ? qlm.count : Math.max(qPool.length, CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length), query: s.query,
+      // What waits on someone, less what this browser snoozed; null until a read answers.
+      queueCount: qBadge.total, query: s.query,
+      // The pill: "1 urgent · 734 pending", loud (filled, pulsing) only when something is urgent.
+      queueBadgeText: qBadge.text,
+      queueBadgeHot: qBadge.hot,
+      queueBadgeTitle: !qlm.live ? "The decision queue has not been read yet"
+        : (qBadge.urgent ? qBadge.urgent + " urgent — lapsed, blocked or critical" : "Nothing urgent is waiting")
+          + (qPool.filter((d) => !isUrgent(d)).length ? " · " + qPool.filter((d) => !isUrgent(d)).length + " more in the queue" : "")
+          + (qSnoozedPool.length ? " · " + qSnoozedPool.length + " snoozed" : ""),
+      // The drawer's own line: both numbers, so the pill's count is never mistaken for the total.
+      queueHeadLine: !qlm.live ? "Not read yet"
+        : qBadge.urgent + " urgent · " + qPool.filter((d) => !isUrgent(d)).length + " other",
       chainOpen: s.chainOpen, chainIcon: s.chainOpen ? "ph-caret-down" : "ph-caret-right",
       toastOn: !!s.toast, toast: s.toast, askedQuery: s.askedQuery,
       themeIcon: s.dark ? "ph-sun" : "ph-moon",
@@ -669,15 +710,14 @@ export const renderValsMethods = {
       // answers, the seed otherwise — and both cards say which they are showing. The
       // server derived every live figure from the store; a module or head it could not
       // price arrives as "—" with its reason, never as an invented number.
-      pnlSaved: hmPnl ? hm.pnl.saved : "£390k",
-      pvTotal: hmValue ? hm.value.total : "£970k",
-      pvTitle: "Platform value · " + (hmValue ? hm.value.year : "2026"),
-      pvNote: hmValue
-        ? "Live · " + hm.value.note
-        : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · the value read has not answered yet"),
+      // Before the value read answers: the modules, with "—" — never the sample ledger.
+      pnlSaved: hmPnl ? hm.pnl.saved : "—",
+      pvTotal: hmValue ? hm.value.total : "—",
+      pvTitle: "Platform value · " + (hmValue ? hm.value.year : String(new Date().getFullYear())),
+      pvNote: hmValue ? "Live · " + hm.value.note : homeUnread,
       pvRows: hmValue
         ? hm.value.rows.map((r) => ({ head: r.head, detected: r.detected }))
-        : VALUE_LEDGER.map((r) => ({ head: r.mod, detected: r.detected })),
+        : VALUE_LEDGER.map((r) => ({ head: r.mod, detected: "—" })),
       pvOpen: () => this.orchWith("Platform value ledger · " + (hmValue ? hm.value.year : "2026"), "All modules", "value", {}),
       fValue: s.flow === "value",
       pvLedger: hmValue
@@ -693,37 +733,37 @@ export const renderValsMethods = {
               basis: i.basis, est: i.est ? "est." : "", estShow: i.est ? "inline" : "none"
             }))
           }))
-        : VALUE_LEDGER.map((r) => ({ mod: r.mod, saved: r.saved, detected: r.detected, items: r.items.map((i) => Object.assign({}, i, { est: /estimated/.test(i.basis) ? "est." : "", estShow: /estimated/.test(i.basis) ? "inline" : "none" })) })),
+        // Before the value read answers there is no ledger to open — never the sample one.
+        : [],
       pnlTop: hmPnl
         // No budget yet, so no head carries an over/under tone — a colour would be a
         // judgement against a number that does not exist.
         ? hm.pnl.rows.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: "var(--color-neutral-400)" }))
-        : D.pnl.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: TONE[r.tone] ? TONE[r.tone].color : "var(--color-neutral-400)" })),
+        : D.pnl.map((r) => ({ head: r.head, budget: "—", actual: "—", color: "var(--color-neutral-500)" })),
       pnlNote: hmPnl
         ? "Live actuals · no budget ledger is connected yet"
-        : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · no budget ledger is connected yet"),
+        : homeUnread,
       pnlNoteShow: "block",
       cronCount: String(CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length),
       // Hoist Score: ingestion coverage per source, live when at least one source answered.
       // A bar with no source draws empty and says why in its tooltip.
       hoistScore: hmScore
         ? { value: hm.score.value === null ? "—" : String(hm.score.value), band: hm.score.band, gap: hm.score.gap, note: "Ingestion coverage across the Hoist Graph, read from the operations backend. At 85 the agents move from supervised to delegated dispatch on L3 assets." }
-        : { value: "78", band: "Supervised autonomy", gap: "Meter consent lowest at 71% — the gap to delegated autonomy", note: "Ingestion coverage across the Hoist Graph. At 85 the agents move from supervised to delegated dispatch on L3 assets." },
+        : { value: "—", band: "Not read yet", gap: "", note: homeUnread },
       hoistBars: hmScore
         ? hm.score.bars.map((b) => ({
             key: b.key, label: b.label, short: b.short, val: b.val, note: b.note,
             pct: (b.pct === null ? 0 : b.pct) + "%",
             color: b.tone === "none" ? "var(--color-neutral-600)" : t(b.tone).color
           }))
+        // The four sources with no figure: the bar is drawn empty, never at a sample percentage.
         : [
-            { label: "Contracts and framework agreements", short: "Contracts", val: "92%", pct: "92%", color: "var(--st-ok)", note: "seed" },
-            { label: "Asset registers", short: "Assets", val: "84%", pct: "84%", color: "var(--st-ok)", note: "seed" },
-            { label: "Meter consent — MPAN / MPRN", short: "Meter consent", val: "71%", pct: "71%", color: "var(--st-warn)", note: "seed" },
-            { label: "Certificates and evidence", short: "Certificates", val: "65%", pct: "65%", color: "var(--st-warn)", note: "seed" }
-          ],
-      hoistScoreNote: hmScore
-        ? hm.score.note
-        : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · " + (s.homeError ? "backend unreachable — " + s.homeError : "the operations backend has not answered yet")),
+            { label: "Contracts and framework agreements", short: "Contracts" },
+            { label: "Asset registers", short: "Assets" },
+            { label: "Meter consent — MPAN / MPRN", short: "Meter consent" },
+            { label: "Certificates and evidence", short: "Certificates" }
+          ].map((b) => Object.assign(b, { val: "—", pct: "0%", color: "var(--color-neutral-600)", note: "not read yet" })),
+      hoistScoreNote: hmScore ? hm.score.note : homeUnread,
 
       isBuildings: s.signedIn && s.view === "buildings",
       useLegend: Object.keys(USE_TINT).map((k) => ({ label: k, color: USE_TINT[k].color, hatch: USE_TINT[k].hatch || "none" })),
@@ -1077,11 +1117,14 @@ export const renderValsMethods = {
       // of them a directory of invented contractors.
       vpEmptyShow: VD.vendors.length ? "none" : "block",
       vpBodyShow: VD.vendors.length ? "grid" : "none",
-      vpEmptyTitle: vm.live ? "No vendors on the register" : s.vpLoading ? "Reading the register…" : "Contract performance backend unreachable",
+      vpEmptyTitle: vm.live ? "No vendors on the register" : s.vpLoading ? "Reading the register…" : "Vendor records couldn\u2019t be loaded",
       vpEmptyNote: vm.live
         ? "No vendor with a scorecard or a contract parameter set is on record for this company. Ingest a signed contract or run the monthly scoring job, and the directory fills from what it writes."
         : s.vpLoading ? "Nothing is shown until it answers."
-        : "The figures on this page could not be loaded" + (s.vpError ? ": " + s.vpError : "") + ". Nothing is shown in their place.",
+        // Plain words; the server's message is the small detail line (17 Nov 2026).
+        : "The figures on this page could not be loaded — " + plainFailure(s.vpError).text + ". Nothing is shown in their place.",
+      vpEmptyDetail: vm.live || s.vpLoading ? "" : (s.vpError || ""),
+      vpEmptyIcon: vm.live ? "ph-users-three" : s.vpLoading ? "ph-circle-notch" : "ph-plugs",
       // The weights the engine scored against, or nothing. Quoting a set of numbers the
       // backend never sent would be the one place on this page a person cannot check.
       vpWeights: () => this.flash(vm.weightsText
@@ -2250,7 +2293,12 @@ export const renderValsMethods = {
         toolsShow: (m.calls || []).length ? "block" : "none",
         isNote: !!m.note,
         bg: m.error ? "var(--st-risk-bg)" : m.note ? "var(--color-bg)" : "var(--color-surface)",
-        fg: m.error ? "var(--st-risk)" : "var(--color-text)",
+        // Readable ink on the pink: the risk orange on it was 2.75:1 (17 Nov 2026 audit).
+        fg: "var(--color-text)",
+        // A failed answer: the server's own message, small, and Retry where asking again is safe.
+        errorDetail: m.error && m.detail ? m.detail : "",
+        retryShow: !!(m.error && m.retryQ && !s.ccBusy),
+        retry: () => { if (m.retryQ && !this.state.ccBusy) this.askScoped(m.retryQ); },
         interruptShow: m.interrupted ? "block" : "none",
         // Structured compliance payload when the preflight answered; the dock renders
         // the markdown answer instead when this is null.
@@ -3596,13 +3644,22 @@ export const renderValsMethods = {
       })),
       // Filtered by the drawer's "Show" chips (queueLive.filterQueue). The badge keeps the
       // unfiltered total — it is what is waiting, not what this view is showing.
-      queueItems: filterQueue(qPool, qFilter).map((d) => ({
-        title: d.title, meta: d.meta, money: d.money, icon: d.icon, module: d.module,
-        color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.queueOpenItem(d)
-      })),
+      // Everything on screen, urgent first (the model ranks risk first); and the same split in two.
+      queueItems: filterQueue(qPool, qFilter).map(qCard),
+      queueUrgentItems: filterQueue(qPool, qFilter).filter(isUrgent).map(qCard),
+      queueOtherItems: filterQueue(qPool, qFilter).filter((d) => !isUrgent(d)).map(qCard),
+      queueUrgentLabel: "Urgent · " + filterQueue(qPool, qFilter).filter(isUrgent).length,
+      queueOtherLabel: "Everything else · " + filterQueue(qPool, qFilter).filter((d) => !isUrgent(d)).length,
+      queueUrgentShow: qlm.live && filterQueue(qPool, qFilter).length ? "block" : "none",
+      queueOtherShow: filterQueue(qPool, qFilter).some((d) => !isUrgent(d)) ? "block" : "none",
+      // Snoozed urgent items, shown apart on request; counted nowhere.
+      queueSnoozedItems: s.queueShowSnoozed ? filterQueue(qSnoozedPool, qFilter).map(qCard) : [],
+      // Counted from the cards on screen (All = Urgent + Everything else); a module with nothing in
+      // it is not offered, unless it is the one picked (so the way back to All is never lost).
       queueFilterOpts: queueFiltersFor(instReports).map((f) => {
-        const pool = qPool;
-        const n = f === "All" ? pool.length : pool.filter((i) => i.module === f).length;
+        const n = f === "All" ? qPool.length : qPool.filter((i) => i.module === f).length;
+        return { f: f, n: n };
+      }).filter((x) => x.f === "All" || x.n > 0 || x.f === qFilter).map(({ f, n }) => {
         const on = qFilter === f;
         return {
           label: f, n: String(n),
@@ -3612,11 +3669,30 @@ export const renderValsMethods = {
           pick: () => this.queueSetFilter(f)
         };
       }),
+      // Not read yet: say so, and offer Retry once a read has failed. Never "nothing is waiting"
+      // about a queue nobody read, and never the HTTP error itself.
+      queueStateShow: qlm.live ? "none" : "block",
+      queueStateText: qlm.live ? ""
+        : s.homeError ? "The decision queue could not be read, so what is waiting is unknown — not none."
+        : "Reading the decision queue…",
+      queueRetryShow: !qlm.live && s.homeError && !s.homeLoading ? "inline-flex" : "none",
+      queueRetry: () => this.queueRefresh({ silent: true }),
+      // Snoozed cards: how many, that it is this browser only, and a way to see them.
+      queueSnoozedShow: qlm.live && qSnoozedPool.length ? "flex" : "none",
+      queueSnoozedNote: qSnoozedPool.length + " snoozed until tomorrow · in this browser only",
+      queueSnoozedToggleLabel: s.queueShowSnoozed ? "Hide snoozed" : "Show snoozed",
+      queueToggleSnoozed: () => this.setState((p) => ({ queueShowSnoozed: !p.queueShowSnoozed })),
+      // The schedule and channels are settings, not triage: behind a button in the header.
+      queueSettingsShow: s.queueSettingsOpen ? "flex" : "none",
+      queueSettingsPressed: !!s.queueSettingsOpen,
+      queueSettingsToggle: () => this.setState((p) => ({ queueSettingsOpen: !p.queueSettingsOpen })),
       // Live with nothing waiting is a fact worth stating; an empty drawer says nothing.
-      queueEmptyShow: qlm.live && !filterQueue(qlm.items, qFilter).length ? "block" : "none",
+      queueEmptyShow: qlm.live && !filterQueue(qPool, qFilter).length ? "block" : "none",
       queueEmptyNote: qFilter !== "All"
         ? "Nothing in " + qFilter + " is waiting on you."
-        : "Nothing is waiting on you — no pending approval, open anomaly or maintenance decision on your buildings.",
+        : "Nothing is waiting on you" + (qSnoozedPool.length ? " apart from what you snoozed." : " — no pending approval, open anomaly or maintenance decision on your buildings."),
+      // Inside the Urgent section when there is nothing urgent but other items are listed.
+      queueNoUrgentShow: qlm.live && filterQueue(qPool, qFilter).length && !filterQueue(qPool, qFilter).some(isUrgent) ? "block" : "none",
 
       // Hoist Crons. Live: what the engines raised (approvals queue) and detected (energy
       // anomalies), newest first, grouped by day. Seed until the backend answers, and the

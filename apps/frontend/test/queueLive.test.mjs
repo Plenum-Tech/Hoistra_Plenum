@@ -77,23 +77,24 @@ test('the consequence tag prices the payload when it carries a figure, else says
 
 // ── the controller: seed until a read answers, then the live queue ──────────────────────
 
-test('the drawer keeps its seed cards until a read answers, then shows the live queue', () => {
+test('the drawer shows no card until a read answers (no seed), then the live queue', () => {
   const c = new HoistraLogic({});
-  const seed = c.renderVals();
-  assert.ok(seed.queueItems.length >= 5, 'seed cards until the backend answers');
-  assert.equal(seed.queueEmptyShow, 'none');
+  const cold = c.renderVals();
+  assert.deepEqual(cold.queueItems, [], 'no seed cards: they read as the company\'s own (17 Nov 2026)');
+  assert.equal(cold.queueEmptyShow, 'none', 'and never "nothing is waiting" about an unread queue');
 
-  c.setState({ homeRaw: { approvals: { items: [approval()] }, anomalies: { anomalies: [anomaly()] } } });
+  // 17 Nov 2026: every item is listed, urgent first; the badge counts the urgent one only.
+  c.setState({ homeRaw: { approvals: { items: [approval({ severity: 'critical' })] }, anomalies: { anomalies: [anomaly()] } } });
   const v = c.renderVals();
-  assert.equal(v.queueCount, 2);
+  assert.equal(v.queueCount, 1);
   assert.equal(v.queueItems.length, 2);
-  assert.equal(v.queueItems[0].module, 'Energy');            // £38,400/yr outranks £230
+  assert.equal(v.queueItems[0].module, 'Vendors', 'the urgent one first');
   assert.equal(v.queuePreview.length, 2);
 
   // A live card opens the page it is about with its email in the dock, and closes the queue
   // (Hussain, 7 Oct 2026 — it used to open a read-only drawer; queueDraftFlow.test.mjs).
   c.setState({ queueOpen: true });
-  v.queueItems[1].click();
+  v.queueItems[0].click();
   assert.equal(c.state.queueOpen, false);
   assert.equal(c.state.view, 'vp');
   assert.equal(c.state.flow, 'email');
@@ -220,14 +221,15 @@ test('a scheduled refresh names what arrived, through the channels that are on',
   const flashes = []; c.flash = (m) => flashes.push(m);
   c.setState({ homeRaw: { approvals: { items: [approval()] } } });
   const realA = opsApi.approvals, realN = opsApi.anomalies;
-  opsApi.approvals = async () => ({ items: [approval(), approval({ id: 'a9', summary: 'Two confirmed contracts share a signed date', payload: {} })] });
+  // Only urgent arrivals are announced (17 Nov 2026), so the new row is a critical one.
+  opsApi.approvals = async () => ({ items: [approval(), approval({ id: 'a9', severity: 'critical', summary: 'Two confirmed contracts share a signed date', payload: {} })] });
   opsApi.anomalies = async () => ({ anomalies: [] });
   let homeLoads = 0; c.homeLoad = async () => { homeLoads += 1; };
   try {
   await c.queueRefresh();
   assert.equal(homeLoads, 0, 'the tick reads the two queue sources, not the whole Home page');
   assert.equal(flashes.length, 1);
-  assert.match(flashes[0], /1 new decision — Two confirmed contracts/);
+  assert.match(flashes[0], /1 new urgent decision — Two confirmed contracts/);
   flashes.length = 0;
   await c.queueRefresh();                                   // nothing new second time round
   assert.deepEqual(flashes, []);
@@ -271,7 +273,7 @@ test('an item the page\'s own refresh already loaded is still reported once, the
   c.setState({ homeRaw: { approvals: { items: [approval()] } } });
   c.queueSeenInit();                                              // what the reader had
   // The Home loader's own 15-min cycle lands the new row BEFORE the queue tick.
-  const both = { items: [approval(), approval({ id: 'a9', summary: 'Two contracts tie', payload: {} })] };
+  const both = { items: [approval(), approval({ id: 'a9', severity: 'critical', summary: 'Two contracts tie', payload: {} })] };
   c.setState({ homeRaw: { approvals: both } });
   const realA = opsApi.approvals, realN = opsApi.anomalies;
   opsApi.approvals = async () => both; opsApi.anomalies = async () => ({ anomalies: [] });
@@ -299,28 +301,25 @@ test('signing out stops the queue timer; it does not arm while signed out', () =
 
 // ── the "Show" filter ────────────────────────────────────────────────────────────────────
 
-test('the Show chips filter the drawer by module; the badge keeps the full count', () => {
+// 17 Nov 2026: the chips count the cards on screen (All = urgent + everything else); a module
+// with nothing in it is not offered; the badge counts urgent only and never moves with the filter.
+test('the Show chips filter the drawer by module; the badge counts urgent only', () => {
   const c = new HoistraLogic({});
   c.setState({ homeRaw: {
     approvals: { items: [
-      approval(),                                                                    // Vendors
-      approval({ id: 'c1', source_feature: 'A', item_type: 'certificate_confirm', summary: 'Lapsed: Fire Alarm', payload: {} })  // Compliance
+      approval({ severity: 'critical' }),                                             // Vendors, urgent
+      approval({ id: 'c1', source_feature: 'A', item_type: 'certificate_confirm', summary: 'Lapsed: Fire Alarm', payload: {} })  // Compliance, not urgent
     ] },
     anomalies: { anomalies: [anomaly(), anomaly({ id: 'n2', meter_id: 'M2' })] }    // Energy ×2
   } });
   let v = c.renderVals();
-  assert.deepEqual(v.queueFilterOpts.map((o) => o.label + ' ' + o.n),
-    ['All 4', 'Energy 2', 'Vendors 1', 'Compliance 1', 'Maintenance 0', 'Platform 0']);
+  assert.deepEqual(v.queueFilterOpts.map((o) => o.label + ' ' + o.n), ['All 4', 'Energy 2', 'Vendors 1', 'Compliance 1']);
+  assert.equal(v.queueCount, 1, 'the badge counts the urgent one');
   v.queueFilterOpts.find((o) => o.label === 'Energy').pick();
   v = c.renderVals();
   assert.equal(v.queueItems.length, 2);
   assert.ok(v.queueItems.every((i) => i.module === 'Energy'));
-  assert.equal(v.queueCount, 4, 'the badge is what is waiting, not what the view shows');
-  v.queueFilterOpts.find((o) => o.label === 'Maintenance').pick();
-  v = c.renderVals();
-  assert.deepEqual(v.queueItems, []);
-  assert.equal(v.queueEmptyShow, 'block');
-  assert.equal(v.queueEmptyNote, 'Nothing in Maintenance is waiting on you.');
+  assert.equal(v.queueCount, 1, 'the badge never moves with the filter');
   v.queueFilterOpts.find((o) => o.label === 'All').pick();
   assert.equal(c.renderVals().queueItems.length, 4);
   clearInterval(c._orchTick);

@@ -247,8 +247,73 @@ function saveQueuePrefs(s) {
   } catch (e) { /* per-viewer convenience only */ }
 }
 
+// ── the pill, and snoozes (17 Nov 2026) ─────────────────────────────────
+//: The queue holds urgent items only (Hussain, 17 Nov 2026: "only show the urgent ones … no count
+//: mismatch"): lapsed, blocked or critical (risk tone), and never a figure or a suggestion (info).
+export const isUrgent = (i) => !!i && i.tone === "risk" && !i.info;
+
+//: What the pill says, counted from exactly the list the drawer shows: urgent, not snoozed.
+//: Nothing read: "— urgent", never a number. `snoozed` maps item key -> until (ms).
+export function queueBadge(model, snoozed, now) {
+  const m = model || {};
+  if (!m.live) return { total: null, urgent: null, snoozed: 0, text: "— urgent", hot: false };
+  const t = typeof now === "number" ? now : Date.now();
+  const sz = snoozed || {};
+  const urgent = (m.items || []).filter(isUrgent);
+  const open = urgent.filter((i) => !(sz[i.key] && sz[i.key] > t));
+  return {
+    total: open.length, urgent: open.length, snoozed: urgent.length - open.length,
+    text: open.length ? open.length + " urgent" : "Nothing urgent",
+    hot: open.length > 0
+  };
+}
+
+//: Snoozes are this browser's own (a person deferring their own view), kept per company so one
+//: company's snooze never hides another's item. Stored as "<company>|<item key>" -> until (ms);
+//: expired entries are dropped on read.
+const QUEUE_SNOOZE_KEY = "hoistra.queue.snooze.v1";
+export const SNOOZE_MS = 24 * 3600 * 1000;
+export function loadQueueSnoozes(now) {
+  const t = typeof now === "number" ? now : Date.now();
+  try {
+    const d = JSON.parse(localStorage.getItem(QUEUE_SNOOZE_KEY) || "null") || {};
+    const out = {};
+    Object.keys(d).forEach((k) => { if (typeof d[k] === "number" && d[k] > t) out[k] = d[k]; });
+    return out;
+  } catch (e) { return {}; }
+}
+function saveQueueSnoozes(all) {
+  try { localStorage.setItem(QUEUE_SNOOZE_KEY, JSON.stringify(all || {})); } catch (e) { /* per-viewer convenience only */ }
+}
+
 // ── controller methods ──────────────────────────────────────────────────
 export const queueLiveMethods = {
+  // The company the snoozes belong to: the one being viewed, else the account's own.
+  queueSnoozeOrg() {
+    const s = this.state;
+    return String(s.viewOrgId || (s.account && (s.account.organization_id || s.account.org_id)) || "me");
+  },
+  // This company's live snoozes, keyed by item key.
+  queueSnoozesHere(now) {
+    const t = typeof now === "number" ? now : Date.now();
+    const pre = this.queueSnoozeOrg() + "|";
+    const all = this.state.queueSnoozes || {};
+    const out = {};
+    Object.keys(all).forEach((k) => { if (k.indexOf(pre) === 0 && all[k] > t) out[k.slice(pre.length)] = all[k]; });
+    return out;
+  },
+  queueSnooze(itemKey) {
+    const k = this.queueSnoozeOrg() + "|" + itemKey;
+    const next = Object.assign({}, loadQueueSnoozes(), this.state.queueSnoozes || {}, { [k]: Date.now() + SNOOZE_MS });
+    this.setState({ queueSnoozes: next }, () => saveQueueSnoozes(next));
+  },
+  queueUnsnooze(itemKey) {
+    const k = this.queueSnoozeOrg() + "|" + itemKey;
+    const next = Object.assign({}, loadQueueSnoozes(), this.state.queueSnoozes || {});
+    delete next[k];
+    this.setState({ queueSnoozes: next }, () => saveQueueSnoozes(next));
+  },
+
   // Shaped once per (homeRaw, mxRaw) pair — renderVals runs on every keystroke and the
   // approvals feed alone can be hundreds of rows.
   queueModel() {
@@ -387,6 +452,7 @@ export const queueLiveMethods = {
   queueBoot() {
     const saved = loadQueuePrefs();
     if (Object.keys(saved).length) this.setState(saved);
+    this.setState({ queueSnoozes: loadQueueSnoozes() });
     this.queueSchedule();
   },
 
@@ -449,10 +515,11 @@ export const queueLiveMethods = {
     if (!model.live) return model;
     if (!this._qSeen) { this.queueSeenInit(); return model; }
     // Only what waits on someone is announced: a figure or a suggestion (`info`) is listed, quietly.
-    const fresh = model.items.filter((i) => !this._qSeen[i.key] && !i.info);
+    // Only what the queue shows is announced: urgent items (17 Nov 2026).
+    const fresh = model.items.filter((i) => !this._qSeen[i.key] && isUrgent(i));
     model.items.forEach((i) => { this._qSeen[i.key] = true; });
     if (!fresh.length || (opts && opts.silent)) return model;
-    const line = fresh.length + (fresh.length === 1 ? " new decision — " : " new decisions — newest: ") + fresh[0].title;
+    const line = fresh.length + (fresh.length === 1 ? " new urgent decision — " : " new urgent decisions — newest: ") + fresh[0].title;
     if (this.state.channels.includes("In-platform")) this.flash("Decision queue: " + line);
     // Browser push — only ever after the person granted it (queueToggleChannel).
     if (this.state.channels.includes("Push")) {

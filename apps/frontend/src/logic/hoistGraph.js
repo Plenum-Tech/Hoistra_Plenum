@@ -22,6 +22,7 @@
 import { accountCanIngest } from './auth.js';
 import { instanceOf, usesInstances } from './instances.js';
 import { roleReports } from './accessRoles.js';
+import { plainFailure } from './plainErrors.js';
 
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
 const isBuilding = (b) => b && b.name && !/no building on certificate/i.test(b.name);
@@ -145,7 +146,8 @@ export function hoistGraphModel(reg) {
 const STAT_LABELS = ['Areas', 'Obligations', 'Certificates', 'Vendors', 'Accreditations'];
 
 // The Compliance Engine is the instance that carries this report, in either view.
-function hgAllowed(s) {
+// Exported so the shell can send a view the instance does not offer back Home (renderVals isHome).
+export function hgAllowed(s) {
   // A user with an access role has no instance: the graph comes with the Compliance page.
   const mine = roleReports(s.account);
   if (mine) return !!s.signedIn && mine.indexOf('graph') > -1;
@@ -232,7 +234,7 @@ export const hoistGraphMethods = {
       hgStats: m.answered ? m.stats : STAT_LABELS.map((l) => ({ l: l, v: '—' })),
       hgStatus: m.answered ? ''
         : s.ccLoading ? 'Reading the compliance register…'
-          : s.ccError ? 'The compliance register could not be read: ' + s.ccError
+          : s.ccError ? 'The compliance register could not be read — ' + plainFailure(s.ccError).text + '. Nothing is shown in its place.'
             : 'The compliance register has not answered yet.',
       hgRetryShow: !m.answered && !s.ccLoading,
       hgRetry: () => this.ccLoad(),

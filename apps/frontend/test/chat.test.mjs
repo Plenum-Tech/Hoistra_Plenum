@@ -91,7 +91,8 @@ test('a dead orchestrator answers in the transcript, not with an exception', asy
   const last = c.state.ccChat[c.state.ccChat.length - 1];
   assert.equal(last.role, 'bot');
   assert.equal(last.error, true);
-  assert.match(last.text, /^Could not answer/);
+  // 17 Nov 2026: plain words first, the server's message as the detail line (answerErrorText).
+  assert.match(last.text, /^The assistant can't be reached right now/);
   assert.equal(c.state.ccBusy, false);
   cleanup();
 });

@@ -43,6 +43,34 @@ export function tidyNote(raw) {
   return String(raw || "").replace(/(^|[^.])\.\.(?!\.)/g, "$1.");
 }
 
+// A failed answer in plain words (17 Nov 2026). The sentence says what happened and whether
+// anything changed; the server's own message is kept as `detail`, shown small under it.
+// `retry`: safe to ask again. Never after a timeout: the run may still be finishing on the
+// server, and asking again could ingest a document twice.
+export function answerErrorText(e, msg) {
+  const m = String(msg || "");
+  const st = e && typeof e.status === "number" ? e.status : null;
+  const timedOut = /timed out/i.test(m);
+  const unreachable = !timedOut && (st === 502 || st === 503 || st === 504 || /ECONNREFUSED|ENOTFOUND|network|failed to fetch/i.test(m));
+  let text;
+  if (timedOut) {
+    text = "The assistant was reached but didn't answer in time, and it may still be finishing on the server: a long contract can outlast this wait. Check the Ingestion audit trail before sending the same file again.";
+  } else if (unreachable) {
+    text = "The assistant can't be reached right now. Nothing was changed. Your question is kept above; press Retry in a moment.";
+  } else if (st === 404) {
+    text = "The assistant isn't available right now (it may be restarting or being updated). Nothing was changed. Press Retry in a moment.";
+  } else if (st === 401) {
+    text = "You were signed out, so the question wasn't answered. Nothing was changed. Sign in again, then press Retry.";
+  } else if (st === 403) {
+    text = "Your account doesn't have access to answer this. Nothing was changed. Ask an admin for access to these buildings.";
+  } else if (st === 429) {
+    text = "The assistant is busy right now. Nothing was changed. Wait a moment, then press Retry.";
+  } else {
+    text = "The assistant couldn't answer this time. Nothing was changed. Press Retry, or ask it differently.";
+  }
+  return { text: text, detail: scrubInternal(m), retry: !timedOut, unreachable: unreachable, timedOut: timedOut };
+}
+
 export function normCountry(raw) {
   const u = String(raw || "UK").trim().toUpperCase();
   if (u === "UAE" || u === "AE" || u === "ARE") return "AE";
@@ -1647,11 +1675,9 @@ export const complianceLiveMethods = {
       // start a running service and check its LLM key. The two need different advice: a
       // dead upstream did nothing, whereas a timeout may still be finishing on the server,
       // which makes "upload it again" the one genuinely harmful next step.
-      const timedOut = /timed out/i.test(msg);
-      const unreachable = !timedOut && (
-        (e && (e.status === 502 || e.status === 503 || e.status === 504)) ||
-        /ECONNREFUSED|ENOTFOUND|network|failed to fetch/i.test(msg)
-      );
+      // Plain words first, the server's message as a detail line, Retry where it is safe.
+      const err = answerErrorText(e, msg);
+      const unreachable = err.unreachable;
       this.setState((p) => ({
         ccBusy: false,
         ccChat: (p.ccChat || []).concat([{
@@ -1662,12 +1688,12 @@ export const complianceLiveMethods = {
           // server-side, and a second upload would be a second migration.
           unreachable: unreachable,
           // The message is the server's or the engine's own, and can name the platform's parts.
-          text: "Could not answer: " + scrubInternal(msg) +
-            (unreachable
-              ? " — the assistant is not reachable right now; the compliance register is unaffected."
-              : timedOut
-                ? " — the service was reached but did not answer in time, and the run may still be completing on the server. Document ingests call document search and contract extraction in turn, so a long contract can outlast this wait. Check the Ingestion audit trail before sending the same file again."
-                : "")
+          text: err.text,
+          detail: err.detail,
+          // Asked again as a follow-up in this conversation (renderVals `retry`).
+          // Not for a message that carried files: they are not kept, and a retry without them
+          // would answer a different question.
+          retryQ: err.retry && !files.length && typeof q === "string" && q.trim() ? q : null
         }])
       }));
     } finally {

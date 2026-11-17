@@ -771,6 +771,13 @@ export default function OrchestratorDock({ vals }) {
                           : (m.choices || []).length
                             ? <ChoiceCards intro={m.choiceIntro} cards={m.choices} compact />
                             : m.view ? <LazyOpenUIAnswer text={m.view} tail={m.viewTail} fallbackText={m.text} /> : <AnyAnswer text={m.text} />}
+                      {/* A failed answer: the server's message, small, and Retry (17 Nov 2026). */}
+                      {m.errorDetail ? <div style={{ fontSize: "10px", color: "var(--color-neutral-400)", marginTop: "5px", fontFamily: "ui-monospace,monospace" }}>{"Details: " + m.errorDetail}</div> : null}
+                      {m.retryShow ? (
+                        <button type="button" className="hv13" onClick={m.retry} style={{ font: "inherit", display: "inline-flex", alignItems: "center", gap: "5px", marginTop: "8px", fontSize: "11px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", cursor: "pointer" }}>
+                          <i className="ph ph-arrow-clockwise" aria-hidden="true"></i>{"Retry"}
+                        </button>
+                      ) : null}
                       <div style={{ display: m.interruptShow, fontSize: "10px", color: "var(--color-accent)", marginTop: "6px" }}>
                         {"Paused for approval before finishing."}
                       </div>

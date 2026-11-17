@@ -1,6 +1,7 @@
 // InspectionReports — inspection-report query page (Maintenance → Ask the inspection reports)
 // Ported from the Hoistra design reference. `vals` is the view model from useHoistra().
 import React from 'react';
+import UnreachableState from '../components/shell/UnreachableState.jsx';
 
 export default function InspectionReports({ vals }) {
   return (
@@ -41,7 +42,11 @@ export default function InspectionReports({ vals }) {
               ))}
             </div>
           </div>
-          <div style={{ marginTop: "24px", padding: "18px 20px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
+          {/* The maintenance service has not answered: the shared panel, with Retry, instead of an
+              empty answer card headed "Reading · Not loaded" (17 Nov 2026). */}
+          <UnreachableState show={vals.mxEmptyShow} title={vals.mxEmptyTitle} note={vals.mxEmptyNote} detail={vals.mxEmptyDetail}
+            retryShow={vals.mxLiveRetryShow} onRetry={vals.mxLiveRetry} icon={vals.mxEmptyIcon} style={{ marginTop: "24px" }} />
+          <div style={{ display: vals.mxEmptyShow === "block" ? "none" : "block", marginTop: "24px", padding: "18px 20px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
             <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-accent-300)" }}>
               {"Reading · "}{vals.inspCount}
             </div>

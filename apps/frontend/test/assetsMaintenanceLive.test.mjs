@@ -30,10 +30,11 @@ test('the assets module renders with no register loaded yet — empty, and no fi
   const vals = c.renderVals();
   assert.deepEqual(vals.asGroups, [], 'nothing renders until the backend answers');
   assert.equal(vals.asEmpty, 'block');
-  assert.match(vals.asEmptyText, /No assets are in scope/);
+  // 17 Nov 2026: not read is not "none" — no "0" / "0 of 0" before the register answers.
+  assert.match(vals.asEmptyText, /has not answered yet/);
   assert.deepEqual(vals.iotCards, [], 'no instrumented assets without readings on file');
-  assert.deepEqual(vals.modMetrics.map((m) => m.v), ['0', '0', '—', '0 of 0']);
-  assert.match(vals.modMetrics[2].s, /Not computable/, 'value at risk is not computable, not zero');
+  assert.deepEqual(vals.modMetrics.map((m) => m.v), ['—', '—', '—', '—']);
+  assert.ok(vals.modMetrics.every((m) => /has not answered yet/.test(m.s)), 'each card says why it has no figure');
 });
 
 test('the condition tree is built from the register, the buildings list and the anomalies', () => {

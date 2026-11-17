@@ -53,20 +53,21 @@ test('the user tiles do not claim a company with no staff', () => {
 test('a real user list is reported as live, with real counts', () => {
   const v = call(usersMethods, 'usersVals', {
     ...USERS_FRESH, usLiveLoading: false, usLiveLoadedAt: '2026-09-23T10:00:00Z',
-    users: [{ id: 'u', name: 'A Real Person', email: 'a@b.c', buildings: [], ingest: true, status: 'Active' }],
+    users: [{ id: 'u', name: 'A Real Person', email: 'a@b.c', buildings: [], ingest: true, status: 'Active', live: true }],
   });
   assert.equal(v.usTiles[0].value, '1');
   assert.match(v.usLiveSourceLabel, /Live/);
 });
 
-test('sample people are never on screen without the pill that explains them', () => {
+// 17 Nov 2026: sample people are never on screen at all, with or without a pill.
+test('sample people are never on screen, even when the read failed', () => {
   const v = call(usersMethods, 'usersVals', {
     ...USERS_FRESH, usLiveLoading: false, usLiveError: 'Failed to fetch',
     users: AX_USERS.map((u) => ({ ...u, buildings: u.buildings.slice() })),
   });
-  assert.ok(JSON.stringify(v).includes(PEOPLE[0]), 'the fallback still fills a blank table');
-  assert.match(v.usLiveSourceLabel, /showing sample data/,
-    'invented staff were listed with nothing saying they were samples');
+  assert.ok(!JSON.stringify(v.axUsers).includes(PEOPLE[0]), 'no sample person in the table');
+  assert.deepEqual(v.axUsers, []);
+  assert.match(v.usLiveSourceLabel, /could not be read/);
 });
 
 // ── Audit ──────────────────────────────────────────────────────────────────────

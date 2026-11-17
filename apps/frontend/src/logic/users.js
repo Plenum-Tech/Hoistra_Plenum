@@ -4,7 +4,7 @@
 // /api/admin (usLiveInvite / usLiveToggleIngest / usLiveAllocToggle, optimistic with
 // revert-on-error); a pure-seed row keeps the local-only behaviour so the demo still
 // works offline. Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { AX_BUILDINGS } from '../data/hoistra-access.js';
+import { plainFailure } from './plainErrors.js';
 import { ACCESS_ROLES, PAGE_OPTIONS, cleanPages, togglePage } from './accessRoles.js';
 
 // A chip, drawn the way the building chips are.
@@ -71,23 +71,29 @@ export const usersMethods = {
     const sum = s.usSummary || null;
     const nOf = (v, fb) => (typeof v === "number" ? v : fb);
     const live = !!s.usLiveLoadedAt;
-    const total = nOf(sum && sum.users, s.users.length);
-    const withIngest = live ? s.users.filter((u) => u.ingest).length : nOf(sum && sum.can_ingest, s.users.filter((u) => u.ingest).length);
-    const pend = live ? s.users.filter((u) => u.status === "Invited").length : nOf(sum && sum.pending_invites, s.users.filter((u) => u.status === "Invited").length);
+    // Only rows the server shaped (live: true) are shown: the sample people are never on screen
+    // as this company's team, and nothing can be done to them (17 Nov 2026).
+    const rows = (s.users || []).filter((u) => u.live);
+    const total = nOf(sum && sum.users, rows.length);
+    const withIngest = live ? rows.filter((u) => u.ingest).length : nOf(sum && sum.can_ingest, rows.filter((u) => u.ingest).length);
+    const pend = live ? rows.filter((u) => u.status === "Invited").length : nOf(sum && sum.pending_invites, rows.filter((u) => u.status === "Invited").length);
     // The allocation chips: the company's own buildings (usersLive's axBldsLive) once
     // GET /api/admin/buildings has genuinely answered, the seed names only until then.
     // axBldsLive is null before that first successful read and a real (possibly EMPTY)
     // array once it lands — checking .length instead of this collapsed the two: a company
     // with zero buildings on file read as "not loaded yet" and showed the seed's eight
     // demo names as things to allocate a user to, none of which exist on this account.
-    const bldNames = Array.isArray(s.axBldsLive) ? s.axBldsLive.map((b) => b.name) : AX_BUILDINGS;
+    // Until that read answers there is nothing to allocate to — never the sample names.
+    const bldNames = Array.isArray(s.axBldsLive) ? s.axBldsLive.map((b) => b.name) : [];
     // The server itself refuses to suspend or deactivate the caller's own row (PATCH and
     // DELETE both 400 on self) — matched here so the control never fires a doomed request
     // and reads as broken; it is simply not offered on your own row.
     const meEmail = ((s.account && s.account.email) || "").toLowerCase();
     // Nothing read yet and nothing to show: the table is empty because the answer has not
     // arrived, not because the company has no people.
-    const unread = !live && !s.usLiveError && !s.users.length;
+    const unread = !live && !s.usLiveError;
+    // Never read successfully and the read failed: the counts are unknown, not zero.
+    const unknown = !live && !!s.usLiveError && !sum;
 
     return {
       isUsers: s.signedIn && s.view === "users",
@@ -95,19 +101,20 @@ export const usersMethods = {
       // that would establish it is still running. An unread table counts nothing, so the
       // tiles say so rather than reporting a company with no staff on it.
       usTiles: [
-        { value: unread ? "…" : String(total), label: "Users", hint: "no seat limit", color: "var(--color-accent)" },
-        { value: unread ? "…" : String(withIngest), label: "Can ingest data", hint: "granted per user", color: "var(--st-ok)" },
-        { value: unread ? "…" : String(pend), label: "Pending invites", hint: "awaiting activation", color: "var(--st-warn)" },
+        { value: unread ? "…" : unknown ? "—" : String(total), label: "Users", hint: "no seat limit", color: "var(--color-accent)" },
+        { value: unread ? "…" : unknown ? "—" : String(withIngest), label: "Can ingest data", hint: "granted per user", color: "var(--st-ok)" },
+        { value: unread ? "…" : unknown ? "—" : String(pend), label: "Pending invites", hint: "awaiting activation", color: "var(--st-warn)" },
         { value: "Building", label: "Access boundary", hint: "every query filtered by it", color: "var(--color-neutral-300)" }
       ],
       // The live/seed source pill next to the table, with the loader's manual retry.
       usLiveSourceLabel: s.usLiveLoading ? "Reading users…"
         // Samples fill only a table that was never read; after a successful read the rows
         // on screen are the company's own, and the label says only that the refresh failed.
-        : s.usLiveError ? "Unreachable — " + s.usLiveError + (s.usLiveLoadedAt ? "" : " · showing sample data")
+        : s.usLiveError ? (s.usLiveLoadedAt
+            ? "Refresh failed — " + plainFailure(s.usLiveError).text
+            : "The team could not be read — " + plainFailure(s.usLiveError).text + ". Nothing is shown in its place.")
         : live ? "Live"
-        : unread ? "Not read yet"
-        : "Sample data — backend not read yet",
+        : "Not read yet",
       usLiveSourceDot: s.usLiveError ? "var(--st-risk)" : live ? "var(--st-ok)" : "var(--color-neutral-600)",
       usLiveRetryShow: !s.usLiveLoading && (!live || !!s.usLiveError) && typeof this.usLiveRetryNow === "function" ? "inline" : "none",
       usLiveRetry: () => (typeof this.usLiveRetryNow === "function" ? this.usLiveRetryNow() : null),
@@ -144,16 +151,13 @@ export const usersMethods = {
         if (!this.state.usName.trim() || !this.state.usEmail.trim()) return this.flash("Name and email are required.");
         // A role with no page would let the person open nothing; the server refuses it too.
         if (this.state.usRole && !(this.state.usPages || []).length) return this.flash(NEEDS_A_PAGE);
-        // Live page → the real invitation (usersLive.js appends the server's row);
-        // until then the local demo row keeps the flow working offline.
+        // Live page → the real invitation (usersLive.js appends the server's row).
         if (this.state.usLiveLoadedAt && typeof this.usLiveInvite === "function") return this.usLiveInvite();
-        const u = { id: "u" + this.state.users.length + "-" + this.state.usEmail, name: this.state.usName, email: this.state.usEmail, title: "Invited user", buildings: this.state.usBlds.slice(), ingest: this.state.usIngest, status: "Invited", queries: 0, ingests: 0, last: "—" };
-        this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false, usRole: "", usPages: [] }));
-        this.flash(u.buildings.length
-          ? "Invitation sent to " + u.email + " — they activate the account and set a password from the email."
-          : "Invitation sent to " + u.email + " — no buildings allocated, so they'll see no data until some are.");
+        // Not read yet (or unreachable): nothing can be sent, and nothing is pretended
+        // (17 Nov 2026 — this used to add a local row and flash "Invitation sent").
+        this.flash("Can't reach the server, so nothing was sent. Try again once the team list has loaded.");
       },
-      axUsers: s.users.map((u) => {
+      axUsers: rows.map((u) => {
         const isMe = !!meEmail && (u.email || "").toLowerCase() === meEmail;
         const suspKey = "susp:" + u.id, delKey = "del:" + u.id;
         const suspArmed = s.usArmed === suspKey, delArmed = s.usArmed === delKey;

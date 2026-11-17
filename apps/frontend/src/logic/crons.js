@@ -13,6 +13,7 @@ import { cronsApi } from '../api/crons.js';
 import { isStaleScope } from '../api/client.js';
 import { scrubInternal } from './publicText.js';
 import { instanceReports, instanceShowsModule } from './instances.js';
+import { plainFailure } from './plainErrors.js';
 
 // The checks an instance can schedule: its own modules' (Hussain, 2 Nov 2026 - a module's data
 // stays in the module). 'Ask a question' (module Orchestrator) is every instance's.
@@ -372,7 +373,8 @@ export const cronMethods = {
       // The Hoist Crons page's open job follows the same read.
       if (this.state.cpJobId && typeof this.cpLoadDetail === 'function') this.cpLoadDetail(this.state.cpJobId);
     } catch (e) {
-      if (!isStaleScope(e)) this.setState({ cronLoadErr: (e && e.message) || String(e) });
+      // The status too, so the page can say what happened in plain words (cronsPage plainFailure).
+      if (!isStaleScope(e)) this.setState({ cronLoadErr: (e && e.message) || String(e), cronLoadStatus: (e && typeof e.status === 'number') ? e.status : null });
     } finally {
       this._cronLoading = false;
     }
@@ -502,7 +504,7 @@ export function cronVals(c) {
       return f.length ? f.length + ' of ' + shown.length + ' failed ' + (f.length === 1 ? 'its' : 'their') + ' last run: ' + f.map((j) => j.name).join(', ')
         : summaryOf(shown);
     })(),
-    cronEmpty: s.cronLoadErr && !s.cronLoadedAt ? 'Hoist Crons could not be read — ' + s.cronLoadErr
+    cronEmpty: s.cronLoadErr && !s.cronLoadedAt ? 'Hoist Crons could not be read — ' + plainFailure({ message: s.cronLoadErr, status: s.cronLoadStatus }).text + '.'
       : !s.cronLoadedAt ? 'Reading your Hoist Crons…'
       : !jobs.length ? 'No Hoist Crons yet — schedule the checks you want every day' + (s.cronCanManage ? '.' : '; an admin sets them up.')
       : !shown.length ? 'None of yours yet — ' + jobs.length + (jobs.length === 1 ? ' company cron is' : ' company crons are') + ' under Company.'

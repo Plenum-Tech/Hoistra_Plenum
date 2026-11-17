@@ -22,6 +22,7 @@ export default function IngestionAgentModal({ vals }) {
           <div style={{ padding: "17px 18px", display: "flex", flexDirection: "column", gap: "14px" }}>
             <div style={{ fontSize: "10.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Selected building"}</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
+              {vals.ingBuildingsEmpty ? <div style={{ fontSize: "12px", color: "var(--color-neutral-400)", lineHeight: "1.5" }}>{vals.ingBuildingsEmpty}</div> : null}
               {(vals.ingBuildings || []).map((b, $index) => (
                 <React.Fragment key={$index}>
                   <div onClick={b.pick} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${b.edge}`, background: b.bg, color: b.fg, cursor: "pointer" }}>{b.name}</div>

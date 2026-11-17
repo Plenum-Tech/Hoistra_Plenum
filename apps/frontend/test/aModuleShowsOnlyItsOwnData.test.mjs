@@ -27,8 +27,8 @@ const ME = 'reader@plenum.example';
 const at = new Date().toISOString();
 // What the unified approvals queue answers: one compliance item (source A), one vendor item (B).
 const APPROVALS = { items: [
-  { id: 'a1', source_feature: 'A', summary: 'Fire Alarm System Service Certificate lapsed', item_type: 'certificate_expiry', severity: 'high', created_at: at },
-  { id: 'b1', source_feature: 'B', summary: 'Invoice line held for Larkfield', item_type: 'invoice_dispute', severity: 'medium', created_at: at }
+  { id: 'a1', source_feature: 'A', summary: 'Fire Alarm System Service Certificate lapsed', item_type: 'certificate_expiry', severity: 'critical', created_at: at },
+  { id: 'b1', source_feature: 'B', summary: 'Invoice line held for Larkfield', item_type: 'invoice_dispute', severity: 'critical', created_at: at }
 ] };
 const ANOMALIES = { anomalies: [{ id: 'e1', status: 'open', anomaly_type: 'baseload_drift', meter_id: 'M-1', detected_at: at }] };
 
@@ -58,7 +58,9 @@ test('Ops Brain: the Pending queue holds no compliance or energy item', () => {
   const modules = v.queueItems.map((i) => i.module);
   assert.deepEqual(modules, ['Vendors'], 'the lapsed certificate and the meter anomaly are not Ops Brain\'s');
   assert.equal(v.queueCount, 1, 'the badge counts what this module has waiting');
-  assert.deepEqual(v.queueFilterOpts.map((f) => f.label), ['All', 'Vendors', 'Maintenance', 'Platform'],
+  assert.deepEqual(c.queueModel().items.map((i) => i.module), ['Vendors'], 'scoped in the model too, energy included');
+  // 17 Nov 2026: chips are offered only for modules with something urgent.
+  assert.deepEqual(v.queueFilterOpts.map((f) => f.label), ['All', 'Vendors'],
     'no Compliance or Energy chip in a module that has neither');
   cleanup();
 });
@@ -67,17 +69,20 @@ test('the Compliance Engine: compliance and vendor items, no energy', () => {
   boot('comp');
   const v = c.renderVals();
   assert.deepEqual(v.queueItems.map((i) => i.module).sort(), ['Compliance', 'Vendors']);
-  assert.deepEqual(v.queueFilterOpts.map((f) => f.label), ['All', 'Vendors', 'Compliance', 'Platform']);
+  assert.ok(!c.queueModel().items.some((i) => i.module === 'Energy'), 'no energy in the model either');
+  assert.deepEqual(v.queueFilterOpts.map((f) => f.label), ['All', 'Vendors', 'Compliance']);
   cleanup();
 });
 
 test('the full platform and the admin view keep every item', () => {
   boot('full');
-  assert.equal(c.renderVals().queueItems.length, 3);
+  assert.equal(c.queueModel().items.length, 3);
+  assert.equal(c.renderVals().queueItems.length, 3, 'the drawer lists every item');
   boot('ops', 'admin');
   const v = c.renderVals();
-  assert.equal(v.queueItems.length, 3, 'an instance shapes the user view only');
-  assert.equal(v.queueFilterOpts.length, 6);
+  assert.equal(c.queueModel().items.length, 3, 'an instance shapes the user view only');
+  assert.equal(v.queueItems.length, 3);
+  assert.equal(v.queueFilterOpts.length, 4, 'All, Compliance, Vendors and Energy — modules with something in them');
   cleanup();
 });
 

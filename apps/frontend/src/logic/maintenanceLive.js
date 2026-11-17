@@ -40,6 +40,7 @@ import { workOrderApi } from '../api/workOrder.js';
 import { isStaleScope } from '../api/client.js';
 import { isUnallocated } from './auth.js';
 import { instanceReports, instanceShowsModule } from './instances.js';
+import { plainFailure } from './plainErrors.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -532,13 +533,15 @@ export const maintenanceLiveMethods = {
       mxBodyShow: m.live ? 'block' : 'none',
       mxEmptyTitle: s.mxLiveLoading ? 'Reading the maintenance records…'
         : skew ? 'Maintenance data not available yet'
-        : 'Maintenance backend unreachable',
+        : 'Maintenance records couldn\u2019t be loaded',
       mxEmptyNote: s.mxLiveLoading
         ? 'Nothing is shown until it answers.'
         : skew
         ? 'This page’s data is not available yet — contact support if it persists.'
-        : 'The figures on this page could not be loaded'
-          + (s.mxLiveError ? ': ' + s.mxLiveError : '') + '. Nothing is shown in its place.'
+        // Plain words; the server's message is the small detail line (17 Nov 2026).
+        : 'The figures on this page could not be loaded — ' + plainFailure(s.mxLiveError).text + '. Nothing is shown in its place, so what is waiting is unknown, not none.',
+      mxEmptyDetail: s.mxLiveLoading || skew ? '' : (s.mxLiveError || ''),
+      mxEmptyIcon: s.mxLiveLoading ? 'ph-circle-notch' : skew ? 'ph-hourglass' : 'ph-plugs'
     };
   },
 

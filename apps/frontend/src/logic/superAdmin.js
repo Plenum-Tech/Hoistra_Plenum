@@ -16,6 +16,7 @@
 // per-company scoping yet) and keep showing this deployment's own data regardless.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { money } from './homeLive.js';
+import { plainFailure } from './plainErrors.js';
 import { setActingOrg } from '../api/client.js';
 import { authApi } from '../api/auth.js';
 
@@ -36,8 +37,11 @@ export const superAdminMethods = {
     const EMPTY = s.saLiveLoading || !s.saLiveLoadedAt
       ? { ...NO_CO, name: "Reading the platform…" }
       : NO_CO;
-    const co = s.saCompanies.find((c) => c.id === s.saSel) || s.saCompanies[0] || EMPTY;
-    const maxCr = Math.max(...s.saCompanies.map((c) => c.credits || 0), 0);
+    // Only companies the server returned (live: true): the sample companies are never shown as
+    // the platform's, and nothing can be done to them (17 Nov 2026).
+    const companies = (s.saCompanies || []).filter((c) => c.live);
+    const co = companies.find((c) => c.id === s.saSel) || companies[0] || EMPTY;
+    const maxCr = Math.max(...companies.map((c) => c.credits || 0), 0);
     // A live row's tile numbers ride on the usage card; null = the card has not landed.
     const nn = (v) => (v === null || v === undefined ? "…" : String(v));
 
@@ -55,10 +59,11 @@ export const superAdminMethods = {
       // Live once the companies read has answered; until then the seed is on show, and
       // the overlay says so next to the retry control.
       saLiveError: s.saLiveError
-        ? (s.saLiveLoadedAt ? "Companies refresh failed — " + s.saLiveError : "Companies backend unreachable — " + s.saLiveError + ". Showing sample data.")
-        : (s.saLiveCardError ? "Company usage card unavailable — " + s.saLiveCardError : ""),
+        ? (s.saLiveLoadedAt ? "Companies refresh failed — " + plainFailure(s.saLiveError).text + "."
+          : "The companies could not be read — " + plainFailure(s.saLiveError).text + ". Nothing is shown in their place.")
+        : (s.saLiveCardError ? "The company's usage could not be read — " + plainFailure(s.saLiveCardError).text + "." : ""),
       saLiveRetry: () => { if (typeof this.saLiveRetryNow === "function") this.saLiveRetryNow(); },
-      saCompanies: s.saCompanies.map((c) => ({
+      saCompanies: companies.map((c) => ({
         name: c.name, cc: c.cc, status: c.status, credits: (c.credits || 0).toLocaleString("en-GB") + " cr",
         // In place of the credits (29 Sep 2026): the company's Platform value detected — the
         // sum of the DETECTED column on its own Home page. "…" while reading, "—" when
@@ -95,13 +100,11 @@ export const superAdminMethods = {
       saCreate: () => {
         if (!this.state.saName.trim()) return this.flash("Company name is required.");
         // Live once the platform has answered: the API creates the record (and invites
-        // the administrator when an email was given). Offline, the demo keeps minting a
-        // local row so the console still works without a backend.
+        // the administrator when an email was given).
         if (this.state.saLiveLoadedAt && typeof this.saLiveCreate === "function") return this.saLiveCreate();
-        const email = this.state.saEmail.trim();
-        const c = { id: "c" + this.state.saCompanies.length + "-" + this.state.saName, name: this.state.saName, cc: this.state.saCc, status: "Created", buildings: 0, graphs: 0, last: "—", udr: "0 MB", certs: 0, certCc: "—", api: "0", credits: 0, users: 0, invited: !!email };
-        this.setState((p) => ({ saCompanies: p.saCompanies.concat(c), saSel: c.id, saNew: false, saName: "", saEmail: "" }));
-        this.flash(c.invited ? "Company created — admin invitation sent to " + email : "Company created. Invite its administrator when ready.");
+        // The platform has not answered: nothing is created and nothing is pretended
+        // (17 Nov 2026 — this used to mint a local company and flash "invitation sent").
+        this.flash("Can't reach the server, so nothing was created and no invitation was sent. Try again once the companies have loaded.");
       },
       saCo: {
         name: co.name, cc: co.cc, status: co.status,
@@ -112,7 +115,8 @@ export const superAdminMethods = {
           // A live row re-sends to the admin_email on record; a company without one gets
           // an instruction rather than an API call (the create form is where it enters).
           if (co.live && typeof this.saLiveInvite === "function") return this.saLiveInvite(co);
-          this.setState((p) => ({ saCompanies: p.saCompanies.map((x) => x.id === co.id ? { ...x, invited: true, status: x.status === "Created" ? "Onboarding" : x.status } : x) })); this.flash("Admin invitation sent for " + co.name + " — they activate, set a password and land in the company admin application.");
+          // Only a server company can be invited to; nothing is pretended (17 Nov 2026).
+          this.flash("Can't reach the server, so no invitation was sent.");
         },
         // Only a live row has a real organization_id to act as — the seed/demo rows
         // (offline console) have nothing a backend override could resolve.
@@ -130,7 +134,7 @@ export const superAdminMethods = {
         { value: (co.credits || 0).toLocaleString("en-GB"), label: "Credits consumed", hint: "this month", color: "var(--st-warn)" },
         { value: nn(co.users), label: "Users", hint: "no seat limit", color: "var(--color-neutral-300)" }
       ],
-      saCredits: s.saCompanies.map((c) => ({
+      saCredits: companies.map((c) => ({
         name: c.name, v: (c.credits || 0).toLocaleString("en-GB"),
         bar: Math.max(2, Math.round(((c.credits || 0) / (maxCr || 1)) * 100)) + "%",
         fg: c.id === s.saSel ? "var(--color-accent)" : "var(--color-neutral-500)"

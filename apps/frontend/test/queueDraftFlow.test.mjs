@@ -63,7 +63,9 @@ const boot = (state) => {
   c.setState(Object.assign({ signedIn: true, account: { email: 'pm@northbridge.co.uk', organization_name: 'Northbridge Estates' } }, state));
   return c;
 };
-const firstCard = () => c.renderVals().queueItems[0];
+// 17 Nov 2026: the drawer shows urgent items only, so a non-urgent card (an invoice flag, an
+// anomaly) is opened from the live model directly — the same queueOpenItem the drawer calls.
+const firstCard = () => { const it = c.queueModel().items[0]; return { title: it.title, click: () => c.queueOpenItem(it) }; };
 
 test('a compliance card opens the Vendors page and the dock with the engine\'s email, ready to send', async () => {
   boot({ homeRaw: { approvals: { items: [approval()] } }, ccLive: REG, queueOpen: true });
@@ -222,16 +224,17 @@ test('a flagged invoice opens Vendors on that vendor\'s Invoices tab with the qu
   assert.equal(c.state.emTo, 'accounts@apex.example');
 });
 
-test('a sample card opens its page with a draft, reads nothing and fills no address', async () => {
-  let reads = 0;
+// 17 Nov 2026: the seed cards are gone. Before a read answers the drawer offers no sample card
+// (Gas Safe, LOLER…) at all, so there is nothing to open, address or send by mistake.
+test('before a read answers there is no sample card to open or send', async () => {
+  let reads = 0, sends = 0;
   opsApi.vendorContact = async () => { reads += 1; return {}; };
+  opsApi.sendEmail = async () => { sends += 1; return { ok: true, status: 'sent' }; };
   boot({});
-  const gas = c.renderVals().queueItems.find((i) => /Gas Safe/.test(i.title));
-  await gas.click();
-  assert.equal(c.state.view, 'cc');
-  assert.equal(c.state.flow, 'email');
-  assert.equal(c.state.emTo, '');
+  assert.deepEqual(c.renderVals().queueItems, []);
+  assert.ok(!c.renderVals().queueItems.some((i) => /Gas Safe/.test(i.title)));
   assert.equal(reads, 0);
+  assert.equal(sends, 0);
 });
 
 test('a draft opened next — even one that does not start a task — is not tied to the queue item', async () => {
@@ -315,19 +318,6 @@ test('a vendor record the asset read could not open is said to be unreadable, no
   await firstCard().click();
   assert.match(c.state.orchTask.steps[2].t, /could not be read just now/);
   assert.doesNotMatch(c.state.orchTask.steps[2].t, /No vendor on the asset record/);
-});
-
-test('a sample card\'s draft cannot be sent, even with an address typed', async () => {
-  let sends = 0;
-  opsApi.sendEmail = async () => { sends += 1; return { ok: true, status: 'sent' }; };
-  boot({});
-  await c.renderVals().queueItems.find((i) => /Gas Safe/.test(i.title)).click();
-  c.renderVals().em.setTo({ target: { value: 'someone@example.com' } });
-  await c.renderVals().em.send();
-  assert.equal(sends, 0);
-  assert.equal(c.state.flow, 'email', 'the draft stays on screen');
-  assert.match(c.state.flowDone, /sample card/i);
-  assert.equal(c.renderVals().em.sample, true);
 });
 
 test('a reminder is confirmed as a reminder', async () => {

@@ -1,6 +1,7 @@
 // Vendors — contract performance
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import UnreachableState from '../components/shell/UnreachableState.jsx';
 import CertificateList from '../components/shell/CertificateList.jsx';
 import VendorDeleteDialog from '../components/shell/VendorDeleteDialog.jsx';
 
@@ -277,17 +278,8 @@ export default function Vendors({ vals }) {
               </React.Fragment>
             ))}
           </div>
-          <div style={{ display: vals.vpEmptyShow, padding: "26px 22px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "16px" }}>
-            <div style={{ fontSize: "14px" }}>
-              {vals.vpEmptyTitle}
-            </div>
-            <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "7px 0 0", maxWidth: "76ch", lineHeight: "1.55" }}>
-              {vals.vpEmptyNote}
-            </p>
-            <div className="hv4" onClick={vals.vpRetry} style={{ display: vals.vpRetryShow === "none" ? "none" : "inline-block", marginTop: "13px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
-              {"Try the read again"}
-            </div>
-          </div>
+          <UnreachableState show={vals.vpEmptyShow} title={vals.vpEmptyTitle} note={vals.vpEmptyNote} detail={vals.vpEmptyDetail} icon={vals.vpEmptyIcon}
+            retryShow={vals.vpRetryShow} onRetry={vals.vpRetry} />
             </>
           ) : null}
           <div style={{ display: vals.vpQueueShow ? "none" : vals.vpBodyShow, gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start", containerType: "inline-size", containerName: "vpbody" }}>

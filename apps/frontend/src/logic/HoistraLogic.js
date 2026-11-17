@@ -192,6 +192,9 @@ export class HoistraLogic extends Controller {
     ...CC_CASE_DEFAULTS,
     ccPivot: "buildings", ccTab: 0, ccFocus: { kind: "building", name: "Bishopsgate Tower" }, nyView: "building",
     ccQueue: null, ccQueueOpenId: null, currency: "GBP", freq: "30 min", channels: ["In-platform"], queueFilter: "All",
+    // Decision queue (queueLive.js): this browser's snoozes ("<company>|<item>" -> until ms),
+    // whether snoozed cards are shown, and whether the Runs / Notify settings are open.
+    queueSnoozes: {}, queueShowSnoozed: false, queueSettingsOpen: false,
     // Compliance register from svc-operations-intelligence (null = seed data shown).
     ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
     // Scan runs on the page, not in the chat: these drive the status pill / LAST RUN.

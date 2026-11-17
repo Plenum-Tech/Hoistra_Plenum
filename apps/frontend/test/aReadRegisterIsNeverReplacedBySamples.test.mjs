@@ -35,12 +35,16 @@ test('an empty platform that has been read stays empty when a refresh fails', as
   assert.doesNotMatch(v.saLiveError, /sample/i);
 });
 
-test('a never-read platform still gets the labelled samples on failure', async () => {
+// 17 Nov 2026: no samples on screen at all — a never-read platform shows no company and says
+// in plain words that the companies could not be read.
+test('a never-read platform shows no sample company on failure, and says so plainly', async () => {
   c.setState({ saOn: true, saLiveLoadedAt: null, saCompanies: [] });
   await c.saLiveLoad();
   clearTimeout(c._saLiveRetry);
-  assert.ok(c.state.saCompanies.length > 0);
-  assert.match(c.renderVals().saLiveError, /Showing sample data/);
+  const v = c.renderVals();
+  assert.deepEqual(v.saCompanies, []);
+  assert.match(v.saLiveError, /^The companies could not be read — /);
+  assert.doesNotMatch(v.saLiveError, /sample/i);
 });
 
 test('an empty user list that has been read stays empty, and the label does not claim samples', async () => {
@@ -49,7 +53,7 @@ test('an empty user list that has been read stays empty, and the label does not 
   clearTimeout(c._usLiveRetry);
   assert.equal(c.state.users.length, 0, 'a read-once empty table was replaced by sample people');
   const v = c.renderVals();
-  assert.match(v.usLiveSourceLabel, /^Unreachable — /);
+  assert.match(v.usLiveSourceLabel, /^Refresh failed — /);
   assert.doesNotMatch(v.usLiveSourceLabel, /sample/i);
 });
 

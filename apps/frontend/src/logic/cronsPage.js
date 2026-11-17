@@ -9,6 +9,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { cronsApi } from '../api/crons.js';
 import { isStaleScope } from '../api/client.js';
+import { plainFailure } from './plainErrors.js';
 import { CRON_FREQS, DAY_NAMES, companyWideOnly, recipientsOf, refreshFor, summaryLine } from './crons.js';
 
 const zone = () => {
@@ -206,7 +207,9 @@ export function cronsPageVals(c) {
   const lastOf = (j) => {
     const r = (j.runs || [])[0];
     if (!r) return { text: 'Not run yet', tone: 'var(--color-neutral-500)' };
-    return { text: fmtWhen(r.finished_at, now) + ' · ' + (r.ok ? (summaryLine(r.summary) || 'ok') : 'failed: ' + String(r.error || '').slice(0, 70)),
+    // A failed run says so; the job's own error is on hover, not cut off mid-word in the row.
+    return { text: fmtWhen(r.finished_at, now) + ' · ' + (r.ok ? (summaryLine(r.summary) || 'ok') : 'run failed'),
+      title: r.ok ? '' : String(r.error || 'No error message was recorded.'),
       tone: r.ok ? 'var(--color-neutral-400)' : 'var(--st-risk)' };
   };
   const nextJob = jobs.filter((j) => j.enabled && j.next_run_at).sort((a, b) => new Date(a.next_run_at) - new Date(b.next_run_at))[0];
@@ -216,7 +219,7 @@ export function cronsPageVals(c) {
     return {
       id: j.id, name: j.name, module: j.module, status: stt.label, statusTone: stt.tone, cadence: j.refresh_label,
       next: j.enabled && j.next_run_at ? fmtWhen(j.next_run_at, now) : '—',
-      last: last.text, lastTone: last.tone, days: strip(j.id, 14),
+      last: last.text, lastTitle: last.title || '', lastTone: last.tone, days: strip(j.id, 14),
       by: (j.created_by && j.created_by.email) || j.owner_email || '—',
       open: () => c.cpOpenJob(j.id),
       edit: () => c.cpEdit(j),
@@ -303,14 +306,19 @@ export function cronsPageVals(c) {
     isCrons: s.signedIn && s.view === 'crons',
     cpLoading: !s.cronLoadedAt && !s.cronLoadErr,
     cpError: s.cronLoadErr || '',
+    // Plain words and Retry (17 Nov 2026); the raw message stays as small detail.
+    cpErrorText: s.cronLoadErr ? 'The jobs could not be read — ' + plainFailure({ message: s.cronLoadErr, status: s.cronLoadStatus }).text + '. What is scheduled is unknown, not none.' : '',
+    cpErrorDetail: s.cronLoadErr || '',
+    cpRetry: () => c.cronLoad(),
     cpManage: manage,
     cpNew: () => c.cpNew(),
-    cpTiles: [
+    // Unread or failed, the tiles say "—": a 0 there would claim nothing is scheduled (17 Nov 2026).
+    cpTiles: (!s.cronLoadedAt ? (rows) => rows.map((t) => Object.assign({}, t, { value: '—', hint: s.cronLoadErr ? 'could not be read' : 'reading…', tone: 'var(--color-neutral-500)' })) : (rows) => rows)([
       { value: String(jobs.length), label: 'Scheduled jobs', hint: jobs.filter((j) => j.enabled).length + ' running · ' + jobs.filter((j) => !j.enabled).length + ' paused', tone: 'var(--color-text)' },
       { value: String(st.runs_today || 0), label: 'Runs today', hint: ((st.runs_today || 0) - (st.failed_today || 0)) + ' ok · ' + (st.failed_today || 0) + ' failed', tone: st.failed_today ? 'var(--st-risk)' : 'var(--st-ok)' },
       { value: nextJob ? fmtWhen(nextJob.next_run_at, now).replace(/^today /, '') : '—', label: 'Next run', hint: nextJob ? nextJob.name : 'nothing scheduled', tone: 'var(--color-text)' },
       { value: String(st.emails_week || 0), label: 'Emailed this week', hint: 'from admin@hoistra.ai', tone: 'var(--color-text)' }
-    ],
+    ]),
     cpFilters: ['All', 'Energy', 'Compliance', 'Assets', 'Vendors', 'Maintenance', 'Orchestrator', 'Paused'].map((x) => ({ label: x, on: filter === x, pick: () => c.cpSetFilter(x) })),
     cpSearch: s.cpSearch || '', cpSetSearch: (e) => c.cpSetSearch(e),
     cpRows: jobs.filter(keep).map(row),

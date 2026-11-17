@@ -49,28 +49,31 @@ test('the source types are exactly the connectors the connector service implemen
   assert.equal(names(vals()).length, plugins.length);
 });
 
-test('the four tiles stay, at zero where nothing is connected', () => {
+// 17 Nov 2026: connections are not read from anywhere, so their counts are unknown, not zero —
+// "—", never a 0 that claims nothing is connected. The structure stays (6 Oct 2026).
+test('the four tiles stay, with a dash where the count was never read', () => {
   const tiles = vals().intTiles;
   assert.deepEqual(tiles.map((t) => t.label), ['Connected', 'Tables fed', 'Need attention', 'Available']);
-  assert.deepEqual(tiles.map((t) => t.value), [0, 0, 0, SOURCE_TYPES.length]);
+  assert.deepEqual(tiles.map((t) => t.value), ['—', '—', '—', SOURCE_TYPES.length]);
 });
 
 test('all three tabs stay, counted from what is there', () => {
   assert.deepEqual(vals().intTabs.map((t) => [t.label, t.n]),
-    [['Connected', 0], ['Available sources', SOURCE_TYPES.length], ['Custom API', 0]]);
+    [['Connected', '—'], ['Available sources', SOURCE_TYPES.length], ['Custom API', '—']]);
 });
 
 test('the Connected table keeps its header and says it has no rows', () => {
   const v = vals();
   assert.equal(v.intRows.length, 0);
-  assert.equal(v.intConnSummary, '0 of 0 shown · 0 tables fed');
-  assert.match(v.intConnEmpty, /no sources? (are )?connected/i);
+  assert.equal(v.intConnSummary, 'Connections are not listed here yet');
+  assert.match(v.intConnEmpty, /does not mean nothing is connected/);
+  assert.doesNotMatch(v.intConnEmpty, /^No sources connected/);
   assert.equal(v.intLastSync, '—');
 });
 
 test('the navigator counts connections instead of claiming a sync cadence', () => {
   assert.equal(vals().navAdmin[0].label, 'Integrations');
-  assert.equal(vals().navAdmin[0].badge, '0');
+  assert.equal(vals().navAdmin[0].badge, '—');
 });
 
 test('the Custom API tab keeps its panels and fills them with nothing invented', () => {
@@ -103,6 +106,6 @@ test('Connect opens the dialog, and confirming adds no pretend connection', () =
   vals().intConfirm();
   assert.equal(vals().intModalOn, false);
   assert.equal(vals().intRows.length, 0, 'a connection appears only when one exists');
-  assert.equal(vals().intTiles[0].value, 0);
+  assert.equal(vals().intTiles[0].value, '—');
   assert.equal(asked.length, 1, 'the request goes to the orchestrator');
 });

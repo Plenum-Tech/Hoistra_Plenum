@@ -34,10 +34,13 @@ const cleanup = () => {
   clearTimeout(c._ccRetry);
 };
 
-const lastBotText = () => {
+const lastBot = () => {
   const m = (c.state.ccChat || []).filter((x) => x.role === 'bot');
-  return (m[m.length - 1] || {}).text || '';
+  return m[m.length - 1] || {};
 };
+const lastBotText = () => lastBot().text || '';
+// 17 Nov 2026: the sentence leads in plain words ("The assistant can't be reached right now…")
+// and the server's own message moved to the small `detail` line under it (answerErrorText).
 
 test('a timeout is not reported as an unreachable service', async () => {
   // apiFetch turns an AbortError into exactly this message; see src/api/client.js.
@@ -45,10 +48,10 @@ test('a timeout is not reported as an unreachable service', async () => {
   await c.askScoped('ingest this contract');
   await settle();
   const text = lastBotText();
-  assert.match(text, /^Could not answer/);
+  assert.match(text, /didn't answer in time/);
   assert.doesNotMatch(
     text,
-    /not reachable/i,
+    /can't be reached|not reachable/i,
     'the service answered its health check; telling the reader to start it sends them after the wrong thing'
   );
   assert.doesNotMatch(text, /give it an LLM key/i);
@@ -60,7 +63,8 @@ test('a timeout says the work may still be running, so the file is not uploaded 
   await c.askScoped('ingest this contract');
   await settle();
   const text = lastBotText();
-  assert.match(text, /timed out after 180s/, 'the underlying message is kept');
+  assert.match(lastBot().detail, /timed out after 180s/, 'the underlying message is kept, as the detail line');
+  assert.equal(lastBot().retryQ, null, 'no Retry: the run may still be going');
   assert.match(text, /still be (running|completing|finishing)/i);
   assert.match(text, /audit trail/i, 'names where to check before retrying');
   cleanup();
@@ -71,8 +75,9 @@ test('a genuinely dead upstream still says so', async () => {
   await c.askScoped('hello');
   await settle();
   const text = lastBotText();
-  assert.match(text, /the assistant is not reachable right now/);
+  assert.match(text, /The assistant can't be reached right now/);
   assert.doesNotMatch(text, /\/backend\/|svc-|LLM key/, 'no gateway path, service or ops instruction on screen (7 Oct 2026)');
+  assert.equal(lastBot().retryQ, 'hello', 'Retry asks the same question again');
   cleanup();
 });
 
@@ -87,7 +92,7 @@ test('a gateway 502 still reads as unreachable', async () => {
     });
   await c.askScoped('hello');
   await settle();
-  assert.match(lastBotText(), /the assistant is not reachable right now/);
+  assert.match(lastBotText(), /The assistant can't be reached right now/);
   assert.doesNotMatch(lastBotText(), /\/backend\/|svc-|LLM key/);
   cleanup();
 });

@@ -306,7 +306,7 @@ test('the assess buttons read as confirmation when the assessment resolves, over
   assert.equal(v.ingActions[0].label, 'Yes — override and ingest');
 });
 
-test('the setup chips come from the live register when it is loaded, the account allocation next, the seed last', () => {
+test('the setup chips come from the live register when it is loaded, the account allocation next, never the seed', () => {
   const c = new HoistraLogic();
   c.setState({ axBldsLive: AX_LIVE });
   assert.deepEqual(c.ingBldList(), ['Riverside Court', 'Bishopsgate Tower']);
@@ -314,7 +314,8 @@ test('the setup chips come from the live register when it is loaded, the account
   assert.deepEqual(c.ingBldList(), ['Bishopsgate Tower']);
   assert.equal(c.ingBldIdOf('Bishopsgate Tower'), B_SUG, 'the allocation also resolves name → id');
   c.setState({ account: ACCOUNT });
-  assert.equal(c.ingBldList().length, 8, 'the AX seed names remain the last resort');
+  // 17 Nov 2026: no sample names as a last resort — nothing to pick is said, not invented.
+  assert.deepEqual(c.ingBldList(), [], 'no AX seed names');
 });
 
 test('a real, loaded, empty axBldsLive wins outright — no fallback to the account allocation or the seed', () => {
