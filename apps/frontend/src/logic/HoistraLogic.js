@@ -172,7 +172,7 @@ export class HoistraLogic extends Controller {
     ccPanel: false, ccCountries: ["UK"], ccStates: [], ccBuildings: [], ccTile: null,
     gBuilding: "Bishopsgate Tower", gChild: "asset", gTable: "building", docOpen: "Bishopsgate Tower",
     // Documents section search and pagination — independent of the buildings table's own
-    // (bldQuery/bldPage), since paging one list shouldn't move the other.
+    // (bldSearch/bldPage), since paging one list shouldn't move the other.
     docQuery: "", docPage: 0,
     ugText: "", ugParsed: false,
     vpVendor: "v1", vpTab: 0,
@@ -207,7 +207,7 @@ export class HoistraLogic extends Controller {
     bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
     // Buildings table search and pagination (buildingsLive.js) — client-side, over whatever
     // the register already loaded. bldPage is 0-indexed; a new search always lands on page 1.
-    bldQuery: "", bldPage: 0,
+    bldSearch: "", bldPage: 0,
     // Energy module's buildings list search and pagination (energy.js) — same shape as the
     // Buildings table's above, over the buildings already in scope.
     enBldQuery: "", enBldPage: 0,

@@ -177,14 +177,219 @@ export function shapeLiveBuildings(payload) {
   return rows.map(shapeLiveBuilding).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Pure: the search bar's match, case-insensitive substring against the fields the table
-// itself shows for a row — name, building ID (code or the fallback key), country and state.
-// A blank query matches everything, so the table's own row order is untouched.
+// ── Search ──────────────────────────────────────────────────────────────────────────────
+//
+// The search bar reads a query the way a person types it, not as one literal substring:
+//   · every word has to match SOME field of the row, in any order ("london commercial")
+//   · the words the table shows count, not only the stored codes — the Country column says
+//     "United Kingdom" while the row holds "UK", so both (and "GB", "Britain") find it
+//   · building IDs and postcodes match with or without their dash or space ("b012", "ec2m4aa")
+//   · use types match their everyday synonyms ("offices" → Commercial, "flats" → Residential)
+//   · filler words ("buildings in the uae") are optional: they rank a row up if they match
+//     and never knock one out if they don't
+//   · a typo ("manchster") is forgiven, but ONLY when nothing matches exactly, so a query that
+//     does hit a row never also drags in look-alikes ("mill" never brings "Hill House")
+// Results are ranked: an exact name or ID first, then word starts, then mid-word hits, with
+// the table's own order breaking ties. A blank query returns the rows untouched.
+
+// Everyday names for each regulation-pack country, keyed on normCountry's code.
+const COUNTRY_WORDS = {
+  UK: "uk gb gbr united kingdom great britain britain british",
+  AE: "ae uae are united arab emirates emirates emirati",
+  US: "us usa united states america american",
+  SG: "sg sgp singapore singaporean"
+};
+// What people call a building's use when the register spells it differently.
+const USE_WORDS = {
+  commercial: "office offices business workplace",
+  office: "commercial offices business workplace",
+  residential: "housing homes home apartments apartment flats flat dwellings",
+  retail: "shop shops store stores shopping mall",
+  industrial: "warehouse warehouses factory logistics",
+  warehouse: "industrial logistics storage",
+  mixed: "mixed-use multi-use multiuse",
+  education: "school schools university college campus",
+  healthcare: "hospital clinic health medical",
+  hotel: "hospitality accommodation",
+  hospitality: "hotel accommodation",
+  leisure: "gym sports",
+  public: "civic government council"
+};
+// Words that carry no meaning about WHICH building — optional, never required.
+const FILLER = new Set(["in", "the", "at", "of", "and", "a", "an", "on", "for", "with", "near",
+  "from", "to", "building", "buildings", "site", "sites", "located", "show", "me", "all", "find",
+  "any", "which", "what", "are", "is", "our", "my", "list", "that", "those", "these"]);
+
+// Units a typed number can carry; the figure fields below spell them.
+const UNIT_WORDS = new Set(["floor", "floors", "storey", "storeys", "story", "stories", "m2", "sqm", "kwh", "eui"]);
+
+// Field weights: what the row IS (ID, name) outranks where it is, which outranks how it is
+// metered.
+const W_ID = 5, W_NAME = 5, W_PLACE = 3, W_COUNTRY = 2, W_USE = 2, W_ALIAS = 1.5, W_OTHER = 1;
+// Match strength within one field.
+const M_EXACT = 10, M_WORD = 6, M_COMPACT = 5, M_SUB = 3, M_FUZZY = 1;
+
+// NFKD, not NFD: it also folds compatibility forms, so "m²" reads "m2" (17 Nov 2026).
+const fold = (v) => String(v == null ? "" : v).normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const compact = (v) => v.replace(/[^a-z0-9]+/g, "");
+
+// One row's searchable text, built once per row object (rows are stable between renders).
+const SEARCH_INDEX = new WeakMap();
+function searchIndex(b) {
+  let idx = SEARCH_INDEX.get(b);
+  if (idx) return idx;
+  const uses = [b.use].concat((b.mix || []).map((m) => m && m[0])).filter((u) => u && u !== "—");
+  const useAlias = uses.map((u) => USE_WORDS[fold(u)] || "").join(" ");
+  const raw = [
+    [b.id, W_ID], [b.code, W_ID], [b.siteId, W_ID],
+    [b.name, W_NAME],
+    [b.postcode, W_PLACE], [b.city, W_PLACE], [b.state !== "—" ? b.state : "", W_PLACE],
+    [b.cc, W_COUNTRY], [countryMeta(b.cc).name, W_COUNTRY], [COUNTRY_WORDS[b.cc], W_ALIAS],
+    [uses.join(" "), W_USE], [useAlias, W_ALIAS],
+    [b.std !== "—" ? b.std : "", W_OTHER], [b.route, W_OTHER], [b.gran, W_OTHER],
+    // The figures the table shows, as whole numbers a person might type: "22" for a 22-storey
+    // building, "49400" for its floor area, "215" for its EUI. Matched whole only (see `num`).
+    // Floors match whole only ("2" is never 22 floors); an area or EUI also matches from its
+    // first digits, so "49" finds 49,400 m² while it is still being typed.
+    [typeof b.floors === "number" ? b.floors + " floors storeys storey story stories" : "", W_PLACE, "whole"],
+    [typeof b.areaM2 === "number" ? Math.round(b.areaM2) + " m2 sqm" : "", W_PLACE, "prefix"],
+    [typeof b.euiN === "number" ? Math.round(b.euiN) + " kwh eui" : "", W_OTHER, "prefix"]
+  ];
+  idx = raw.map(([v, w, num]) => {
+    const text = fold(v);
+    // An opaque key (a UUID) is matched only from its very start: its inner parts ("2271",
+    // "4c22") are random, not words anyone types.
+    const opaque = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text);
+    return { text, w, num: !!num, numPrefix: num === "prefix", opaque, compact: compact(text), words: text.split(/[^a-z0-9]+/).filter(Boolean) };
+  }).filter((f) => f.text);
+  SEARCH_INDEX.set(b, idx);
+  return idx;
+}
+
+// Does `t` start a word inside `text` (at 0, or right after a non-alphanumeric)?
+function startsWord(text, t) {
+  for (let i = text.indexOf(t); i > -1; i = text.indexOf(t, i + 1)) {
+    if (i === 0 || !/[a-z0-9]/.test(text[i - 1])) return true;
+  }
+  return false;
+}
+
+// Optimal-string-alignment distance, giving up once it exceeds `max`.
+function editDistance(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2 = null, prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let d = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, prev2[j - 2] + 1);
+      cur.push(d);
+      if (d < rowMin) rowMin = d;
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev; prev = cur;
+  }
+  return prev[b.length];
+}
+
+// A typed number against a figure field: the whole figure, or (area, EUI) its first digits.
+function numMatch(f, tc) {
+  const n = f.words[0];
+  if (n === tc) return M_EXACT;
+  return f.numPrefix && tc.length >= 2 && n.indexOf(tc) === 0 ? M_SUB : 0;
+}
+
+// How strongly one query word matches one field (0 = not at all).
+function matchField(f, t, tc, fuzzy, unit) {
+  const digits = /^\d+$/.test(tc);
+  // "22 floors": the number and its unit read as one figure, so it matches only the floor count
+  // that is 22 — not an ID starting with 22 on a building that has some other number of floors.
+  if (f.opaque) return f.compact === tc ? M_EXACT : tc.length >= 2 && f.compact.indexOf(tc) === 0 ? M_WORD : 0;
+  if (unit) return f.num && f.words.some((w) => w.indexOf(unit) === 0) ? numMatch(f, tc) : 0;
+  // A figure field: a number matches a whole number on it ("22" is not "220" floors) or, on an
+  // area or EUI, its first digits; its unit words ("floors", "m2", "eui") match as words.
+  if (f.num) {
+    if (digits) return numMatch(f, tc);
+    return !/\d/.test(tc) && f.words.some((w) => w.indexOf(tc) === 0) ? M_WORD : 0;
+  }
+  if (f.text === t || (tc && f.compact === tc && /\d/.test(tc))) return M_EXACT;
+  // A bare number matches only at a word start: "301" finds B-301, but "22" never finds a UUID
+  // with "22" somewhere in its middle (17 Nov 2026). A whole ID part outranks its start, so a
+  // 22-storey building ranks above B-2201.
+  if (digits) return f.words.indexOf(tc) > -1 ? M_WORD : startsWord(f.text, t) ? M_SUB : 0;
+  if (startsWord(f.text, t)) return M_WORD;
+  // IDs and postcodes: compare without dashes and spaces, so "b012" finds "B-012".
+  if (tc.length >= 2 && /\d/.test(tc) && f.compact.indexOf(tc) > -1) return M_COMPACT;
+  // One or two letters only match at a word start ("uk", "b"), never mid-word noise.
+  if (t.length >= 3 && f.text.indexOf(t) > -1) return M_SUB;
+  if (fuzzy && tc.length >= 4 && !/\d/.test(tc)) {
+    const max = tc.length >= 8 ? 2 : 1;
+    for (const w of f.words) {
+      if (editDistance(tc, w, max) <= max) return M_FUZZY;
+      // Still typing: a misspelt START of a longer word ("bishpsg" → "bishopsgate").
+      if (tc.length >= 5 && w.length > tc.length && editDistance(tc, w.slice(0, tc.length), max) <= max) return M_FUZZY;
+    }
+  }
+  return 0;
+}
+
+function scoreRow(b, terms, phrase, fuzzy) {
+  const idx = searchIndex(b);
+  let total = 0;
+  for (const { t, tc, optional, unit } of terms) {
+    let best = 0;
+    for (const f of idx) {
+      const m = matchField(f, t, tc, fuzzy, unit);
+      if (m && m * f.w > best) best = m * f.w;
+    }
+    if (!best && !optional) return 0;
+    total += best;
+  }
+  // The whole query read as one phrase inside the name ("bishopsgate tower") ranks highest.
+  if (phrase && fold(b.name).indexOf(phrase) > -1) total += 20;
+  return total;
+}
+
+// Pure: the search bar's match and ranking (see the block above). A blank query matches
+// everything, so the table's own row order is untouched.
 export function filterBuildings(rows, query) {
-  const q = String(query || "").trim().toLowerCase();
-  if (!q) return rows;
-  return rows.filter((b) => [b.name, b.code, b.id, b.cc, b.city, b.state]
-    .some((v) => v && String(v).toLowerCase().indexOf(q) > -1));
+  // "10,000" and "10 000" are one number, as the table prints it, not two (17 Nov 2026). A comma
+  // between digits always joins — "49,4" is 49,400 still being typed; a space only before a
+  // group of three, so "22 100" typed as two numbers is not forced into one by accident.
+  const phrase = fold(query).replace(/(\d),(?=\d)/g, "$1")
+    .replace(/(\d)[\u00a0\u202f ](?=\d{3}(?!\d))/g, "$1").replace(/\s+/g, " ");
+  const words = phrase.split(/[\s,;/|+]+/).map((t) => t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")).filter(Boolean);
+  if (!words.length) return rows;
+  // Filler is optional only alongside a real word; a query of nothing but filler
+  // ("tower" is not filler, "building" is) still has to match something.
+  const allFiller = words.every((t) => FILLER.has(t));
+  const terms = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const t = words[i];
+    // A unit typed straight onto its number ("10000m2") is the same figure as "10000 m2".
+    const glued = /^(\d+)([a-z]+2?)$/.exec(t);
+    if (glued && UNIT_WORDS.has(glued[2])) {
+      terms.push({ t: glued[1], tc: glued[1], optional: false, unit: glued[2] });
+      continue;
+    }
+    // A number followed by its unit is one figure ("22 floors", "49400 m2", "215 kwh").
+    if (/^\d+$/.test(t) && UNIT_WORDS.has(words[i + 1])) {
+      terms.push({ t, tc: t, optional: false, unit: words[i + 1] });
+      i += 1;
+      continue;
+    }
+    terms.push({ t, tc: compact(t), optional: !allFiller && FILLER.has(t) });
+  }
+  const multi = words.length > 1 ? phrase : "";
+  const rank = (fuzzy) => rows
+    .map((b, i) => ({ b, i, s: scoreRow(b, terms, multi, fuzzy) }))
+    .filter((r) => r.s > 0)
+    .sort((x, y) => y.s - x.s || x.i - y.i)
+    .map((r) => r.b);
+  const exact = rank(false);
+  return exact.length ? exact : rank(true);
 }
 
 export const buildingsLiveMethods = {
@@ -356,7 +561,9 @@ export const buildingsLiveMethods = {
   bldVals() {
     const s = this.state;
     const rows = this.bldData();
-    const query = s.bldQuery || "";
+    // Its own key, not bldQuery: that one belongs to the TopBar building picker (auth.js),
+    // which clears it whenever the picker opens — sharing it wiped this table's search.
+    const query = s.bldSearch || "";
     const filtered = filterBuildings(rows, query);
     const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     // Clamped rather than reset on every render, so a table that shrinks (a search, or the
@@ -381,10 +588,10 @@ export const buildingsLiveMethods = {
       bldRetryShow: !s.bldLoading && (!s.bldLive || !!s.bldError) ? "inline" : "none",
       bldRetry: () => this.bldRetryNow(),
 
-      // Search — client-side, over the rows already loaded (name, ID, country, state).
-      bldQuery: query,
-      setBldQuery: (e) => this.setState({ bldQuery: e.target.value, bldPage: 0 }),
-      bldQueryShow: rows.length ? "flex" : "none",
+      // Search — client-side, over the rows already loaded; see filterBuildings.
+      bldSearch: query,
+      setBldSearch: (e) => this.setState({ bldSearch: e.target.value, bldPage: 0 }),
+      bldSearchShow: rows.length ? "flex" : "none",
 
       // Pagination — 20 rows a page, computed after the search filter.
       bldPage: page,
@@ -407,7 +614,7 @@ export const buildingsLiveMethods = {
           ? "You are not allocated to any building yet, so this table is empty for your account — the portfolio itself may be full. Ask an admin to allocate you, or to change your role to admin."
         : !rows.length && s.bldLive ? "The buildings register has no rows yet. Hoist a building; nothing is shown that is not in the register."
         : !rows.length ? "Waiting for the register."
-        : "No buildings match “" + query + "”. Try a name, building ID, country or state.",
+        : "No buildings match “" + query + "”. Try a name, building ID, country, city, state, use, floors or postcode.",
       bldKicker: "Every row is a " + ROOT_NOUN(s, 1) + " record, keyed on "
         + (ROOT_TABLE(s) === "buildings" ? "building ID" : "site ID")
         + ", read against its country's regulation pack",

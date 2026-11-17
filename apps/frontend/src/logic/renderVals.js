@@ -1725,7 +1725,7 @@ export const renderValsMethods = {
       docPagePrev: () => this.setState((p) => ({ docPage: Math.max(0, (p.docPage || 0) - 1) })),
       docPageNext: () => this.setState((p) => ({ docPage: Math.min(docPageCount - 1, (p.docPage || 0) + 1) })),
       docEmptyShow: docFiltered.length ? "none" : "block",
-      docEmptyText: "No buildings match “" + s.docQuery + "”. Try a name, building ID, country or state.",
+      docEmptyText: "No buildings match “" + s.docQuery + "”. Try a name, building ID, country, city, state, use, floors or postcode.",
       docBuildings: docPageRows.map((b) => {
         const open = s.docOpen === b.name;
         const key = b.buildingId || b.id;

@@ -74,11 +74,11 @@ export default function Buildings({ vals }) {
               </div>
             ) : null}
           </div>
-          <div style={{ display: vals.bldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "18px", maxWidth: "420px" }}>
+          <div style={{ display: vals.bldSearchShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "18px", maxWidth: "420px" }}>
             <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
-            <input className="input" value={vals.bldQuery} onChange={vals.setBldQuery} placeholder="Search by name, building ID, country or state…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
-            {vals.bldQuery ? (
-              <i className="ph ph-x hv11" onClick={() => vals.setBldQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+            <input className="input" value={vals.bldSearch} onChange={vals.setBldSearch} placeholder="Search by name, building ID, country, city, state, use, floors or postcode…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+            {vals.bldSearch ? (
+              <i className="ph ph-x hv11" onClick={() => vals.setBldSearch({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
             ) : null}
           </div>
           <div style={{ marginTop: "16px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflowX: "auto", overflowY: "hidden" }}>
@@ -830,7 +830,7 @@ export default function Buildings({ vals }) {
                   </div>
                   <div style={{ display: vals.docQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "16px", maxWidth: "420px" }}>
                     <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
-                    <input className="input" value={vals.docQuery} onChange={vals.setDocQuery} placeholder="Search by name, building ID, country or state…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+                    <input className="input" value={vals.docQuery} onChange={vals.setDocQuery} placeholder="Search by name, building ID, country, city, state, use, floors or postcode…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
                     {vals.docQuery ? (
                       <i className="ph ph-x hv11" onClick={() => vals.setDocQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
                     ) : null}
