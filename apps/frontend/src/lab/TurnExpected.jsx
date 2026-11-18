@@ -53,7 +53,7 @@ function whereFrom(d) {
     return 'Checked by ' + (e.author_email || 'a person');
   }
   if (d.draft) {
-    const rules = (d.rules || []).length ? (d.rules.length === 1 ? 'rule ' : 'rules ') + d.rules.join(', ') : 'no rule applies';
+    const rules = (d.rules || []).length ? (d.rules.length === 1 ? 'rule ' : 'rules ') + d.rules.join(', ') : 'no rule cited';   // a draft still says what the answer holds (18 Nov 2026)
     return 'Drafted from SPEC.md' + (d.spec_version ? ' v' + d.spec_version : '') + ' · ' + rules + ' · not accepted yet';
   }
   if (d.from_draft) {

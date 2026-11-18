@@ -62,11 +62,12 @@ async def test_a_new_live_question_gets_a_draft_from_the_spec(lab_scratch, main_
     version = await _spec()
     asked = _model(monkeypatch)
     out = await auto_expected.draft_for_live(None, now=NOW)
-    assert out == {"drafted": 3, "failed": 0, "keyed": 0, "replaced": 0, "skipped": None}
+    assert out == {"drafted": 3, "failed": 0, "keyed": 0, "replaced": 0, "redrafted": 0, "skipped": None}
     rows = await _drafts(lab_scratch)
     assert len(rows) == 3 and {r["source"] for r in rows} == {"coding_agent"}
     assert {r["author_email"] for r in rows} == {agent.AGENT_EMAIL}
-    assert rows[0]["evidence"] == {"drafted_from": "SPEC.md", "spec_version": version, "rules": ["S-1", "S-4"]}
+    assert rows[0]["evidence"] == {"drafted_from": "SPEC.md", "spec_version": version, "rules": ["S-1", "S-4"],
+                                    "draft": auto_expected.DRAFT_VERSION}
     prompt = asked[0]["prompt"]
     assert "S-1" in prompt and "never report none" in prompt, "the approved rules are in the prompt"
     assert "Which vendors are blocked?" in " ".join(a["prompt"] for a in asked), "each question is in its own prompt"
@@ -109,12 +110,12 @@ async def test_the_off_switch(lab_scratch, main_scratch, monkeypatch):
     assert out["drafted"] == 0 and out["skipped"] and asked == []
 
 
-async def test_only_recent_questions_and_at_most_a_round(lab_scratch, main_scratch, monkeypatch):
+async def test_older_questions_too_and_at_most_a_round(lab_scratch, main_scratch, monkeypatch):
     await _live_run(main_scratch)
     await _spec()
     _model(monkeypatch)
-    assert (await auto_expected.draft_for_live(None, now=NOW + timedelta(days=8)))["drafted"] == 0, "older than 7 days"
-    assert (await auto_expected.draft_for_live(None, now=NOW, limit=2))["drafted"] == 2
+    # 18 Nov 2026: every live question, however old ("i need expected ans on each question"); the round still caps it.
+    assert (await auto_expected.draft_for_live(None, now=NOW + timedelta(days=60), limit=2))["drafted"] == 2
     assert (await auto_expected.draft_for_live(None, now=NOW))["drafted"] == 1, "the rest next round"
 
 
@@ -122,7 +123,7 @@ async def test_a_failed_model_call_stores_nothing_and_is_tried_again(lab_scratch
     await _live_run(main_scratch)
     await _spec()
     _model(monkeypatch, fail=True)
-    assert await auto_expected.draft_for_live(None, now=NOW) == {"drafted": 0, "failed": 3, "keyed": 0, "replaced": 0, "skipped": None}
+    assert await auto_expected.draft_for_live(None, now=NOW) == {"drafted": 0, "failed": 3, "keyed": 0, "replaced": 0, "redrafted": 0, "skipped": None}
     assert await _drafts(lab_scratch) == []
     _model(monkeypatch)
     assert (await auto_expected.draft_for_live(None, now=NOW))["drafted"] == 3
@@ -528,3 +529,155 @@ async def test_values_read_from_the_records_wait_on_the_session_page_too(lab_scr
     out = await auto_expected.draft_for_live(None, now=NOW)
     assert out["keyed"] == 3
     assert (await loop.proposals(member()))["expected"] == [], "accepted on the session page, never in the Loop"
+
+
+# ── Every live question gets an expected answer (18 Nov 2026, Hussain: "i need expected ans on each question"). The old
+#    prompt let the model write "No rule of the specification applies to this question." as the expected answer; that
+#    placeholder then counted as an answer, so the question was never drafted again, not even after a new SPEC.md. ──
+
+async def _seed_lab_review(lab, subject_id):
+    async with lab.begin() as c:
+        await c.execute(text(
+            "INSERT INTO tracelab.lab_reviews (subject_kind, subject_id, decision, reviewer_id, reviewer_email)"
+            " VALUES ('expected_answer', CAST(:s AS uuid), 'approved', gen_random_uuid(), 'boss@example.com')"),
+            {"s": subject_id})
+
+
+PLACEHOLDER = "No rule of the specification applies to this question."
+
+
+async def _seed_placeholders(lab, code, version, only=None):
+    """What the old prompt stored for a question: the placeholder, no rules, no draft version (the table is append-only,
+    so this is the question's first and only expected answer)."""
+    qs = (await runs.list_questions(member(), code))["questions"]
+    by_age = sorted(qs, key=lambda q: q["asked_at"])
+    pick = {"oldest": [by_age[0]], "newest": [by_age[-1]]}
+    async with lab.begin() as c:
+        for q in qs if only is None else pick[only]:
+            await runs._insert_expected(c, auto_expected.AUTHOR, question_id=q["id"], expected=PLACEHOLDER,
+                                        expected_id=None, source="coding_agent",
+                                        evidence={"drafted_from": "SPEC.md", "spec_version": version, "rules": []})
+    return qs
+
+
+async def _newest(lab):
+    async with lab.connect() as c:
+        return {r["qid"]: dict(r) for r in (await c.execute(text(
+            "SELECT DISTINCT ON (e.question_id) e.question_id::text AS qid, e.id::text AS id, e.expected, e.evidence,"
+            " e.source FROM tracelab.lab_expected_answers e ORDER BY e.question_id, e.created_at DESC, e.id DESC")
+        )).mappings().all()}
+
+
+async def test_the_model_is_told_to_always_write_what_a_correct_answer_contains(lab_scratch, main_scratch, monkeypatch):
+    await _live_run(main_scratch)
+    await _spec()
+    asked = _model(monkeypatch, reply={"expected": "States the floors of building ABC from the register, or says no "
+                                                   "building ABC is on record.", "rules": []})
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["drafted"] == 3
+    system = asked[0]["system"]
+    assert "say that no rule of the specification applies" not in system, "the placeholder is no longer asked for"
+    assert "never write that no rule applies" in system.lower()
+    row = (await _drafts(lab_scratch))[0]
+    assert row["evidence"]["rules"] == [] and row["evidence"]["draft"] == auto_expected.DRAFT_VERSION
+    assert row["expected"].startswith("States the floors"), "a draft that cites no rule still says what the answer holds"
+
+
+async def test_an_old_placeholder_is_drafted_again(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    await _seed_placeholders(lab_scratch, code, await _spec())
+    old = await _newest(lab_scratch)
+    asked = _model(monkeypatch, reply={"expected": "Lists each overdue certificate with its days overdue.", "rules": ["S-1"]})
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["redrafted"] == 3 and out["drafted"] == 0 and len(asked) == 3
+    new = await _newest(lab_scratch)
+    for qid, row in new.items():
+        assert row["expected"] == "Lists each overdue certificate with its days overdue."
+        assert row["source"] == "coding_agent" and row["evidence"]["replaced_draft"] == old[qid]["id"]
+        assert row["evidence"]["draft"] == auto_expected.DRAFT_VERSION
+    assert len(await _drafts(lab_scratch)) == 6, "the placeholder stays as history"
+    again = _model(monkeypatch)
+    assert (await auto_expected.draft_for_live(None, now=NOW))["redrafted"] == 0 and again == [], "a current draft stays"
+
+
+async def test_a_draft_from_an_older_spec_is_drafted_again_after_a_new_version(lab_scratch, main_scratch, monkeypatch):
+    await _live_run(main_scratch)
+    first = await _spec()
+    _model(monkeypatch)
+    await auto_expected.draft_for_live(None, now=NOW)
+    second = await _spec()
+    assert second != first
+    asked = _model(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["redrafted"] == 3 and len(asked) == 3
+    assert {r["evidence"]["spec_version"] for r in (await _newest(lab_scratch)).values()} == {second}
+
+
+async def test_a_persons_accepted_or_reviewed_answer_is_never_drafted_again(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    qs = await _seed_placeholders(lab_scratch, code, await _spec())
+    await runs.set_expected(member(), qs[0]["code"], expected="A person's version.")
+    newest = await _newest(lab_scratch)
+    await _seed_lab_review(lab_scratch, newest[qs[1]["id"]]["id"])
+    asked = _model(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["redrafted"] == 1 and len(asked) == 1, "only the untouched placeholder"
+    after = await _newest(lab_scratch)
+    assert after[qs[0]["id"]]["expected"] == "A person's version."
+    assert after[qs[1]["id"]]["id"] == newest[qs[1]["id"]]["id"]
+
+
+async def test_a_person_writing_meanwhile_beats_the_redraft(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    first = (await _seed_placeholders(lab_scratch, code, await _spec()))[-1]
+    wrote = []
+
+    async def slow(system, prompt, schema, max_tokens):
+        if first["question"] in prompt and not wrote:
+            wrote.append(1)
+            await runs.set_expected(member(), first["code"], expected="A person got there first.")
+        return {"expected": "Drafted again.", "rules": ["S-1"]}
+    monkeypatch.setattr(agent, "_ask", slow)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["redrafted"] == 2
+    assert (await _newest(lab_scratch))[first["id"]]["expected"] == "A person got there first."
+
+
+async def test_redrafts_share_the_rounds_budget_with_new_questions(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    await _seed_placeholders(lab_scratch, code, await _spec(), only="oldest")  # a placeholder; two newer still new
+    asked = _model(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW, limit=2)
+    assert out["drafted"] == 2 and out["redrafted"] == 0 and len(asked) == 2, "the two newer questions first"
+    out = await auto_expected.draft_for_live(None, now=NOW, limit=2)
+    assert out["drafted"] == 0 and out["redrafted"] == 1
+
+
+async def test_a_failed_redraft_keeps_the_old_draft_and_is_tried_again(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    await _seed_placeholders(lab_scratch, code, await _spec())
+    _model(monkeypatch, fail=True)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["redrafted"] == 0 and out["failed"] == 3 and len(await _drafts(lab_scratch)) == 3
+    _model(monkeypatch)
+    assert (await auto_expected.draft_for_live(None, now=NOW))["redrafted"] == 3
+
+
+async def test_the_automatic_round_counts_redrafts_too(lab_scratch, main_scratch, monkeypatch):
+    from trace_lab import autosync
+
+    async def fake(org, *, now=None, limit=auto_expected.PER_ROUND):
+        return {"drafted": 1, "redrafted": 2, "failed": 0, "skipped": None}
+    monkeypatch.setattr(auto_expected, "draft_for_live", fake)
+    status = await autosync.tick()
+    assert status["last_new_expected"] == 3
+
+
+async def test_the_newest_question_goes_first_whether_new_or_a_redraft(lab_scratch, main_scratch, monkeypatch):
+    """A placeholder on the question people just asked is redrafted before a backlog of older new questions."""
+    code = await _live_run(main_scratch)
+    qs = await _seed_placeholders(lab_scratch, code, await _spec(), only="newest")   # the newest has a placeholder
+    newest = max(qs, key=lambda q: q["asked_at"])
+    asked = _model(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW, limit=1)
+    assert out["redrafted"] == 1 and out["drafted"] == 0 and newest["question"] in asked[0]["prompt"]

@@ -7,6 +7,8 @@
 export const LEVELS = ['logic', 'ux', 'domain'];
 export const LEVEL_TEXT = Object.freeze({ logic: 'Logic', ux: 'User experience', domain: 'Domain' });
 export const TYPE_TEXT = Object.freeze({ single_domain: 'Single domain', multi_domain: 'Multi-domain', multi_turn: 'Multi-turn', failure: 'Failure' });
+// Where a live conversation that is not a chat came from (eval_store.session_channel, 18 Nov 2026), in the Type column.
+export const CHANNEL_TEXT = Object.freeze({ report: 'Report run', rerun: 'Rerun', upload: 'Upload', skill_lab: 'Skill lab' });
 export const TYPE_OPTIONS = [['', 'All types']].concat(Object.keys(TYPE_TEXT).map((k) => [k, TYPE_TEXT[k]]));
 export const STATUS_TEXT = Object.freeze({ ok: 'OK', failed: 'Failed' });
 export const STATUS_OPTIONS = [['', 'Any status'], ['ok', 'OK'], ['failed', 'Failed']];
@@ -131,7 +133,7 @@ export function sessionRow(s) {
     question: shortQuestion(x.first_question), questionFull: String(x.first_question || '').trim(), scenario: x.scenario_id || '',
     askedHere: !!x.asked_here, askedText: askedText(x),
     id: x.id, title: sessionTitle(x), runTag: x.run_tag || '', origin: x.origin || '', attempt: Number(x.attempt) || 1,
-    type: TYPE_TEXT[x.type] || '—', turns: plural(x.turns, 'turn', 'turns'),
+    type: TYPE_TEXT[x.type] || CHANNEL_TEXT[x.channel] || '—', turns: plural(x.turns, 'turn', 'turns'),
     status: STATUS_TEXT[x.status] || '—', failed: x.status === 'failed', when: x.started_at || null,
     expectedFlagged: Number(x.expected_flagged) || 0,
     levels: LEVELS.map((key) => {

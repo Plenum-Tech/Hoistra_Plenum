@@ -36,7 +36,7 @@ test('an accepted draft and a person’s own version show who decided, with Edit
 
 test('none yet offers Add expected answer; a draft that names no rule says so', () => {
   assert.match(html({ data: Object.assign({}, DRAFT, { expected: null, draft: false }) }), />Add expected answer</);
-  assert.ok(html({ data: Object.assign({}, DRAFT, { rules: [] }) }).includes('Drafted from SPEC.md v3 · no rule applies · not accepted yet'));
+  assert.ok(html({ data: Object.assign({}, DRAFT, { rules: [] }) }).includes('Drafted from SPEC.md v3 · no rule cited · not accepted yet'));
 });
 
 test('Codex turns and turns with no question show nothing', () => {

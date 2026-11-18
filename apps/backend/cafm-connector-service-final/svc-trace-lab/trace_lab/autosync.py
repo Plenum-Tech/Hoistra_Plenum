@@ -54,7 +54,8 @@ STATUS: dict[str, Any] = {"enabled": False, "every_s": 0, "last_run_at": None, "
                           "scenario_sessions_ok": None, "last_new_scenario_sessions": 0,
                           "scenario_sessions_error": None, "scenario_sessions_waiting": 0,
                           "scenario_sessions_skipped": 0, "scenario_sessions_other_company": 0,
-                          "scenario_sessions_failed": 0}
+                          "scenario_sessions_failed": 0,
+                          "waiting_ok": None, "last_waiting_filed": 0, "waiting_error": None}
 #: The scenario read runs at most this often (13 Nov 2026 review): it scans the chat's turn table.
 SCENARIO_EVERY = timedelta(minutes=5)
 _scenario_read_at: datetime | None = None
@@ -196,10 +197,31 @@ async def tick(now: datetime | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - the next round tries again
         STATUS.update(last_run_at=started.isoformat(), last_ok=False, last_error=str(exc)[:300])
         log.warning("trace_lab.autosync.failed", error=str(exc)[:300])
+    # Then the conversations of live questions still waiting (a report run's, an older chat's), so none stays
+    # "Reading in..." (18 Nov 2026).
+    await file_waiting(now)
     # Then any other session turn no run holds yet (a chat turn no live run takes), as before.
     await sync_session_runs(now, before=first)
     await draft_expected(now)
     return dict(STATUS)
+
+
+async def file_waiting(now: datetime | None = None) -> int:
+    """File the conversations of live questions still waiting (eval_store.file_waiting_live). Its own try, as above."""
+    from . import eval_store
+
+    try:
+        out = await eval_store.file_waiting_live()
+        new = int(out.get("sessions") or 0)
+        STATUS.update(waiting_ok=True, last_waiting_filed=new, waiting_error=None)
+        if new or int(out.get("traces") or 0) or int(out.get("failed") or 0):
+            log.info("trace_lab.autosync.waiting_filed", new_sessions=new, new_traces=int(out.get("traces") or 0),
+                     failed=int(out.get("failed") or 0))
+        return new
+    except Exception as exc:  # noqa: BLE001 - the next round tries again
+        STATUS.update(waiting_ok=False, last_waiting_filed=0, waiting_error=str(exc)[:300])
+        log.warning("trace_lab.autosync.waiting_failed", error=str(exc)[:300])
+        return 0
 
 
 async def draft_expected(now: datetime | None = None) -> int:
@@ -209,7 +231,7 @@ async def draft_expected(now: datetime | None = None) -> int:
 
     try:
         out = await auto_expected.draft_for_live(None, now=now)
-        made = int(out.get("drafted") or 0)
+        made = int(out.get("drafted") or 0) + int(out.get("redrafted") or 0)   # redrafts too (18 Nov 2026)
         STATUS.update(expected_ok=True, last_new_expected=made, expected_error=None)
         return made
     except Exception as exc:  # noqa: BLE001 - the next round tries again

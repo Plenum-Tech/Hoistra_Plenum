@@ -283,3 +283,13 @@ test('Sync now says how many expected answers it drafted, and why it could not',
   assert.equal(said.line, '2 new questions · 2 expected answers drafted');
   assert.deepEqual(said.problems, ['Expected answers could not be drafted: model down']);
 });
+
+test('a live conversation that is not a chat says where it came from in the Type column (18 Nov 2026)', async () => {
+  const { sessionRow } = await import('../logic/sessions.js');
+  assert.equal(sessionRow({ id: 'report-c38afd0f-1794923533', channel: 'report' }).type, 'Report run');
+  assert.equal(sessionRow({ id: 'rerun-1', channel: 'rerun' }).type, 'Rerun');
+  assert.equal(sessionRow({ id: 'docs-1', channel: 'upload' }).type, 'Upload');
+  assert.equal(sessionRow({ id: 'skilllab-1', channel: 'skill_lab' }).type, 'Skill lab');
+  assert.equal(sessionRow({ id: 'x', channel: null }).type, '—', 'a chat keeps the dash');
+  assert.equal(sessionRow({ id: 'x', type: 'multi_turn', channel: 'report' }).type, 'Multi-turn', 'a scenario type wins');
+});

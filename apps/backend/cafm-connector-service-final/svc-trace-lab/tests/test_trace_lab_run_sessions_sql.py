@@ -511,3 +511,105 @@ async def test_one_automatic_round_puts_an_old_codex_turn_in_its_batch_never_a_l
     assert status["last_new_scenario_sessions"] == 1 and status["last_ok"] is True
     assert await _where_is(lab_scratch, "turn-s1") == [("synthetic", runs.batch_title("late_v0", now - timedelta(hours=2)))]
     assert [k for k, _ in await _where_is(lab_scratch, "turn-h1")] == ["production"]
+
+
+# ── "Reading in…" for ever (18 Nov 2026, Hussain: "why does it keep saying reading solve this also"). A report card's
+#    scheduled run (session report-<card>-<time>), a rerun, an upload or a Skill lab run is a live question (sync_live
+#    leaves out only golden runs), but the chat sync filed only conversations whose id is a chat uuid, so those
+#    questions never got their conversation. Each round now files the conversations of the live questions still
+#    waiting, by session id, whatever its form and however old. ──
+
+REPORT = "report-c38afd0f-1794923533"
+
+
+async def _report_run(main, *, at=T0):
+    await _main(main, "turn-r1", REPORT, at=at, question="show me all the decisions owed in maintenance for Ashgrove")
+    out = await runs.sync_live(None, now=at + timedelta(hours=1))
+    assert out["new_questions"] == 1
+    return (await runs.list_runs(member(), kind="production"))["runs"][0]["code"]
+
+
+async def test_a_report_runs_question_is_filed_by_the_next_round(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    assert [w["turn_id"] for w in (await eval_store.run_sessions(member(), code))["waiting"]] == ["turn-r1"]
+    chat_only = await eval_store.ingest_from_main(since=T0 - timedelta(days=1), chat=True, scenarios=False)
+    assert chat_only["sessions"] == 0, "the chat sync still reads only chat conversations"
+    out = await eval_store.file_waiting_live()
+    assert out["sessions"] == 1 and out["traces"] == 1
+    got = await eval_store.run_sessions(member(), code)
+    assert got["waiting"] == [] and [s["id"] for s in got["sessions"]] == [REPORT]
+    row = got["sessions"][0]
+    assert row["run_tag"] == "chat" and row["turn_ids"] == ["turn-r1"] and row["channel"] == "report"
+    assert (await eval_store.file_waiting_live())["sessions"] == 0, "nothing waits any more"
+
+
+async def test_an_old_waiting_question_is_filed_too(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch, at=T0 - timedelta(days=40))
+    assert (await eval_store.file_waiting_live())["sessions"] == 1
+    assert (await eval_store.run_sessions(member(), code))["waiting"] == []
+
+
+async def test_a_chat_conversations_later_turn_is_filed_into_it(lab_scratch, main_scratch):
+    code = await _live_run(main_scratch)
+    await seed_session(lab_scratch, CHAT_A, tag="chat", turn_ids=("turn-a1",))     # filed before turn-a2 arrived
+    await seed_session(lab_scratch, CHAT_B, tag="chat", turn_ids=("turn-b1",), at=T0 + timedelta(minutes=5))
+    assert [w["turn_id"] for w in (await eval_store.run_sessions(member(), code))["waiting"]] == ["turn-a2"]
+    await eval_store.file_waiting_live()
+    assert (await eval_store.run_sessions(member(), code))["waiting"] == []
+
+
+async def test_a_turn_the_chat_has_no_record_of_stays_waiting_quietly(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    async with main_scratch.begin() as c:
+        await c.execute(text("DELETE FROM plenum_cafm.agent_trace_turns WHERE turn_id = 'turn-r1'"))
+    out = await eval_store.file_waiting_live()
+    assert out["sessions"] == 0 and out["failed"] == 0
+    assert [w["turn_id"] for w in (await eval_store.run_sessions(member(), code))["waiting"]] == ["turn-r1"]
+
+
+async def test_scenario_and_browser_turns_are_left_to_their_own_steps(lab_scratch, main_scratch):
+    await _main(main_scratch, "turn-s1", "scn__q_v0__SD-1__1")
+    await runs.sync_live(None, now=NOW)
+    assert (await eval_store.file_waiting_live())["sessions"] == 0, "scenario sessions are filed with their scenario"
+
+
+def test_where_a_session_came_from():
+    assert eval_store.session_channel(REPORT) == "report"
+    assert eval_store.session_channel("rerun-1a2b") == "rerun"
+    assert eval_store.session_channel("docs-9f8e") == "upload" and eval_store.session_channel("ing-1") == "upload"
+    assert eval_store.session_channel("skilllab-x") == "skill_lab"
+    assert eval_store.session_channel(CHAT_A) is None and eval_store.session_channel(None) is None
+
+
+async def test_the_automatic_round_files_waiting_conversations_after_the_live_questions(lab_scratch, main_scratch,
+                                                                                        monkeypatch):
+    from trace_lab import autosync
+
+    calls = []
+
+    async def fake_live(org, now=None):
+        calls.append("live")
+        return {"new_questions": 0, "new_runs": 0}
+
+    async def fake_waiting(**kw):
+        calls.append("waiting")
+        return {"sessions": 2, "traces": 2, "failed": 0}
+    monkeypatch.setattr(runs, "sync_live", fake_live)
+    monkeypatch.setattr(eval_store, "file_waiting_live", fake_waiting)
+    status = await autosync.tick()
+    assert calls.index("waiting") > calls.index("live") and status["last_waiting_filed"] == 2
+    assert status["waiting_ok"] is True and status["waiting_error"] is None
+
+
+async def test_a_companys_round_files_only_its_own_waiting_conversations(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    assert (await eval_store.file_waiting_live(org=OTHER_ORG))["sessions"] == 0
+    assert (await eval_store.run_sessions(member(), code))["waiting"] != []
+    assert (await eval_store.file_waiting_live(org=ORG))["sessions"] == 1
+
+
+async def test_sync_now_files_the_waiting_conversations_too(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    out = await runs.sync_production(member(org=ORG, all_companies=False, role="admin"), now=T0 + timedelta(hours=2))
+    assert out["waiting_sessions"] == 1 and "waiting" not in out["failed"]
+    assert (await eval_store.run_sessions(member(), code))["waiting"] == []

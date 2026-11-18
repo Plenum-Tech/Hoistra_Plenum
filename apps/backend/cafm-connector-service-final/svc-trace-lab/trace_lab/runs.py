@@ -473,13 +473,15 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
            chat conversations    the chat's conversations of the last week filed as sessions (run tag "chat")
         2. runs                  the run of every batch of every run tag, and the scenario sessions' turns as their
                                  questions
-        3. live questions        the chat's newer answers, one run per person per day (sync_live), then any other
-                                 session turn no run holds yet (as the automatic sync always took them)
+        3. live questions        the chat's newer answers, one run per person per day (sync_live), then the
+                                 conversations of live questions still waiting (eval_store.file_waiting_live: a
+                                 report run's, an older chat's), then any other session turn no run holds yet (as
+                                 the automatic sync always took them)
 
         4. expected answers      each new live question's expected answer, drafted from SPEC.md (auto_expected)
 
-    Returns new_questions, new_runs, more, chat_sessions, codex_sessions, drafted_expected, and failed / skipped:
-    {step: reason} with step one of questions, chat, codex, runs, expected."""
+    Returns new_questions, new_runs, more, chat_sessions, codex_sessions, drafted_expected, waiting_sessions, and
+    failed / skipped: {step: reason} with step one of questions, chat, codex, runs, waiting, expected."""
     labelling.require_active(m)
     from . import eval_store
 
@@ -487,7 +489,7 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
     now = now or datetime.now(timezone.utc)
     company = {} if org is None else {"org": org}
     out: dict[str, Any] = {"new_questions": 0, "new_runs": 0, "more": False, "chat_sessions": 0, "codex_sessions": 0,
-                           "drafted_expected": 0, "failed": {}, "skipped": {}}
+                           "drafted_expected": 0, "waiting_sessions": 0, "failed": {}, "skipped": {}}
     if not can_curate(m):
         out["skipped"]["codex"] = CODEX_SKIPPED
     else:
@@ -522,6 +524,13 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
         out["failed"]["questions"] = _why(exc)
         log.warning("trace_lab.runs.sync_questions_failed", error=_why(exc))
     try:
+        # Then the conversations of live questions still waiting (a report run's, an older chat's), 18 Nov 2026.
+        waiting = await eval_store.file_waiting_live(org=org)
+        out["waiting_sessions"] = int(waiting.get("sessions") or 0)
+    except Exception as exc:  # noqa: BLE001
+        out["failed"]["waiting"] = _why(exc)
+        log.warning("trace_lab.runs.sync_waiting_failed", error=_why(exc))
+    try:
         # Then the other sessions' turns the live questions did not take (a chat turn no live run takes, a session
         # copied from another machine), as the automatic sync always has.
         rest = await sync_sessions(org, now=now)
@@ -536,7 +545,7 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
         from . import auto_expected
 
         drafted = await auto_expected.draft_for_live(org, now=now)
-        out["drafted_expected"] = int(drafted.get("drafted") or 0)
+        out["drafted_expected"] = int(drafted.get("drafted") or 0) + int(drafted.get("redrafted") or 0)
     except Exception as exc:  # noqa: BLE001
         out["failed"]["expected"] = _why(exc)
         log.warning("trace_lab.runs.sync_expected_failed", error=_why(exc))

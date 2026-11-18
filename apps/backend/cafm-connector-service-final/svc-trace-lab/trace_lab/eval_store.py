@@ -34,7 +34,7 @@ import socket
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -776,12 +776,61 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
     sessions = [s for s in listed["sessions"] if s.get("organization_id") == org]
     for s in sessions:
         s.update(mine.get(s["id"]) or {"codes": [], "turn_ids": []})
+        s["channel"] = session_channel(s.get("id"))
     if mode == "sessions":
         shown = {s["id"] for s in sessions}
         elsewhere += [{"code": c, "session_id": sid, "turn_id": t} for sid, got in mine.items() if sid not in shown
                       for c, t in zip(got["codes"], got["turn_ids"])]
     return {"run": out_run, "mode": mode, "sessions": sessions, "waiting": waiting, "elsewhere": elsewhere,
             "next": listed["next"]}
+
+
+#: Where a live conversation that is not a chat came from, by its session id (provenance.INFERRED_CHANNEL_SQL's
+#: session-id rules): a report card's scheduled run, a rerun, an upload, a Skill lab run. None for a chat.
+_CHANNEL_PREFIXES = (("report-", "report"), ("rerun", "rerun"), ("docs-", "upload"), ("ing-", "upload"),
+                     ("skilllab-", "skill_lab"))
+
+
+def session_channel(session_id: Any) -> str | None:
+    sid = str(session_id or "")
+    return next((name for prefix, name in _CHANNEL_PREFIXES if sid.startswith(prefix)), None)
+
+
+#: At most this many conversations of waiting live questions are filed a round.
+WAITING_PER_ROUND = 50
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+async def file_waiting_live(*, org: str | None = None, limit: int = WAITING_PER_ROUND) -> dict[str, int]:
+    """File the conversations of live questions still waiting (18 Nov 2026, Hussain: "why does it keep saying
+    reading solve this also"). A live question is made from any turn but a scenario's or a golden run's (runs.sync_live),
+    while the chat sync files only conversations whose id is a chat uuid of the last CHAT_SYNC_DAYS days: a report
+    card's scheduled run (report-<card>-<time>), a rerun, an upload or a Skill lab run, and a chat conversation older
+    than that, stayed "Reading in..." for ever. Their session ids are read from the chat's turns and filed by id under
+    CHAT_TAG, whatever their form and however old, newest questions first. A turn the chat has no record of, or of no
+    company, stays waiting. Scenario turns are filed with their scenario, browser errors are not conversations. With
+    `org`, only that company's questions (Sync now by a company's member)."""
+    mine = " AND q.organization_id = CAST(:org AS uuid)" if org else ""
+    async with conversations._lab_read() as conn:
+        turns = [r[0] for r in (await conn.execute(text(
+            "SELECT l.turn_id FROM tracelab.lab_question_traces l"
+            " JOIN tracelab.lab_questions q ON q.id = l.question_id JOIN tracelab.lab_runs r ON r.id = q.run_id"
+            " WHERE r.kind = 'production' AND l.turn_id NOT LIKE 'browser:%'"
+            f" AND NOT EXISTS (SELECT 1 FROM tracelab.traces t WHERE t.id = l.turn_id){mine}"
+            " GROUP BY l.turn_id ORDER BY max(q.asked_at) DESC, l.turn_id LIMIT :lim"),
+            {"lim": max(1, int(limit)) * 4, **({"org": org} if org else {})})).all()]
+    if not turns:
+        return {"sessions": 0, "traces": 0, "failed": 0}
+    async with conversations._read() as conn:
+        found = [r[0] for r in (await conn.execute(text(
+            f"SELECT tt.session_id FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
+            " AND tt.session_id IS NOT NULL AND tt.session_id NOT LIKE 'scn\\_\\_%'"
+            " GROUP BY tt.session_id ORDER BY max(tt.started_at) DESC"), {"ids": turns})).all()]
+    sids = [s for s in found if 1 <= len(s) <= SESSION_ID_MAX][:max(1, int(limit))]
+    if not sids:
+        return {"sessions": 0, "traces": 0, "failed": 0}
+    return await ingest_from_main(since=_EPOCH, run_tag=CHAT_TAG, sessions={s: None for s in sids}, org=org,
+                                  remember=True)
 
 
 async def _session_row(conn: Any, m: labelling.Member, session_id: str) -> Mapping[str, Any]:

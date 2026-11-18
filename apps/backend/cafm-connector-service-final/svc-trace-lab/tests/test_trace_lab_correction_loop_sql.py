@@ -318,7 +318,8 @@ async def test_a_scenario_session_is_filed_by_itself_and_listed_under_its_run_ta
         "Which certificates are due?"]
     async with lab_scratch.connect() as conn:
         filed = (await conn.execute(text("SELECT id, run_tag, scenario_id FROM tracelab.sessions"))).all()
-    assert [tuple(r) for r in filed] == [("scn__auto_v0__SD-1__1", "auto_v0", "SD-1")]
+    # 18 Nov 2026: the hand question's conversation (s-1) is filed too, under "chat", so it never waits for ever.
+    assert sorted(tuple(r) for r in filed) == [("s-1", "chat", None), ("scn__auto_v0__SD-1__1", "auto_v0", "SD-1")]
     again = await autosync.tick()
     assert (again["last_new_scenario_sessions"], again["last_new_questions"], again["last_session_questions"]) == (0, 0, 0),         "each is taken once"
 
@@ -328,7 +329,9 @@ async def test_the_scenario_sync_can_be_turned_off_and_the_button_still_reads_th
     await _asked_both_ways(main_scratch, str(uuid.uuid4()))
     out = await autosync.tick()
     assert out["last_new_questions"] == 1 and out["last_new_scenario_sessions"] == 0
-    assert await _count(lab_scratch, "sessions") == 0, "left to Read new sessions"
+    async with lab_scratch.connect() as conn:   # the hand question's own conversation is filed (18 Nov 2026)
+        scn = (await conn.execute(text("SELECT count(*) FROM tracelab.sessions WHERE id LIKE 'scn%'"))).scalar_one()
+    assert scn == 0, "left to Read new sessions"
     from trace_lab import eval_store
     read = await eval_store.ingest_from_main(since=NOW - timedelta(days=1))
     assert read["sessions"] == 1
