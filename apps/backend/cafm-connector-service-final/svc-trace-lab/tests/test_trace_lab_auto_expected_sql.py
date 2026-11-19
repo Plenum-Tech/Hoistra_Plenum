@@ -575,6 +575,7 @@ async def test_a_turn_with_no_draft_shows_the_turns_own_query_from_its_trace(lab
     code = await _live_run(main_scratch)
     await _file_traces(lab_scratch, monkeypatch, nodes=[tool("t1", "answer_from_records")])
     asked = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [dict(_hoistra(q, plan=R62), tool_id="t1")], "none": None})
+    reads = _records(monkeypatch)
 
     async def load_map():
         return _onto()
@@ -584,6 +585,8 @@ async def test_a_turn_with_no_draft_shows_the_turns_own_query_from_its_trace(lab
     assert [(x["index"], x["plan"]) for x in got["queries"]] == [(0, R62)] and "tool_id" not in got["queries"][0]
     assert [c["propose"] for c in asked] == [False], "showing the editor never asks the planner"
     assert asked[0]["nodes"], "the turn's own trace is read"
+    assert [(r["mode"], r["plan"], r["org"]) for r in reads] == [("hoistra", R62, ORG)], \
+        "the editor starts from the plan as Hoistra's steps ran it (spec call 2)"
 
 
 # ── A SPEC.md draft the answer key can now answer gets the values (16 Nov 2026: R59 "lapse in the next 30 days" was

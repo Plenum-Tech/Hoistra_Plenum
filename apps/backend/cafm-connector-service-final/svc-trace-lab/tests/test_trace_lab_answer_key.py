@@ -569,6 +569,7 @@ async def test_a_person_who_may_not_run_queries_is_told_so(reads, monkeypatch):
 async def test_without_a_draft_the_turns_own_queries_are_read_from_its_trace(reads, monkeypatch):
     _turn(monkeypatch, None, kind=None)
     _kind_tree(monkeypatch, [{"id": "n1"}])
+    _asks(monkeypatch)
     asked = []
 
     async def queries_for(nodes, question, *, propose):
@@ -618,6 +619,74 @@ async def test_another_companys_turn_has_no_editor(reads, monkeypatch):
     with pytest.raises(NotFound):
         await ak.try_query(other, "turn-1", index=0, plan=R62)
     assert reads.calls == []
+
+
+def _with_building(plan):
+    """What Hoistra's steps add to a plan in these tests: the building each record is in, read with it."""
+    out = json.loads(json.dumps(plan))
+    out["include"] = list(out.get("include") or []) + [
+        {"name": "building", "concept": "Building", "via": [], "states": [], "filters": [], "sort": None, "limit": 20}]
+    return out
+
+
+def _steps_add_the_building(reads, monkeypatch, *, fail=None):
+    """The faithful re-run, with Hoistra's steps adding the building (as_written adds nothing)."""
+    async def run_query(plan, *, question, org, mode="hoistra", scope=None):
+        reads.calls.append({"plan": plan, "question": question, "org": org, "mode": mode, "scope": scope})
+        if fail is not None and mode == "hoistra":
+            raise fail
+        return _run_of(_with_building(plan) if mode == "hoistra" else plan, total=3)
+    monkeypatch.setattr(records_run, "run_query", run_query)
+
+
+def _undrafted(monkeypatch, plan=R62):
+    _turn(monkeypatch, None, kind=None)
+    _kind_tree(monkeypatch)
+
+    async def queries_for(nodes, question, *, propose):
+        return {"queries": [{"source": "hoistra", "plan": plan, "question": question, "tool_id": "t1"}], "none": None}
+    monkeypatch.setattr(records_queries, "queries_for", queries_for)
+
+
+ASKER = {"building_ids": ["b1"], "email": "asker@example.com"}
+
+
+async def test_without_a_draft_the_editor_starts_from_the_query_as_hoistras_steps_ran_it(reads, monkeypatch):
+    """Spec call 2: the editor starts from the plan as Hoistra ran it, so what its steps added is there to see and keep;
+    an unchanged query then shows no change, and the before side is Hoistra's own query with all its steps."""
+    _undrafted(monkeypatch)
+    _asks(monkeypatch)
+    _steps_add_the_building(reads, monkeypatch)
+    got = await ak.orchestrator_query(member(), "turn-1")
+    assert got["queries"][0]["plan"] == _with_building(R62), "what Hoistra's steps added is in the editor"
+    assert [(c["mode"], c["plan"], c["scope"]) for c in reads.calls] == [("hoistra", R62, ASKER)], "read as the asker"
+    reads.calls.clear()
+    out = await ak.try_query(member(), "turn-1", index=0, plan=got["queries"][0]["plan"])
+    assert out["changes"] == [], "the query as the editor showed it is not a change"
+    assert [(c["mode"], c["plan"]) for c in reads.calls] == [("hoistra", R62), ("as_written", _with_building(R62))]
+    assert out["after"]["facts"][0]["value"] == out["before"]["facts"][0]["value"]
+
+
+async def test_a_query_whose_steps_cannot_finish_is_shown_as_hoistra_wrote_it_and_a_failed_read_says_so(reads, monkeypatch):
+    _undrafted(monkeypatch)
+    _asks(monkeypatch)
+    _steps_add_the_building(reads, monkeypatch, fail=ValueError("the plan does not fit this database: Floor has no state 'x'"))
+    got = await ak.orchestrator_query(member(), "turn-1")
+    assert got["queries"][0]["plan"] == R62 and got["ready"] is True
+    _steps_add_the_building(reads, monkeypatch, fail=RuntimeError("the connection was closed"))
+    with pytest.raises(Invalid) as e:
+        await ak.orchestrator_query(member(), "turn-1")
+    assert e.value.reason == "read_failed", "never a plan that is not the one Hoistra ran, shown as if it were"
+
+
+async def test_before_the_map_is_built_the_editor_reads_nothing_for_a_turn_not_drafted(reads, monkeypatch):
+    async def not_built():
+        raise records_run.NotReady("no map")
+    monkeypatch.setattr(records_run, "load_map", not_built)
+    _undrafted(monkeypatch)
+    _asks(monkeypatch)
+    got = await ak.orchestrator_query(member(), "turn-1")
+    assert got["ready"] is False and reads.calls == []
 
 
 def _changed_plan(concept="Building"):

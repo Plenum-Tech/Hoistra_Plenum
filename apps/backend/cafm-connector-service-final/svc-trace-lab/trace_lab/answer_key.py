@@ -549,7 +549,8 @@ async def _turn_queries(m: Any, turn_id: str) -> tuple[dict, list[dict], str | N
 
     A turn drafted with values has them stored (evidence.queries, each the plan as Hoistra's steps ran it: the editor
     starts from what ran); one not drafted yet gets the queries records_queries finds for it (Hoistra's own from its trace,
-    else the answer key's), never a proposal: showing the editor makes no model call. Each query is {"index", "source",
+    else the answer key's), never a proposal: showing the editor makes no model call. Those are plans as Hoistra WROTE
+    them: _as_hoistra_ran turns them into the plans as its steps ran them. Each query is {"index", "source",
     "source_words", "question", "plan"} and, apart from the editor's view, "_block": the stored query or None."""
     from . import eval_store, records_queries, runs
     from .review_errors import Invalid, NotFound
@@ -579,15 +580,43 @@ async def _turn_queries(m: Any, turn_id: str) -> tuple[dict, list[dict], str | N
             found["none"] or ev.get("no_query"))
 
 
+async def _as_hoistra_ran(got: dict, turn_id: str, queries: list[dict]) -> list[dict]:
+    """The queries of a turn not drafted yet as the editor starts from them (spec call 2, "what you see is what runs"): each
+    plan as Hoistra's steps ran it - read the way the editor's "before" side reads it, with every step of Hoistra's records
+    tool and the asker's access - so what the steps added (grouping, the deleted-vendors filter, codes, linked records) is
+    there to see and keep. A plan the steps cannot finish (it no longer fits the records) is shown as Hoistra wrote it, and
+    its before side says why; any other failure is said in words (Invalid), never a plan shown as one Hoistra ran."""
+    from .review_errors import Invalid
+
+    if not any(q["_block"] is None for q in queries):
+        return queries
+    scope, _who = await _read_scope(got, turn_id, None)
+    out = []
+    for q in queries:
+        if q["_block"] is None:
+            try:
+                ran = await _read(q["plan"], question=q["question"], org=got["company"], mode="hoistra", scope=scope,
+                                  person=False)
+                q = dict(q, plan=ran["plan"])
+            except Invalid as exc:
+                if exc.reason != "plan_does_not_fit":
+                    raise
+        out.append(q)
+    return out
+
+
 async def orchestrator_query(m: Any, turn_id: str) -> dict:
     """GET .../expected/query: the turn's records queries for the editor, with Hoistra's map to pick from.
 
     {"ready": the map is built, "can_run": the caller may run a plan (curators and the platform team), "queries": [{"index",
     "source", "source_words", "question", "plan"}], "none": why there is no query (or None), "map": records_form.query_map}.
-    A turn that is not a live question's, or another company's, is refused (Invalid / NotFound)."""
+    Each plan is the plan as Hoistra's steps ran it: stored with the draft, or (a turn not drafted yet) read now,
+    read-only, with the asker's access (_as_hoistra_ran). A turn that is not a live question's, or another company's, is
+    refused (Invalid / NotFound)."""
     from . import records_form, runs
+    from .review_errors import Invalid
 
-    _got, queries, none = await _turn_queries(m, turn_id)
+    got, queries, none = await _turn_queries(m, turn_id)
     mapped, ready = None, True
     try:
         onto = await records_run.load_map()
@@ -598,6 +627,13 @@ async def orchestrator_query(m: Any, turn_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001 - a map that cannot be loaded is not ready; the stored queries still show
         log.warning("trace_lab.answer_key.map_unavailable", error=_why(exc))
         ready = False
+    if ready and queries:
+        try:
+            queries = await _as_hoistra_ran(got, turn_id, queries)
+        except Invalid as exc:
+            if exc.reason != "not_ready":
+                raise
+            mapped, ready = None, False
     return {"ready": ready, "can_run": runs.can_curate(m),
             "queries": [{k: v for k, v in q.items() if k != "_block"} for q in queries], "none": none, "map": mapped}
 
@@ -608,7 +644,8 @@ async def try_query(m: Any, turn_id: str, *, index: int, plan: dict) -> dict:
     the platform team; the plan must fit Hoistra's map (records_form.check_plan, else Invalid "bad_query" in words); nothing
     is stored: the page saves it when the person says so. Returns {"before": Hoistra's query's values, "after": the
     plan's, "changes": what changed in words, "scope", "scope_email"}; each side is read_plan's result (before carries an
-    `error` instead of values when Hoistra's own query could not be read now)."""
+    `error` instead of values when Hoistra's own query could not be read now). What changed is said against the plan the
+    editor started from: the stored one, or for a turn not drafted yet the before side's plan as Hoistra's steps ran it."""
     from . import records_form, runs
     from .review_errors import Invalid
 
@@ -637,4 +674,7 @@ async def try_query(m: Any, turn_id: str, *, index: int, plan: dict) -> dict:
             raise was
         was = {"found": False, "facts": [], "receipts": [], "read_at": None, "unresolved": [], "notes": [], "sentence": "",
                "plan": q["plan"], "error": was.error}
-    return {"before": was, "after": now, "changes": records_form.plan_changes(onto, q["plan"], plan), **who}
+    start = q["plan"]
+    if q["_block"] is None and not was.get("error") and isinstance(was.get("plan"), dict):
+        start = was["plan"]                             # not drafted yet: the editor started from Hoistra's query as run
+    return {"before": was, "after": now, "changes": records_form.plan_changes(onto, start, plan), **who}
