@@ -29,6 +29,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
+from . import records_run
+
 ENV_SWITCH = "TRACE_LAB_ANSWER_KEY"
 #: Rows kept with each receipt; the full count is kept too.
 ROWS_KEPT = 50
@@ -37,8 +39,8 @@ ITEMS_SHOWN = 20
 SCOPED_SCHEMA = "plenum_scoped"
 
 
-class NotReady(RuntimeError):
-    """Hoistra's map of the database has not been built yet, so no key can be read now."""
+#: The faithful re-run of Hoistra's records query lives in records_run; these keep their old names here.
+NotReady = records_run.NotReady
 
 
 def enabled() -> bool:
@@ -312,19 +314,8 @@ def psql_text(receipt: dict, *, org: str) -> str:
     return "\n".join(head) + "\n" + sql.strip().rstrip(";") + ";\nROLLBACK;"
 
 
-async def _ontology(oq: Any) -> Any:
-    """Hoistra's map of the database, loaded from the file the orchestrator built; NotReady when there is none."""
-    from sqlalchemy import text
-
-    factory = oq._session_factory()
-    async with factory() as s:
-        async with s.begin():
-            await s.execute(text("SET TRANSACTION READ ONLY"))
-            cat = await oq.load_catalog(s, oq.BASE_SCHEMA)
-    fp = oq.schema_fingerprint(cat)
-    if fp not in oq._ONTOLOGY and not os.path.exists(oq._cache_path(fp)):
-        raise NotReady("Hoistra's map of the records is not built yet")
-    return await oq.get_ontology()
+#: Hoistra's map of the database, loaded from the file the orchestrator built (moved to records_run).
+_ontology = records_run.load_map
 
 
 async def run(key: Key, params: dict, org: str) -> dict:
@@ -341,27 +332,13 @@ async def _run_plan(raw_plan: dict, org: str, facts_of: Callable) -> dict:
         raise NotReady("Trace Lab's read-only connection to the records is not installed")
     from src.agents import ontology_qa as oq
 
-    class Receipts(oq.ScopedReader):
-        def __init__(self, principal):
-            super().__init__(principal)
-            self.receipts: list[dict] = []
-
-        async def fetch(self, sql, p, label=""):
-            rows = await super().fetch(sql, p, label)
-            values = p.d if isinstance(p, oq.Params) else (p or {})
-            receipt = {"id": "q" + str(len(self.receipts) + 1), "label": label or "query", "sql": sql,
-                       "params": jsonable(dict(values)), "row_count": len(rows), "rows": jsonable(rows[:ROWS_KEPT])}
-            receipt["psql"] = psql_text(receipt, org=org)
-            self.receipts.append(receipt)
-            return rows
-
     onto = await _ontology(oq)
     plan = oq.normalise_plan(raw_plan)
     errors = oq.validate_plan(onto, plan)
     if errors:
         raise ValueError("the plan does not fit this database: " + "; ".join(errors))
     caller = SimpleNamespace(role="admin", organization_id=org, building_ids=None)
-    async with Receipts(caller) as r:
+    async with records_run.ReceiptReader(caller) as r:
         plan, _notes, unresolved = await oq.resolve_plan(r, onto, plan, question=None)
         read_at = datetime.now(timezone.utc).isoformat()
         if unresolved:
