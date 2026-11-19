@@ -12,7 +12,8 @@ one sentence in fixed words (no model). Pure functions: nothing here reads a dat
     field     one record's non-empty attributes     a single record, keys and timestamps left out
     linked    "WO-4527 → vendor: Apex Mechanical"   the `include <name> [...]` query that read it
     pending   "Overdue open work orders: 3"         what Hoistra reads after a work-order answer (pending_context)
-    missing   a name the records do not hold        from `unresolved` only; no reason is guessed
+    missing   a name the records do not hold        from `unresolved` only; no reason is guessed. Its receipt is the last
+                                                    `resolve` query that carried the name, else None
 
 A value whose receipt cannot be told for certain has `receipt: None`: never a neighbour's. Trace Lab does not judge
 Hoistra's answer: nothing here says right or wrong.
@@ -38,6 +39,8 @@ _NOT_FIELDS = ("id", "key", "created_at", "updated_at")
 #: pending_context's groups, in the order it reads them: (its key, the word the label uses).
 _PENDING_GROUPS = (("open_by_trade", "trade"), ("open_by_vendor", "vendor"), ("open_by_wo_type", "type"),
                    ("open_by_priority", "priority"))
+#: What a pending group's label starts with; the sentence folds consecutive labels with the same head.
+_PENDING_HEAD = "Open work orders by "
 _INCLUDE_KEY = re.compile(r"^(.*?) \((\w+)\)$")
 
 
@@ -71,6 +74,32 @@ def _first(receipts: list, prefix: str, *, exact: bool = False) -> str | None:
         if label == prefix or (not exact and label.startswith(prefix)):
             return r.get("id")
     return None
+
+
+def _carries(value: Any, name: str) -> bool:
+    """Whether a query parameter (or an item of a list parameter) is this name, compared whole and without case."""
+    if isinstance(value, (list, tuple)):
+        return any(_carries(v, name) for v in value)
+    return value is not None and not isinstance(value, (dict, bool)) and str(value).strip().casefold() == name.strip().casefold()
+
+
+def _lookup_receipt(receipts: list, name: str) -> str | None:
+    """The last `resolve ...` query (Hoistra's ladder for finding a record by name or code) that had this name as a
+    parameter, so a person can see how it was looked for; None when none did, never another query."""
+    for r in reversed(receipts):
+        if _label(r).lower().startswith("resolve ") and any(_carries(v, name) for v in (r.get("params") or {}).values()):
+            return r.get("id")
+    return None
+
+
+def _empty_group(onto: Any, group: dict) -> str:
+    """What a group with no name is called. A blank name of the concept's own (its label column) is no such record
+    on record; any other blank column is that column: 7 work orders with no priority are 7 work orders."""
+    concept, attribute = group.get("concept"), group.get("attribute")
+    c = onto.concepts.get(concept)
+    if attribute and attribute not in (getattr(c, "label", None), "name"):
+        return "No " + str(attribute).replace("_", " ") + " on record"
+    return "No " + _words(concept, 1) + " on record"
 
 
 def _int(v: Any) -> int | None:
@@ -136,16 +165,15 @@ def _stated(main: list) -> list[dict]:
     return out
 
 
-def _fields(c: Any, attrs: dict, receipt: str | None) -> list[dict]:
+def _field_items(c: Any, attrs: dict) -> list[tuple[str, Any]]:
+    """Every non-empty attribute of a record that is an answer, not bookkeeping: (label, value)."""
     skip = {*_NOT_FIELDS, getattr(c, "key", None)}
-    out = []
-    for name, v in (attrs or {}).items():
-        if name in skip or str(name).endswith("_id") or _empty(v):
-            continue
-        out.append(_fact("field", str(name).replace("_", " ").capitalize(), _plain(v), receipt))
-        if len(out) == VALUES_SHOWN:
-            break
-    return out
+    return [(str(name).replace("_", " ").capitalize(), _plain(v)) for name, v in (attrs or {}).items()
+            if not (name in skip or str(name).endswith("_id") or _empty(v))]
+
+
+def _fields(c: Any, attrs: dict, receipt: str | None) -> list[dict]:
+    return [_fact("field", label, v, receipt) for label, v in _field_items(c, attrs)[:VALUES_SHOWN]]
 
 
 def _target(onto: Any, plan: dict, key: str) -> tuple[str, Any]:
@@ -206,6 +234,14 @@ def _count_receipt(receipts: list, value: int, start: int) -> tuple[str | None, 
     return None, start
 
 
+def _pending_entries(pending: dict, key: str) -> list[dict]:
+    """Every {name, count} of one of pending_context's groups (open_by_trade is a dict of trade to count)."""
+    raw = pending.get(key)
+    if isinstance(raw, dict):
+        raw = [{"name": n, "count": c} for n, c in raw.items()]
+    return [e for e in raw or [] if isinstance(e, dict) and _int(e.get("count")) is not None] if isinstance(raw, list) else []
+
+
 def _pending(pending: Any, receipts: list) -> list[dict]:
     """The counts Hoistra reads after a work-order answer: how many are open, open by trade, vendor, type and priority,
     overdue, blocked. The risk-to-life flags are a keyword match, not a stored fact, so they are not values."""
@@ -217,17 +253,11 @@ def _pending(pending: Any, receipts: list) -> list[dict]:
         rid, at = _count_receipt(receipts, total, at)
         out.append(_fact("pending", "Open work orders", total, rid))
     for key, word in _PENDING_GROUPS:
-        raw = pending.get(key)
-        if key == "open_by_trade":
-            entries = [{"name": n, "count": c} for n, c in (raw or {}).items()] if isinstance(raw, dict) else []
-            # a trade is a roll-up of categories: its receipt is the category query
-            rid = _group_receipt(receipts, pending.get("open_by_category") or [])
-        else:
-            entries = [e for e in raw or [] if isinstance(e, dict)] if isinstance(raw, list) else []
-            rid = _group_receipt(receipts, entries)
+        entries = _pending_entries(pending, key)
+        # a trade is a roll-up of categories: its receipt is the category query
+        rid = _group_receipt(receipts, _pending_entries(pending, "open_by_category") if key == "open_by_trade" else entries)
         for e in entries[:VALUES_SHOWN]:
-            if _int(e.get("count")) is not None:
-                out.append(_fact("pending", f"Open work orders by {word}: {e.get('name')}", e["count"], rid))
+            out.append(_fact("pending", f"{_PENDING_HEAD}{word}: {e.get('name')}", e["count"], rid))
     for key, label in (("overdue_open", "Overdue open work orders"), ("blocked_open", "Blocked open work orders")):
         n = _int(pending.get(key))
         if n is not None:
@@ -247,7 +277,8 @@ def values_of(onto: Any, plan: dict, run: dict) -> list[dict]:
         for name in run.get("unresolved") or []:
             if str(name) not in seen:
                 seen.append(str(name))
-        facts = [_fact("missing", "Not on record", name, None) for name in seen]
+        receipts = list(run.get("receipts") or [])
+        facts = [_fact("missing", "Not on record", name, _lookup_receipt(receipts, name)) for name in seen]
     else:
         result = run.get("result")
         facts = []
@@ -258,7 +289,7 @@ def values_of(onto: Any, plan: dict, run: dict) -> list[dict]:
             concept = _concept_name(plan, result)
             if result.get("kind") == "aggregate":
                 by = ((plan or {}).get("aggregate") or {}).get("count_by") or [{}]
-                empty = "No " + _words(by[0].get("concept"), 1) + " on record"
+                empty = _empty_group(onto, by[0])
                 rid = _first(main, "aggregate", exact=True)
                 facts = [{**f, "kind": "group", "receipt": rid} for f in _grouped({}, result, main, empty)[:VALUES_SHOWN]]
             else:
@@ -312,7 +343,9 @@ def sentence_of(onto: Any, plan: dict, run: dict, facts: list[dict]) -> str:
     if of.get("field"):
         records = result.get("records") or [{}]
         who = _generic_item(onto.concepts.get(concept) or SimpleNamespace(), (records[0] or {}).get("attributes") or {})
-        parts.append(who + ": " + ", ".join(f"{f['label'].lower()} {f['value']}" for f in of["field"]))
+        more = len(_field_items(onto.concepts.get(concept) or SimpleNamespace(), (records[0] or {}).get("attributes") or {})) - len(of["field"])
+        parts.append(who + ": " + ", ".join(f"{f['label'].lower()} {f['value']}" for f in of["field"])
+                     + (f", and {more} more" if more > 0 else ""))
     parts += [_say(f) for f in of.get("linked", [])]
     runs: list[list] = []
     for f in of.get("pending", []):
@@ -323,7 +356,14 @@ def sentence_of(onto: Any, plan: dict, run: dict, facts: list[dict]) -> str:
             runs.append([head, [f"{tail} {f['value']}"]])
         else:
             runs.append([None, _say(f)])
-    parts += [r[1] if r[0] is None else r[0] + ": " + ", ".join(r[1]) for r in runs]
+    pending = run.get("pending") if isinstance(run.get("pending"), dict) else {}
+    for head, items in runs:
+        if head is None:
+            parts.append(items)
+            continue
+        key = next((k for k, word in _PENDING_GROUPS if head == _PENDING_HEAD + word), None)
+        more = len(_pending_entries(pending, key)) - len(items) if key else 0
+        parts.append(head + ": " + ", ".join(items) + (f", and {more} more" if more > 0 else ""))
     text = ". ".join(parts)
     return text if text.endswith(".") else text + "."
 

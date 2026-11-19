@@ -43,9 +43,9 @@ PLAN_LIST_WOS_VENDOR = _plan("WorkOrder", "list", states=["open"],
 PLAN_SINGLE_WO = _plan("WorkOrder", "single", include=[{"name": "vendor", "concept": "Vendor", "via": [], "states": [], "filters": []}])
 
 
-def _receipt(n, label, rows=None, row_count=None):
+def _receipt(n, label, rows=None, row_count=None, params=None):
     rows = rows or []
-    return {"id": "q" + str(n), "label": label, "sql": "SELECT 1", "params": {},
+    return {"id": "q" + str(n), "label": label, "sql": "SELECT 1", "params": params or {},
             "row_count": len(rows) if row_count is None else row_count, "rows": rows, "psql": "SELECT 1;"}
 
 
@@ -96,6 +96,31 @@ def test_several_names_not_on_record_are_each_a_value():
     assert rv.sentence_of(ONTO, PLAN_COUNT_FLOORS, run, facts) == "Not on record: ABC, XYZ."
 
 
+def _lookups():
+    return [_receipt(1, "resolve Building (exact)", [], params={"p0": "ABC"}),
+            _receipt(2, "resolve Building (compact)", [], params={"p0": "abc"}),
+            _receipt(3, "resolve Building (search)", [], params={"p0": "\\mabc"}),
+            _receipt(4, "resolve 2 across 3 concepts (exact)", [], params={"p0": ["abc", "xyz"], "p1": "Building", "p2": "Site"}),
+            _receipt(5, "resolve Vendor (exact)", [], params={"p0": "ABCD"}),
+            _receipt(6, "stated floors on Building", [], params={"p0": ["ABC"]})]
+
+
+def test_a_missing_name_points_at_the_last_resolve_query_that_carried_it():
+    run = _run(_lookups(), None, found=False, unresolved=["ABC", "XYZ"])
+    facts = rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)
+    assert [(f["value"], f["receipt"]) for f in facts] == [("ABC", "q4"), ("XYZ", "q4")], \
+        "a list holds it case-insensitively; a later query that is not a resolve one is not used"
+    run = _run(_lookups()[:3], None, found=False, unresolved=["ABC"])
+    assert [f["receipt"] for f in rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)] == ["q2"], "the last of them, compared whole and without case"
+
+
+def test_a_missing_name_no_resolve_query_carried_keeps_no_receipt():
+    run = _run(_lookups(), None, found=False, unresolved=["ABC", "QRS", "AB"])
+    assert [(f["value"], f["receipt"]) for f in rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)] == [("ABC", "q4"), ("QRS", None), ("AB", None)]
+    run = _run([_receipt(1, "count", [], params={"p0": "ABC"}), _receipt(2, "resolve Building (exact)")], None, found=False, unresolved=["ABC"])
+    assert rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)[0]["receipt"] is None, "no params, and not a resolve query: nothing to point at"
+
+
 def test_a_long_list_shows_twenty_and_the_exact_total():
     assert rv.VALUES_SHOWN == 20
     run = run_with_records(37)
@@ -144,6 +169,21 @@ def test_a_group_with_no_name_says_which_kind_of_name_is_missing():
     run = _run([_receipt(1, "aggregate", rows)], {"kind": "aggregate", "rows": rows, "paths": []})
     facts = rv.values_of(ONTO, plan, run)
     assert [(f["label"], f["value"]) for f in facts] == [("Apex Mechanical", 5), ("No vendor on record", 2)]
+
+
+@pytest.mark.parametrize("concept,attribute,column,label", [
+    ("WorkOrder", "priority", "WorkOrder_priority", "No priority on record"),
+    ("WorkOrder", "wo_type", "WorkOrder_wo_type", "No wo type on record"),
+    ("Building", "name", "Building_name", "No building on record"),
+    ("Vendor", "vendor_name", "Vendor_vendor_name", "No vendor on record"),
+    ("Unmapped", "name", "Unmapped_name", "No unmapped on record"),
+    ("Unmapped", "grade", "Unmapped_grade", "No grade on record")])
+def test_a_blank_attribute_is_not_a_missing_record(concept, attribute, column, label):
+    """7 work orders with no priority are 7 work orders: it is the priority that is blank, not the record that is missing."""
+    plan = _plan("WorkOrder", "count", aggregate={"count_by": [{"concept": concept, "attribute": attribute}]})
+    rows = [{column: "P1", "count": 9}, {column: None, "count": 7}]
+    run = _run([_receipt(1, "aggregate", rows)], {"kind": "aggregate", "rows": rows, "paths": []})
+    assert [(f["label"], f["value"]) for f in rv.values_of(ONTO, plan, run)] == [("P1", 9), (label, 7)]
 
 
 def test_groups_over_twenty_say_how_many_more():
@@ -219,6 +259,20 @@ def test_linked_records_are_listed_only_for_the_records_shown():
     run = run_with_records(25, related={"vendor": [{"name": "Apex"}]})
     facts = rv.values_of(ONTO, PLAN_LIST_WOS, run)
     assert len([f for f in facts if f["kind"] == "linked"]) == 20
+
+
+def test_a_single_records_fields_over_twenty_say_how_many_more():
+    attrs = {"f" + str(i): "v" + str(i) for i in range(30)}
+    result = {"kind": "records", "focus": "Vendor", "total": 1, "records": [{"key": "k", "attributes": attrs, "context": {}, "related": {}}], "paths": []}
+    run = _run([_receipt(1, "count", [{"n": 1}]), _receipt(2, "focus Vendor")], result)
+    plan = _plan("Vendor", "single")
+    facts = rv.values_of(ONTO, plan, run)
+    sentence = rv.sentence_of(ONTO, plan, run, facts)
+    assert sentence.endswith("f18 v18, f19 v19, and 10 more.") and "f20 v20" not in sentence
+    attrs20 = {"f" + str(i): "v" + str(i) for i in range(20)}
+    result["records"][0]["attributes"] = attrs20
+    facts = rv.values_of(ONTO, plan, run)
+    assert rv.sentence_of(ONTO, plan, run, facts).endswith("f19 v19."), "twenty fields are all of them: nothing is left over"
 
 
 # ── Stated figures ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -347,11 +401,31 @@ def test_an_aggregate_with_pending_reads_its_groups_from_the_first_aggregate():
                              ("pending", "Open work orders by priority: P1", 3, "q4")]
 
 
-def test_pending_groups_over_twenty_are_cut_to_twenty():
+def test_pending_groups_over_twenty_are_cut_to_twenty_and_the_sentence_says_how_many_more():
     run = _pending_run()
-    run["pending"] = {"open_total": 40, "open_by_vendor": [{"name": "V" + str(i), "count": 40 - i} for i in range(30)]}
+    run["pending"] = {"open_total": 40, "open_by_vendor": [{"name": "V" + str(i), "count": 40 - i} for i in range(30)],
+                      "open_by_priority": [{"name": "P1", "count": 3}], "overdue_open": 3}
     facts = rv.values_of(ONTO, PLAN_LIST_WOS, run)
     assert len([f for f in facts if f["label"].startswith("Open work orders by vendor")]) == 20
+    sentence = rv.sentence_of(ONTO, PLAN_LIST_WOS, run, facts)
+    assert ("Open work orders by vendor: V0 40, V1 39, " in sentence and "V19 21, and 10 more. Open work orders by priority: P1 3. "
+            "Overdue open work orders: 3." in sentence), sentence
+    assert "V20" not in sentence
+
+
+def test_pending_trades_over_twenty_say_how_many_more():
+    run = _pending_run()
+    run["pending"] = {"open_total": 90, "open_by_trade": {"T" + str(i): 50 - i for i in range(25)}}
+    facts = rv.values_of(ONTO, PLAN_LIST_WOS, run)
+    assert len([f for f in facts if f["label"].startswith("Open work orders by trade")]) == 20
+    assert rv.sentence_of(ONTO, PLAN_LIST_WOS, run, facts).endswith("T19 31, and 5 more.")
+
+
+def test_exactly_twenty_pending_groups_have_nothing_left_over():
+    run = _pending_run()
+    run["pending"] = {"open_total": 90, "open_by_vendor": [{"name": "V" + str(i), "count": 40 - i} for i in range(20)]}
+    sentence = rv.sentence_of(ONTO, PLAN_LIST_WOS, run, rv.values_of(ONTO, PLAN_LIST_WOS, run))
+    assert sentence.endswith("V19 21.") and "more" not in sentence
 
 
 # ── What a run says when there is nothing to show ────────────────────────────────────────────────────────────────
