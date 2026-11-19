@@ -74,11 +74,56 @@ def _kinds(facts):
 
 # ── The brief's four tests ───────────────────────────────────────────────────────────────────────────────────────
 
-def test_floors_give_the_count_and_the_figure_the_building_states():
+def test_floors_give_the_figure_the_building_states_then_the_floor_by_floor_entries():
     facts = rv.values_of(ONTO, PLAN_COUNT_FLOORS, RUN_ABC)
-    assert _kinds(facts) == [("count", "Floor records found", 0, "q3"), ("stated", "ABC states floors", 25, "q2")]
+    assert _kinds(facts) == [("stated", "ABC states floors", 25, "q2"), ("count", "Floor-by-floor entries", 0, "q3")]
     assert [f["id"] for f in facts] == ["f1", "f2"]
-    assert rv.sentence_of(ONTO, PLAN_COUNT_FLOORS, RUN_ABC, facts) == "ABC states floors: 25. Floor records found: 0."
+    assert rv.sentence_of(ONTO, PLAN_COUNT_FLOORS, RUN_ABC, facts) == "ABC states floors: 25. Floor-by-floor entries: 0 (none entered)."
+
+
+def _floors_run(entries, stated=({"l": "ABC", "v": "25"},)):
+    records = [{"key": "k" + str(i), "attributes": {"name": "Level " + str(i)}, "context": {}, "related": {}} for i in range(entries)]
+    return _run([_receipt(1, "stated floors on Building", list(stated)), _receipt(2, "count", [{"n": entries}]),
+                 _receipt(3, "focus Floor")],
+                {"kind": "records", "focus": "Floor", "total": entries, "records": records, "paths": []})
+
+
+def test_floor_by_floor_entries_that_exist_are_just_the_number():
+    run = _floors_run(3)
+    facts = rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)
+    assert _kinds(facts)[:2] == [("stated", "ABC states floors", 25, "q1"), ("count", "Floor-by-floor entries", 3, "q2")]
+    assert rv.sentence_of(ONTO, PLAN_COUNT_FLOORS, run, facts) == "ABC states floors: 25. Floor-by-floor entries: 3. Floors: Level 0, Level 1, Level 2."
+
+
+def test_a_stated_figure_for_other_records_leaves_the_count_label_and_order_alone():
+    # the figure is the building's work orders, not the floors the count counts: not "the same records"
+    run = _run([_receipt(1, "stated work_orders on Building", [{"l": "ABC", "v": "9"}]), _receipt(2, "count", [{"n": 0}]),
+                _receipt(3, "focus Floor")], {"kind": "records", "focus": "Floor", "total": 0, "records": [], "paths": []})
+    facts = rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)
+    assert _kinds(facts) == [("count", "Floor records found", 0, "q2"), ("stated", "ABC states work orders", 9, "q1")]
+    assert rv.sentence_of(ONTO, PLAN_COUNT_FLOORS, run, facts) == "ABC states work orders: 9. Floor records found: 0."
+
+
+def test_a_stated_query_with_no_figure_is_no_stated_value_and_the_count_label_stays():
+    run = _floors_run(0, stated=({"l": "ABC", "v": ""},))
+    facts = rv.values_of(ONTO, PLAN_COUNT_FLOORS, run)
+    assert _kinds(facts) == [("count", "Floor records found", 0, "q2")]
+    assert rv.sentence_of(ONTO, PLAN_COUNT_FLOORS, run, facts) == "Floor records found: 0."
+
+
+def test_the_by_entries_label_uses_the_concepts_words_singular():
+    run = _run([_receipt(1, "stated work_orders on Building", [{"l": "ABC", "v": "25"}]), _receipt(2, "count", [{"n": 0}]),
+                _receipt(3, "focus WorkOrder")], {"kind": "records", "focus": "WorkOrder", "total": 0, "records": [], "paths": []})
+    facts = rv.values_of(ONTO, PLAN_LIST_WOS, run)
+    assert _kinds(facts) == [("stated", "ABC states work orders", 25, "q1"), ("count", "Work order-by-work order entries", 0, "q2")]
+    assert rv.sentence_of(ONTO, PLAN_LIST_WOS, run, facts) == "ABC states work orders: 25. Work order-by-work order entries: 0 (none entered)."
+
+
+def test_a_count_with_no_stated_value_reads_as_before():
+    run = run_with_records(0)
+    facts = rv.values_of(ONTO, PLAN_LIST_WOS, run)
+    assert _kinds(facts) == [("count", "Work order records found", 0, "q1")]
+    assert rv.sentence_of(ONTO, PLAN_LIST_WOS, run, facts) == "Work order records found: 0."
 
 
 def test_a_name_not_on_record_is_a_value_not_a_zero():

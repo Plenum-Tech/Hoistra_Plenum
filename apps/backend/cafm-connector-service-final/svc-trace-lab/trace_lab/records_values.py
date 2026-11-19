@@ -5,8 +5,11 @@ query it made as a receipt. This module turns that run into what a person sees a
 values, each `{id, kind, label, value, receipt}` pointing at the receipt (the query and the rows) it was read from, and
 one sentence in fixed words (no model). Pure functions: nothing here reads a database.
 
-    count     "Floor records found: 0"              the `count` query
-    stated    "ABC states floors: 25"               the `stated <table> on <Concept>` query: a figure the record holds itself
+    count     "Floor records found: 0"              the `count` query. Next to a figure the records state for the same
+                                                    records it reads "Floor-by-floor entries: 0 (none entered)": the
+                                                    entries nobody made one by one, not "no floors"
+    stated    "ABC states floors: 25"               the `stated <table> on <Concept>` query: a figure the record holds itself;
+                                                    first in the list when it is for the records the count counts
     group     "Bishopsgate Tower: 12"               one per row of an aggregate (the `aggregate` query)
     record    each listed record's name or code     up to VALUES_SHOWN, then "and N more" with the exact count
     field     one record's non-empty attributes     a single record, keys and timestamps left out
@@ -151,9 +154,20 @@ def _count_label(concept: str) -> str:
     return _words(concept, 1).capitalize() + " records found"
 
 
-def _stated(main: list) -> list[dict]:
-    """The figures a record states itself, from the `stated <table> on <Concept>` queries (rows {l, v})."""
-    out = []
+def _entries_label(concept: str) -> str:
+    """The count when the records state the figure themselves: how many entries were made one by one."""
+    one = _words(concept, 1)
+    return f"{one.capitalize()}-by-{one} entries"
+
+
+def _table_words(table: Any) -> str:
+    return str(table or "").replace("_", " ").strip().casefold()
+
+
+def _stated(main: list, counted: set[str] = frozenset()) -> tuple[list[dict], bool]:
+    """The figures a record states itself, from the `stated <table> on <Concept>` queries (rows {l, v}), and whether any
+    of them is for the records the count counts (its table is one of `counted`)."""
+    out, same = [], False
     for r in main:
         m = re.match(r"^stated (.+) on (.+)$", _label(r))
         if not m:
@@ -162,7 +176,8 @@ def _stated(main: list) -> list[dict]:
             v = str((row or {}).get("v") or "")
             if v.strip():
                 out.append(_fact("stated", f"{row.get('l') or m.group(2)} states {m.group(1).replace('_', ' ')}", _figure(v), r.get("id")))
-    return out
+                same = same or _table_words(m.group(1)) in counted
+    return out, same
 
 
 def _field_items(c: Any, attrs: dict) -> list[tuple[str, Any]]:
@@ -297,8 +312,10 @@ def values_of(onto: Any, plan: dict, run: dict) -> list[dict]:
                 records = [r for r in result.get("records") or [] if isinstance(r, dict)]
                 shown = records[:VALUES_SHOWN]
                 focus_rid = _first(main, "focus ")
-                facts = [_fact("count", _count_label(concept), int(result.get("total") or 0), _first(main, "count"))]
-                facts += _stated(main)
+                stated, same = _stated(main, {w for w in (_words(concept), _words(concept, 1), _table_words(getattr(c, "table", None))) if w})
+                count = _fact("count", _entries_label(concept) if same else _count_label(concept), int(result.get("total") or 0), _first(main, "count"))
+                # the records state the figure for the same records the count counts: the figure is the answer, so it comes first
+                facts = [*stated, count] if same else [count, *stated]
                 if (plan or {}).get("question_type") == "single" and len(records) == 1:
                     facts += _fields(c, records[0].get("attributes") or {}, focus_rid)
                 else:
@@ -331,7 +348,8 @@ def sentence_of(onto: Any, plan: dict, run: dict, facts: list[dict]) -> str:
     if of.get("missing"):
         parts.append("Not on record: " + ", ".join(str(f["value"]) for f in of["missing"]))
     parts += [_say(f) for f in of.get("stated", [])]
-    parts += [_say(f) for f in of.get("count", [])]
+    parts += [_say(f) + (" (none entered)" if f["value"] == 0 and f["label"] == _entries_label(concept) else "")
+              for f in of.get("count", [])]
     if of.get("group"):
         more = len(result.get("rows") or []) - len(of["group"])
         parts.append("Counts: " + ", ".join(f"{f['label']} {f['value']}" for f in of["group"]) + (f", and {more} more" if more > 0 else ""))
