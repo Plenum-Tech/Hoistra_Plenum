@@ -123,12 +123,12 @@ def _receipt(receipts: list, *labels: str) -> str | None:
     return receipts[-1]["id"] if receipts else None
 
 
-def _grouped(params: dict, result: dict, receipts: list) -> list:
+def _grouped(params: dict, result: dict, receipts: list, empty: str = "No building on record") -> list:
     rid = _receipt(receipts, "aggregate")
     rows = sorted(result.get("rows") or [], key=lambda r: -(int(r.get("count") or 0)))
     out = []
     for i, row in enumerate(rows[:ITEMS_SHOWN], start=1):
-        label = " · ".join(str(v) for k, v in row.items() if k != "count" and v not in (None, "")) or "No building on record"
+        label = " · ".join(str(v) for k, v in row.items() if k != "count" and v not in (None, "")) or empty
         out.append({"id": "f" + str(i), "label": label, "value": int(row.get("count") or 0), "receipt": rid})
     return out
 
