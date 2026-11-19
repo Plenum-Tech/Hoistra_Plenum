@@ -12,9 +12,9 @@ progress, under /api/trace-lab (trace_lab.app ROUTERS):
     GET    /lab/runs/{code}/labels            its labels view: questions x failure modes, each person's newest cell
     GET    /lab/labels                        All runs' labels: every run the top bar lists, each with its own rows
     GET    /lab/turns/{turn_id}/expected      a turn's expected answer (a live question's draft from SPEC.md, or a person's)
-    POST   /lab/turns/{turn_id}/expected/check  Run again now: the answer key's values read afresh, nothing stored
-    GET    /lab/turns/{turn_id}/expected/query  the orchestrator's records queries for the turn, as plain fields
-    POST   /lab/turns/{turn_id}/expected/query  that query with a person's changes (states, building, dates), read again
+    POST   /lab/turns/{turn_id}/expected/check  Run again now: a stored query's values read afresh (?index=N, default 0), nothing stored
+    GET    /lab/turns/{turn_id}/expected/query  the turn's records queries (the plan as run) with Hoistra's map to edit them with
+    POST   /lab/turns/{turn_id}/expected/query  a person's own plan read as written beside Hoistra's query (curators, platform team)
     GET    /lab/progress                      review completion and failure-mode counts (?run=R3, default newest)
     GET    /lab/q/{code}                      one question: expected answer, answers, the active answer's steps, notes
     GET    /lab/q/{code}/tree                 the Trace tab: one answer as Langfuse's tree of steps (read only)
@@ -153,35 +153,38 @@ async def lab_turn_expected(turn_id: str, m: labelling.Member = Depends(_wide)) 
 
 
 @router.post("/lab/turns/{turn_id}/expected/check")
-async def lab_turn_expected_recheck(turn_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
-    """Run again now: the turn's answer-key values read afresh, read-only, nothing stored (answer_key.recheck)."""
+async def lab_turn_expected_recheck(turn_id: str, index: int = Query(0, ge=0, le=1000),
+                                    m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """Run again now: the stored query `index` of the turn's values read afresh for the same company, read-only, nothing
+    stored (answer_key.recheck)."""
     from . import answer_key
 
-    return {"ok": True, **await _call(answer_key.recheck(m, turn_id))}
+    return {"ok": True, **await _call(answer_key.recheck(m, turn_id, index=index))}
 
 
-class QueryChange(BaseModel):
-    """A person's changes to the orchestrator's records query: its states, building and dates (answer_key.apply_fields)."""
-    index: int = 0
-    states: list[str] = []
-    building: str | None = None
-    dates: list[dict[str, Any]] = []
+class QueryRun(BaseModel):
+    """A person's own records plan for one of the turn's queries (Hoistra's plan schema; answer_key.try_query checks it
+    against Hoistra's map before it runs)."""
+    index: int = Field(0, ge=0, le=1000)
+    plan: dict[str, Any]
 
 
 @router.get("/lab/turns/{turn_id}/expected/query")
 async def lab_turn_expected_query(turn_id: str, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
-    """The records queries the orchestrator made for this live turn, as plain fields (answer_key.orchestrator_query)."""
+    """The records queries of this live turn with Hoistra's map to edit them with, and whether the caller may run a plan
+    (answer_key.orchestrator_query)."""
     from . import answer_key
 
     return {"ok": True, **await _call(answer_key.orchestrator_query(m, turn_id))}
 
 
 @router.post("/lab/turns/{turn_id}/expected/query")
-async def lab_turn_expected_try(turn_id: str, body: QueryChange, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
-    """The orchestrator's query with a person's changes, read again read-only; nothing stored (answer_key.try_query)."""
+async def lab_turn_expected_try(turn_id: str, body: QueryRun, m: labelling.Member = Depends(_wide)) -> dict[str, Any]:
+    """A person's own plan read as written beside the turn's query read the way Hoistra reads it; read-only, nothing
+    stored (answer_key.try_query). Curators and the platform team."""
     from . import answer_key
 
-    return {"ok": True, **await _call(answer_key.try_query(m, turn_id, index=body.index, fields=body.model_dump()))}
+    return {"ok": True, **await _call(answer_key.try_query(m, turn_id, index=body.index, plan=body.plan))}
 
 
 @router.get("/lab/labels")

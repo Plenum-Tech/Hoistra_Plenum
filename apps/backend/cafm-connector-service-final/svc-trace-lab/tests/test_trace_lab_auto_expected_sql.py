@@ -408,8 +408,8 @@ async def test_run_again_reads_the_same_key_for_the_same_company_and_stores_noth
 
     seen = []
 
-    async def fake(key, params, org):
-        seen.append((key.id, params, org))
+    async def fake(key, params, org, *, question=""):
+        seen.append((key.id, params, org, question))
         receipts = [{"id": "q1", "label": "count", "sql": "SELECT count(*) FROM vendors", "params": {}, "row_count": 1,
                      "rows": [{"n": 2}], "psql": "BEGIN READ ONLY; ..."}]
         return {"found": True, "facts": [{"id": "f1", "label": "Blocked vendors", "value": 2, "receipt": "q1"},
@@ -424,10 +424,10 @@ async def test_run_again_reads_the_same_key_for_the_same_company_and_stores_noth
                                     expected="2 vendors are blocked: Pennard Fire Services, Ostley Power.",
                                     evidence={"drafted_from": "answer_key", "key": "vendors_blocked", "params": {}})
     before = await _drafts(lab_scratch)
-    got = await routes_runs.lab_turn_expected_recheck(q["turn_ids"][0], m=member())
+    got = await routes_runs.lab_turn_expected_recheck(q["turn_ids"][0], index=0, m=member())
     assert got["ok"] is True and [f["value"] for f in got["facts"]][0] == 2 and got["receipts"] and got["read_at"]
-    assert got["sentence"].startswith("2 vendors are blocked")
-    assert seen[-1] == ("vendors_blocked", {}, ORG) and await _drafts(lab_scratch) == before
+    assert got["sentence"].startswith("2 vendors are blocked") and got["notes"] == []
+    assert seen[-1] == ("vendors_blocked", {}, ORG, "Which vendors are blocked?") and await _drafts(lab_scratch) == before
     with pytest.raises(NotFound):
         await answer_key.recheck(member(org=OTHER_ORG, all_companies=False, role="admin"), q["turn_ids"][0])
     other = next(x for x in (await runs.list_questions(member(), code))["questions"] if x["question"] != "Which vendors are blocked?")
@@ -435,48 +435,151 @@ async def test_run_again_reads_the_same_key_for_the_same_company_and_stores_noth
         await answer_key.recheck(member(), other["turn_ids"][0])
 
 
-async def test_the_orchestrators_query_can_be_corrected_and_read_again(lab_scratch, main_scratch, monkeypatch):
-    import json as _json
+# ── Run again now and the query editor, through the routes (19 Nov 2026, Hussain and Bala). A drafted turn's stored query is
+#    read again; the editor's routes show the stored query as run with Hoistra's map, and run a person's own plan beside
+#    Hoistra's. Another company's turn is never found by any of them. ──
 
-    from test_trace_lab_answer_key import PLAN, _onto
-    from trace_lab import answer_key, eval_store, routes_runs
+async def _drafted(lab, main, monkeypatch, *, plan=None, asker=None):
+    """A live day whose three questions are drafted as values read from `plan` (Floor and Building by default), with the
+    real shape of Hoistra's map (records_form's) for the routes that check a plan. Returns (code, newest turn, reads)."""
+    from test_trace_lab_records_form import R62, _onto
+
+    code = await _live_run(main)
+    _queries(monkeypatch, lambda nodes, q, propose: {"queries": [_hoistra(q, plan=plan or R62)], "none": None})
+    reads = _records(monkeypatch)
+
+    async def load_map():
+        return _onto()
+    monkeypatch.setattr(records_run, "load_map", load_map)
+    if asker is not None:
+        _asker(monkeypatch, asker)
+    await auto_expected.draft_for_live(None, now=NOW)
+    _q, turn = await _turn_of(code)
+    return code, turn, reads
+
+
+async def test_run_again_reads_a_drafted_query_afresh_for_the_turns_company_and_stores_nothing(lab_scratch, main_scratch, monkeypatch):
+    from test_trace_lab_records_form import R62
+
+    from trace_lab import answer_key, routes_runs
     from trace_lab.review_errors import Invalid
 
-    code = await _live_run(main_scratch)
-    q = (await runs.list_questions(member(), code))["questions"][-1]
-    turn = q["turn_ids"][0]
-
-    async def tree(m, trace_id):
-        return {"nodes": [{"output": {"content": _json.dumps(PLAN)}}]}
-    monkeypatch.setattr(eval_store, "trace_tree_of", tree)
-
-    async def onto(_oq):
-        return _onto()
-    monkeypatch.setattr(answer_key, "_ontology", onto)
-    ran = []
-
-    async def run_plan(plan, org, facts_of):
-        ran.append((plan, org))
-        return {"found": True, "facts": [{"id": "f1", "label": "Compliance certificates found", "value": 3, "receipt": "q1"}],
-                "receipts": [{"id": "q1", "label": "count", "sql": "SELECT 1"}], "read_at": "t", "plan": plan}
-    monkeypatch.setattr(answer_key, "_run_plan", run_plan)
-    monkeypatch.setattr("trace_lab.db._main", object())
-    import sys
-    import types
-    monkeypatch.setitem(sys.modules, "src.agents.ontology_qa", types.SimpleNamespace())
-
-    shown = await routes_runs.lab_turn_expected_query(turn, m=member())
-    assert shown["ok"] is True and shown["plans"][0]["fields"]["dates"][0]["value"] == "next_30_days"
-    body = routes_runs.QueryChange(index=0, states=["expiring_soon"], building="",
-                                   dates=[{"attribute": "expiry_date", "op": "within", "value": "next_60_days"}])
-    got = await routes_runs.lab_turn_expected_try(turn, body, m=member())
-    assert got["ok"] is True and got["sentence"] == "3 compliance certificates." and ran[-1][1] == ORG
-    assert "expiry_date: within next_30_days → within next_60_days" in got["changes"]
-    assert ran[-1][0]["focus"]["filters"][0]["value"] == "next_60_days"
-    with pytest.raises(Invalid):
-        await answer_key.try_query(member(), turn, index=0, fields={"states": ["nonsense"]})
+    _code, turn, reads = await _drafted(lab_scratch, main_scratch, monkeypatch)
+    asked = _asker(monkeypatch)
+    drafts, drafting_reads = await _drafts(lab_scratch), len(reads)
+    got = await routes_runs.lab_turn_expected_recheck(turn, index=0, m=member())
+    assert got["ok"] is True and got["found"] is True and got["facts"][0]["value"] == 25 and got["receipts"] and got["read_at"]
+    assert got["sentence"].startswith("Floor records found: 25.") and got["notes"] == [] and got["unresolved"] == []
+    assert len(reads) == drafting_reads + 1 and reads[-1]["plan"] == R62 and reads[-1]["org"] == ORG
+    assert reads[-1]["mode"] == "hoistra" and reads[-1]["question"], "the stored query, the way Hoistra runs one"
+    assert reads[-1]["scope"] is None and asked == [], "it was read for the whole company, so it is read again as that"
+    assert got["scope"] == "company" and await _drafts(lab_scratch) == drafts, "nothing is stored"
+    with pytest.raises(Invalid) as e:
+        await answer_key.recheck(member(), turn, index=7)
+    assert e.value.reason == "no_query"
     with pytest.raises(NotFound):
-        await answer_key.try_query(member(org=OTHER_ORG, all_companies=False, role="admin"), turn, index=0, fields={})
+        await answer_key.recheck(member(org=OTHER_ORG, all_companies=False, role="admin"), turn, index=0)
+
+
+async def test_run_again_on_a_query_read_as_the_asker_is_read_with_their_access(lab_scratch, main_scratch, monkeypatch):
+    from trace_lab import routes_runs
+
+    who = {"scope": "asker", "building_ids": ["b1"], "email": "asker@example.com"}
+    _code, turn, reads = await _drafted(lab_scratch, main_scratch, monkeypatch, asker=who)
+    asked = _asker(monkeypatch, who)
+    got = await routes_runs.lab_turn_expected_recheck(turn, index=0, m=member())
+    assert asked == [(ORG, UID)], "the person on the turn, in the question's company"
+    assert reads[-1]["scope"] == {"building_ids": ["b1"], "email": "asker@example.com"}
+    assert got["scope"] == "asker" and got["scope_email"] == "asker@example.com"
+
+
+async def test_the_editor_shows_the_stored_query_and_the_map_and_who_may_run_it(lab_scratch, main_scratch, monkeypatch):
+    from test_trace_lab_records_form import R62
+
+    from trace_lab import routes_runs
+
+    _code, turn, _reads = await _drafted(lab_scratch, main_scratch, monkeypatch)
+    got = await routes_runs.lab_turn_expected_query(turn, m=member())
+    assert got["ok"] is True and got["ready"] is True and got["can_run"] is True and got["none"] is None
+    assert [(x["index"], x["source"], x["plan"]) for x in got["queries"]] == [(0, "hoistra", R62)]
+    assert got["queries"][0]["source_words"] and got["queries"][0]["question"]
+    assert {c["name"] for c in got["map"]["concepts"]} >= {"Floor", "Building"} and got["map"]["ops"] and got["map"]["periods"]
+    viewer = member(org=ORG, role="reviewer", all_companies=False, manages=False)
+    assert (await routes_runs.lab_turn_expected_query(turn, m=viewer))["can_run"] is False
+
+
+async def test_a_person_runs_their_own_plan_beside_hoistras(lab_scratch, main_scratch, monkeypatch):
+    import json as _json
+
+    from test_trace_lab_records_form import R62
+
+    from trace_lab import routes_runs
+
+    _code, turn, reads = await _drafted(lab_scratch, main_scratch, monkeypatch)
+    new = _json.loads(_json.dumps(R62))
+    new["focus"]["concept"], new["constraints"] = "Building", []
+    drafting, drafts = len(reads), await _drafts(lab_scratch)
+    got = await routes_runs.lab_turn_expected_try(turn, routes_runs.QueryRun(index=0, plan=new), m=member())
+    assert got["ok"] is True and got["changes"] == ["What: Floor records → Building records", "Limited to: Building ABC removed"]
+    assert got["before"]["found"] is True and got["after"]["found"] is True and got["before"]["receipts"] and got["after"]["facts"]
+    assert [(r["mode"], r["plan"]["focus"]["concept"], r["org"]) for r in reads[drafting:]] == [
+        ("hoistra", "Floor", ORG), ("as_written", "Building", ORG)]
+    assert await _drafts(lab_scratch) == drafts, "nothing is stored: the page saves it when the person says so"
+
+
+async def test_a_plan_the_map_refuses_is_a_422_in_words_through_the_route(lab_scratch, main_scratch, monkeypatch):
+    from fastapi import HTTPException
+    from test_trace_lab_records_form import _node, _plan
+
+    from trace_lab import routes_runs
+
+    _code, turn, reads = await _drafted(lab_scratch, main_scratch, monkeypatch)
+    drafting = len(reads)
+    with pytest.raises(HTTPException) as e:
+        await routes_runs.lab_turn_expected_try(turn, routes_runs.QueryRun(index=0, plan=_plan(_node("Flor"))), m=member())
+    assert e.value.status_code == 422 and e.value.detail["reason"] == "bad_query" and "'Flor' is not a kind of record" in e.value.detail["error"]
+    assert len(reads) == drafting, "nothing is read for a plan that does not fit"
+
+
+async def test_only_curators_and_the_platform_team_run_a_plan_and_another_company_sees_nothing(lab_scratch, main_scratch, monkeypatch):
+    from fastapi import HTTPException
+    from test_trace_lab_records_form import R62
+
+    from trace_lab import routes_runs
+
+    _code, turn, reads = await _drafted(lab_scratch, main_scratch, monkeypatch)
+    drafting = len(reads)
+    viewer = member(org=ORG, role="reviewer", all_companies=False, manages=False)
+    with pytest.raises(HTTPException) as e:
+        await routes_runs.lab_turn_expected_try(turn, routes_runs.QueryRun(index=0, plan=R62), m=viewer)
+    assert e.value.status_code == 403
+    stranger = member(org=OTHER_ORG, all_companies=False, role="admin")
+    for call in (routes_runs.lab_turn_expected_query(turn, m=stranger),
+                 routes_runs.lab_turn_expected_try(turn, routes_runs.QueryRun(index=0, plan=R62), m=stranger),
+                 routes_runs.lab_turn_expected_recheck(turn, index=0, m=stranger)):
+        with pytest.raises(HTTPException) as e:
+            await call
+        assert e.value.status_code == 404, "another company's turn is not found"
+    assert len(reads) == drafting, "nothing was read for them"
+
+
+async def test_a_turn_with_no_draft_shows_the_turns_own_query_from_its_trace(lab_scratch, main_scratch, monkeypatch):
+    from test_trace_lab_records_form import R62, _onto
+
+    from trace_lab import routes_runs
+
+    code = await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch, nodes=[tool("t1", "answer_from_records")])
+    asked = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [dict(_hoistra(q, plan=R62), tool_id="t1")], "none": None})
+
+    async def load_map():
+        return _onto()
+    monkeypatch.setattr(records_run, "load_map", load_map)
+    _q, turn = await _turn_of(code)
+    got = await routes_runs.lab_turn_expected_query(turn, m=member())
+    assert [(x["index"], x["plan"]) for x in got["queries"]] == [(0, R62)] and "tool_id" not in got["queries"][0]
+    assert [c["propose"] for c in asked] == [False], "showing the editor never asks the planner"
+    assert asked[0]["nodes"], "the turn's own trace is read"
 
 
 # ── A SPEC.md draft the answer key can now answer gets the values (16 Nov 2026: R59 "lapse in the next 30 days" was
@@ -566,23 +669,6 @@ async def test_a_key_that_cannot_read_rests_before_it_is_tried_again(lab_scratch
     assert len(seen) == tried, "not read again a minute later"
     await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=1))
     assert len(seen) > tried, "tried again after the rest"
-
-
-async def test_correcting_a_query_before_the_map_is_ready_says_so(lab_scratch, main_scratch, monkeypatch):
-    from trace_lab import answer_key, routes_runs
-    from trace_lab.review_errors import Invalid
-
-    async def turn_plans(m, turn_id):
-        return {"company": ORG}, [{"focus": {"concept": "WorkOrder", "states": ["open"]}}], "hoistra"
-
-    async def not_ready(oq):
-        raise answer_key.NotReady("no map yet")
-
-    monkeypatch.setattr(answer_key, "_turn_plans", turn_plans)
-    monkeypatch.setattr(answer_key, "_ontology", not_ready)
-    with pytest.raises(Invalid) as e:
-        await answer_key.try_query(member(), "turn-x", index=0, fields={"states": ["open"]})
-    assert e.value.reason == "not_ready"
 
 
 async def test_values_read_from_the_records_wait_on_the_session_page_too(lab_scratch, main_scratch, monkeypatch):

@@ -429,23 +429,23 @@ def test_answer_key_keeps_the_names_it_always_had():
     assert ak.NotReady is rr.NotReady
 
 
-async def test_the_answer_keys_own_run_still_reads_through_the_moved_reader(monkeypatch):
-    """_run_plan keeps its behaviour (Task 5 reroutes it); only the reader it builds is the moved one."""
+async def test_the_answer_keys_own_run_reads_through_the_faithful_rerun(monkeypatch):
+    """19 Nov 2026 (Task 5): _run_plan is run_query now: Hoistra's steps, the question as asked, the moved reader."""
     from trace_lab import db
 
     fake = _fake_pipeline(monkeypatch)
     monkeypatch.setattr(db, "_main", object())
-
-    async def ontology(_oq):
-        return fake.onto
+    asked = []
 
     async def resolve(r, o, plan, question=None):
+        asked.append(question)
         r.receipts.append({"id": "q1", "label": "x", "sql": "SELECT 1", "params": {}, "row_count": 0, "rows": []})
         return plan, [], []
 
-    monkeypatch.setattr(ak, "_ontology", ontology)
     monkeypatch.setattr(oq, "resolve_plan", resolve)
     monkeypatch.setattr(oq, "validate_plan", lambda o, plan: [])
-    out = await ak._run_plan(PLAN_COUNT_FLOORS, ORG, lambda onto, plan, result, receipts: [{"total": result["total"]}])
+    out = await ak._run_plan(PLAN_COUNT_FLOORS, ORG, lambda onto, plan, result, receipts: [{"total": result["total"]}],
+                             question="How many floors does ABC have?")
     assert out["found"] is True and out["facts"] == [{"total": 7}] and out["receipts"][0]["id"] == "q1"
+    assert asked == ["How many floors does ABC have?"], "the question as asked reaches Hoistra's steps"
     assert FakeReader.made[0].principal.organization_id == ORG and FakeReader.made[0].principal.building_ids is None

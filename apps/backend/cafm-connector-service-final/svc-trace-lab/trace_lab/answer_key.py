@@ -14,20 +14,28 @@ its read-only main engine (src.database is Trace Lab's read-only engine here, db
 READ ONLY transaction with a statement timeout. The engine's map of the database (the ontology) is only LOADED from the
 file the orchestrator built: when there is none, the key is skipped, never built here (a build is ~15 minutes of reads).
 TRACE_LAB_ANSWER_KEY=false turns it off.
+
+Since 19 Nov 2026 every read here goes through records_run.run_query, the faithful re-run of Hoistra's records tool, and
+this module is also where the routes of a turn's query meet it: Run again now (recheck), the query editor's start
+(orchestrator_query) and a person's own plan run beside Hoistra's (try_query; records_form says what may be chosen,
+whether it fits and what changed).
 """
 from __future__ import annotations
 
-import copy
+import asyncio
 import json
 import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
+
+import structlog
+from sqlalchemy import text
+from src.agents import ontology_qa as oq
 
 from . import records_run
 
@@ -37,6 +45,7 @@ ROWS_KEPT = 50
 #: Values listed per answer (the count always comes first).
 ITEMS_SHOWN = 20
 SCOPED_SCHEMA = "plenum_scoped"
+log = structlog.get_logger(__name__)
 
 
 #: The faithful re-run of Hoistra's records query lives in records_run; these keep their old names here.
@@ -319,72 +328,177 @@ def psql_text(receipt: dict, *, org: str, buildings: str = "") -> str:
 _ontology = records_run.load_map
 
 
-async def run(key: Key, params: dict, org: str) -> dict:
-    """Read the key's values for one company. Returns found, facts, receipts (each with its psql text), read_at,
-    plan, and unresolved (names the records do not hold) when found is false."""
-    return await _run_plan(key.plan(params), org, lambda onto, plan, result, receipts: key.facts(params, result, receipts))
+async def run(key: Key, params: dict, org: str, *, question: str = "") -> dict:
+    """Read the key's values for one company, the way Hoistra's records tool reads a plan (records_run.run_query, with the
+    question as asked). Returns found, facts, receipts (each with its psql text), read_at, plan (as run), notes (what
+    Hoistra's steps said), and unresolved (names the records do not hold) when found is false."""
+    return await _run_plan(key.plan(params), org, lambda onto, plan, result, receipts: key.facts(params, result, receipts),
+                           question=question)
 
 
-async def _run_plan(raw_plan: dict, org: str, facts_of: Callable) -> dict:
-    """One plan, compiled by Hoistra's records engine and read for one company, read-only, every query recorded."""
-    from . import db
+async def _run_plan(raw_plan: dict, org: str, facts_of: Callable, *, question: str = "") -> dict:
+    """One plan read through records_run.run_query (read-only, for one company, every query recorded as a receipt) and
+    its values made by `facts_of(onto, plan_as_run, result, receipts)` from the answer's own queries (what Hoistra reads
+    after a work-order answer comes after them). A plan the records cannot run is a ValueError; NotReady is raised when
+    there is no map of the records."""
+    from . import records_values
 
-    if db._main is None:
-        raise NotReady("Trace Lab's read-only connection to the records is not installed")
-    from src.agents import ontology_qa as oq
-
-    onto = await _ontology(oq)
-    plan = oq.normalise_plan(raw_plan)
-    errors = oq.validate_plan(onto, plan)
-    if errors:
-        raise ValueError("the plan does not fit this database: " + "; ".join(errors))
-    caller = SimpleNamespace(role="admin", organization_id=org, building_ids=None)
-    async with records_run.ReceiptReader(caller) as r:
-        plan, _notes, unresolved = await oq.resolve_plan(r, onto, plan, question=None)
-        read_at = datetime.now(timezone.utc).isoformat()
-        if unresolved:
-            return {"found": False, "unresolved": list(unresolved), "facts": [], "receipts": r.receipts,
-                    "read_at": read_at, "plan": jsonable(plan)}
-        result = await oq.execute_plan(r, onto, plan)
-        facts = facts_of(onto, plan, result, r.receipts)
-        return {"found": True, "facts": facts, "receipts": r.receipts, "read_at": read_at, "plan": jsonable(plan)}
+    run = await records_run.run_query(raw_plan, question=question, org=org)
+    out = {"found": bool(run["found"]), "facts": [], "receipts": run["receipts"], "read_at": run["read_at"],
+           "plan": run["plan"], "notes": run.get("notes") or []}
+    if not run["found"]:
+        return dict(out, unresolved=list(run["unresolved"]))
+    receipts = run["receipts"]
+    out["facts"] = facts_of(await records_run.load_map(), run["plan"], run["result"],
+                            receipts[:records_values._main_end(receipts)])
+    return out
 
 
-async def recheck(m: Any, turn_id: str) -> dict:
-    """Run again now (the receipt panel): the turn's answer-key values read afresh, for the same company, with the same
-    key and parameters. Nothing is stored; the page shows them beside the values read when the question was asked."""
+# ── Run again now, and a person's own plan beside Hoistra's (19 Nov 2026) ──────────────────────────────────────────
+
+async def read_plan(plan: dict, *, question: str, org: str, mode: str = "hoistra", scope: dict | None = None) -> dict:
+    """One plan read through records_run.run_query and shown the way an expected answer shows it: found, the values with
+    their receipts (facts), the receipts, read_at, what the records do not hold (unresolved), what the steps said (notes),
+    the sentence in fixed words and the plan as it ran."""
+    from . import records_values
+
+    run = await records_run.run_query(plan, question=question, org=org, mode=mode, scope=scope)
+    onto = await records_run.load_map()
+    as_run = run.get("plan") or plan                # the steps can refocus a plan: the values read the plan as run
+    facts = records_values.values_of(onto, as_run, run)
+    return {"found": bool(run.get("found")), "facts": facts, "receipts": list(run.get("receipts") or []),
+            "read_at": run.get("read_at"), "unresolved": list(run.get("unresolved") or []),
+            "notes": list(run.get("notes") or []), "sentence": records_values.sentence_of(onto, as_run, run, facts),
+            "plan": as_run}
+
+
+def _is_index(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+#: What a query a person changed and saved says it came from (the page marks it `source: "person"`; `edited` also counts).
+PERSON_WORDS = "Your version of the query"
+
+
+def _edited(block: dict | None) -> bool:
+    """Whether a stored query is one a person changed: it is read as written, because Hoistra's steps would put back what
+    they took out (the deleted-vendor filter, the codes it adds)."""
+    return bool(block) and (bool(block.get("edited")) or block.get("source") == "person")
+
+
+def _why(exc: Exception) -> str:
+    """The first line of what went wrong, short (a database error's own words, not the statement it carries)."""
+    text_ = str(getattr(exc, "orig", None) or exc).strip()
+    return (text_.splitlines() or [""])[0][:200]
+
+
+def _not_ready() -> Any:
+    from .review_errors import Invalid
+
+    return Invalid("not_ready", "Hoistra's map of the records is not ready yet. Try again in a few minutes.")
+
+
+async def _turn_user(turn_id: str, org: str) -> str | None:
+    """The person who asked a turn (the chat's own record of it), None when the chat has no such turn in this company."""
+    from . import conversations
+
+    async with conversations._read() as conn:
+        row = (await conn.execute(text(
+            f"SELECT tt.user_id::text AS user_id, tt.organization_id::text AS org FROM {conversations.TURNS} tt"
+            " WHERE tt.turn_id = :t"), {"t": turn_id})).mappings().first()
+    return row["user_id"] if row is not None and row["org"] == org else None
+
+
+async def _read_scope(got: dict, turn_id: str, block: dict | None) -> tuple[dict | None, dict]:
+    """The access a query is read with: the one it was drafted with. A stored query that says it was read for the whole
+    company is read for the whole company again; any other (or one not stored yet, or one whose block does not say) is read
+    as the person who asked, with their access rebuilt the way the drafting round rebuilds it (auto_expected.asker_scope):
+    never more than they could see. Returns the scope run_query takes (None: the whole company) and {"scope",
+    "scope_email"} for the page."""
+    from . import auto_expected
+    from .review_errors import Invalid
+
+    company = {"scope": "company", "scope_email": None}
+    if block is not None and block.get("scope") == "company":
+        return None, company
+    try:
+        asker = await auto_expected.asker_scope(got["company"], await _turn_user(turn_id, got["company"]))
+    except Exception as exc:  # noqa: BLE001 - who asked is not guessed: a failed read is told, never read as "no restriction"
+        log.warning("trace_lab.answer_key.asker_unreadable", error=str(exc)[:200])
+        raise Invalid("asker_unreadable", "Who asked could not be read just now. Try again in a few minutes.") from exc
+    if asker["scope"] != "asker":
+        return None, company
+    if asker["building_ids"] is not None and not asker["building_ids"]:
+        raise Invalid("asker_has_no_buildings", "The person who asked has no buildings, so nothing can be read for them.")
+    return ({"building_ids": asker["building_ids"], "email": asker["email"]},
+            {"scope": "asker", "scope_email": asker["email"]})
+
+
+async def _read(plan: dict, *, question: str, org: str, mode: str, scope: dict | None, person: bool) -> dict:
+    """read_plan with what goes wrong said in words. `person`: the plan is one a person wrote, so whatever the records
+    refuse about it (a plan that does not fit, a statement that takes too long) is theirs to fix (bad_query)."""
+    from .review_errors import Invalid
+
+    try:
+        return await read_plan(plan, question=question, org=org, mode=mode, scope=scope)
+    except NotReady as exc:
+        raise _not_ready() from exc
+    except oq.NotAllowed as exc:
+        raise Invalid("asker_has_no_buildings", "The person who asked has no buildings, so nothing can be read for them.") from exc
+    except Exception as exc:  # noqa: BLE001 - the records engine's own refusals and the database's are told in words
+        if person:
+            words = "The records could not be read with this query: " + _why(exc)
+            raise Invalid("bad_query", words, problems=[words]) from exc
+        if isinstance(exc, (ValueError, KeyError, TypeError, oq.OntologyError)):
+            raise Invalid("plan_does_not_fit", "This query does not fit the records any more: " + _why(exc)) from exc
+        log.warning("trace_lab.answer_key.read_failed", error=_why(exc))
+        raise Invalid("read_failed", "The records could not be read just now. Try again in a minute.") from exc
+
+
+async def recheck(m: Any, turn_id: str, *, index: int = 0) -> dict:
+    """Run again now (the receipt panel): the turn's values read afresh, for the same company, with nothing stored; the page
+    shows them beside the values read when the question was asked. For values read from the records it is the stored query
+    `index` (evidence.queries[index], the plan as run) read the way Hoistra reads one and with the access it was drafted
+    with; for an answer the answer key itself drafted (before 19 Nov 2026) it is the same key with the same parameters.
+    Returns found, facts, receipts, read_at, unresolved, notes, sentence, and scope and scope_email (the access it was read
+    with)."""
     from . import runs
     from .review_errors import Invalid
 
     got = await runs.turn_expected(m, turn_id)        # bounded to the caller's company; NotFound otherwise
-    ev = ((got.get("expected") or {}).get("evidence") or {}) if got.get("kind") == "answer_key" else {}
+    ev = ((got.get("expected") or {}).get("evidence") or {})
+    ev = ev if isinstance(ev, dict) else {}
+    if not got.get("company") or got.get("kind") not in ("records", "answer_key"):
+        raise Invalid("no_answer_key", "This expected answer was not read from the records.")
+    if got["kind"] == "records":
+        stored = ev.get("queries")
+        block = stored[index] if isinstance(stored, list) and _is_index(index) and 0 <= index < len(stored) else None
+        if not isinstance(block, dict) or not isinstance(block.get("plan"), dict):
+            raise Invalid("no_query", "That query is not in this expected answer.")
+        scope, who = await _read_scope(got, turn_id, block)
+        out = await _read(block["plan"], question=str(block.get("question") or got.get("text") or "").strip(), org=got["company"],
+                          mode="as_written" if _edited(block) else "hoistra", scope=scope, person=False)
+        return {**{k: out[k] for k in ("found", "facts", "receipts", "read_at", "unresolved", "notes", "sentence")}, **who}
     key = KEYS.get(str(ev.get("key") or ""))
-    if key is None or not got.get("company"):
+    if key is None:
         raise Invalid("no_answer_key", "This expected answer was not read from the records.")
     params = dict(ev.get("params") or {})
     try:
-        out = await run(key, params, got["company"])
+        out = await run(key, params, got["company"], question=str(got.get("text") or ""))
     except NotReady as exc:
-        raise Invalid("not_ready", "Hoistra's map of the records is not ready yet. Try again in a few minutes.") from exc
+        raise _not_ready() from exc
     except (KeyError, ValueError, TypeError) as exc:
         raise Invalid("no_answer_key", "This expected answer cannot be read again: " + str(exc)[:200]) from exc
     return {"found": out["found"], "facts": out["facts"], "receipts": out["receipts"], "read_at": out["read_at"],
-            "unresolved": out.get("unresolved") or [],
-            "sentence": sentence(key, params, out["facts"]) if out["found"] else ""}
+            "unresolved": out.get("unresolved") or [], "notes": out.get("notes") or [],
+            "sentence": sentence(key, params, out["facts"]) if out["found"] else "",
+            "scope": "company", "scope_email": None}
 
 
-# ── correcting the orchestrator's own query (16 Nov 2026, Hussain) ─────────────────────────────────────────────────
+# ── The orchestrator's own query: what the editor starts from, and a person's plan run beside it ───────────────────
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 _DATE_COL = re.compile(r"date|_at$|expir|\bdue\b|_due")
-_NOT_DATE = ("created_at", "updated_at")
-DATE_OPS = ("within", "between", "lt", "lte", "gt", "gte")
-_PERIODS = {"today", "yesterday", "this_week", "last_week", "this_month", "last_month", "next_month", "this_quarter",
-            "last_quarter", "this_year", "last_year", "last_7_days", "last_30_days", "last_90_days", "year_to_date"}
-_ROLLING = re.compile(r"^(next|last|past|previous|coming)_(\d{1,4})_(day|week|month)s?$")
-_DAYS = {"day": 1, "week": 7, "month": 30}
-_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_RELATIVE = re.compile(r"^today(?:\s*[+-]\s*\d{1,4}\s*[dwmy])?$", re.I)
 
 
 def extract_plans(nodes: list | None) -> list[dict]:
@@ -414,99 +528,6 @@ def _words(concept: str, n: int | None = None) -> str:
     return w[:-1] + "ies" if w.endswith("y") and not w.endswith("ey") else w if w.endswith("s") else w + "s"
 
 
-def _date_attributes(c: Any) -> list[str]:
-    return [a for a in c.attributes if _DATE_COL.search(a) and a not in _NOT_DATE]
-
-
-def plan_fields(onto: Any, plan: dict) -> dict:
-    """The orchestrator's plan as plain fields a person can change: what was read, its states, the building, the dates."""
-    focus = plan.get("focus") or {}
-    c = onto.concepts[focus.get("concept")]
-    dates = _date_attributes(c)
-    building = next((x.get("match") for x in plan.get("constraints") or [] if x.get("concept") == "Building"), None)
-    return {"concept": c.name, "what": _words(c.name), "states": list(focus.get("states") or []),
-            "state_choices": [{"id": k, "description": str((v or {}).get("description") or "")[:160]} for k, v in c.states.items()],
-            "building": building,
-            "dates": [{"attribute": f.get("attribute"), "op": f.get("op"), "value": f.get("value")}
-                      for f in focus.get("filters") or [] if f.get("attribute") in dates and f.get("op") in DATE_OPS],
-            "date_attributes": dates}
-
-
-def _valid_date(v: Any) -> bool:
-    if not isinstance(v, str):
-        return False
-    if _RELATIVE.match(v.strip()):
-        return True
-    if not _ISO.match(v):
-        return False
-    try:
-        date.fromisoformat(v)
-        return True
-    except ValueError:
-        return False
-
-
-def _check_date(d: dict, allowed: list[str]) -> dict:
-    attr, op, value = d.get("attribute"), d.get("op"), d.get("value")
-    if attr not in allowed:
-        raise ValueError(f"{attr} is not a date of these records")
-    if op not in DATE_OPS:
-        raise ValueError(f"{op} is not a way to compare dates")
-    if op == "within":
-        m = _ROLLING.match(value) if isinstance(value, str) else None
-        if not (isinstance(value, str) and (value in _PERIODS or (m and 1 <= int(m.group(2)) * _DAYS[m.group(3)] <= 3660))):
-            raise ValueError(f"{value} is not a period")
-    elif op == "between":
-        if not (isinstance(value, list) and len(value) == 2 and all(_valid_date(x) for x in value)):
-            raise ValueError("a range needs two dates")
-    elif not _valid_date(value):
-        raise ValueError(f"{value} is not a date")
-    return {"attribute": attr, "op": op, "value": value}
-
-
-def _date_text(d: dict) -> str:
-    v = d.get("value")
-    return f"{d.get('op')} " + (" to ".join(v) if isinstance(v, list) else str(v))
-
-
-def apply_fields(onto: Any, plan: dict, fields: dict) -> tuple[dict, list[str]]:
-    """A copy of the orchestrator's plan with a person's changes, and what changed in words. ValueError when a change
-    is not one the records allow (an unknown state, a column that is not a date, a malformed date or period)."""
-    new = copy.deepcopy(plan)
-    focus = new.setdefault("focus", {})
-    c = onto.concepts[focus.get("concept")]
-    before = plan_fields(onto, plan)
-    changes: list[str] = []
-    states = [str(s) for s in (fields.get("states") or [])]
-    for s in states:
-        if s not in c.states:
-            raise ValueError(f"{s} is not a state of {_words(c.name)}")
-    if states != before["states"]:
-        changes.append("States: " + (", ".join(before["states"]) or "any") + " → " + (", ".join(states) or "any"))
-    focus["states"] = states
-    building = str(fields.get("building") or "").strip() or None
-    # Every building is the Building constraint with no match, kept when there was one: a count by building needs it.
-    cons = new.setdefault("constraints", [])
-    held = next((x for x in cons if x.get("concept") == "Building"), None)
-    if held is not None:
-        held["match"] = building
-    elif building:
-        cons.insert(0, {"concept": "Building", "match": building, "via": [], "states": [], "filters": []})
-    if building != before["building"]:
-        changes.append("Building: " + (before["building"] or "every building") + " → " + (building or "every building"))
-    allowed = _date_attributes(c)
-    dates = [_check_date(d, allowed) for d in fields.get("dates") or []]
-    keep = [f for f in focus.get("filters") or [] if not (f.get("attribute") in allowed and f.get("op") in DATE_OPS)]
-    focus["filters"] = keep + dates
-    old = {d["attribute"]: d for d in before["dates"]}
-    now = {d["attribute"]: d for d in dates}
-    for attr in dict.fromkeys(list(old) + list(now)):
-        a, b2 = old.get(attr), now.get(attr)
-        if a != b2:
-            changes.append(f"{attr}: " + (_date_text(a) if a else "any date") + " → " + (_date_text(b2) if b2 else "any date"))
-    return new, changes
-
-
 def _generic_item(c: Any, attrs: dict) -> str:
     for col in [*(getattr(c, "identifiers", None) or []), getattr(c, "label", None), *(getattr(c, "search", None) or []), "name", "title", "id"]:
         v = attrs.get(col)
@@ -515,117 +536,97 @@ def _generic_item(c: Any, attrs: dict) -> str:
     return "record"
 
 
-def generic_facts(onto: Any, plan: dict, result: dict, receipts: list) -> list:
-    """Any records answer as values, each with its receipt: the count by group, or the count and the records."""
-    if result.get("kind") == "aggregate":
-        return _grouped({}, result, receipts)
-    c = onto.concepts[(plan.get("focus") or {}).get("concept")]
-    total = int(result.get("total") or 0)
-    out = [{"id": "f1", "label": _words(c.name).capitalize() + " found", "value": total, "receipt": _receipt(receipts, "count", "focus")}]
-    rid = _receipt(receipts, "focus")
-    for i, rec in enumerate((result.get("records") or [])[:ITEMS_SHOWN], start=2):
-        out.append({"id": "f" + str(i), "label": "", "value": _generic_item(c, rec.get("attributes") or {}), "receipt": rid})
-    return out
+async def _turn_queries(m: Any, turn_id: str) -> tuple[dict, list[dict], str | None]:
+    """The records queries of a live turn as the editor lists them, and why there are none when there are none.
 
-
-def generic_sentence(onto: Any, plan: dict, facts: list) -> str:
-    concept = (plan.get("focus") or {}).get("concept")
-    if facts and facts[0].get("label") and not str(facts[0]["label"]).endswith(" found"):
-        return "Counts: " + ", ".join(f"{f['label']} {f['value']}" for f in facts[:10]) + "."
-    total = int(facts[0]["value"]) if facts else 0
-    if total == 0:
-        return f"No {_words(concept)}."
-    items = [str(f["value"]) for f in facts[1:]]
-    more = "" if total <= len(items) else f", and {total - len(items)} more"
-    return f"{total} {_words(concept, total)}" + (": " + ", ".join(items) + more if items else "") + "."
-
-
-def used_first(plans: list) -> list:
-    """The orchestrator's records plans, the one its answer came from first: a plan it retried is replaced by the next,
-    so the last one written is the one that ran (16 Nov 2026 review)."""
-    return list(reversed(plans or []))
-
-
-async def _turn_plans(m: Any, turn_id: str) -> tuple[dict, list[dict], str | None]:
-    from . import eval_store, runs
-    from .review_errors import Invalid
+    A turn drafted with values has them stored (evidence.queries, each the plan as Hoistra's steps ran it: the editor
+    starts from what ran); one not drafted yet gets the queries records_queries finds for it (Hoistra's own from its trace,
+    else the answer key's), never a proposal: showing the editor makes no model call. Each query is {"index", "source",
+    "source_words", "question", "plan"} and, apart from the editor's view, "_block": the stored query or None."""
+    from . import eval_store, records_queries, runs
+    from .review_errors import Invalid, NotFound
 
     got = await runs.turn_expected(m, turn_id)          # bounded to the caller's company; NotFound otherwise
     if not got.get("live") or not got.get("company"):
         raise Invalid("not_live", "Only a live question's query can be checked here.")
-    tree = await eval_store.trace_tree_of(m, turn_id)
-    plans = used_first(extract_plans(tree.get("nodes") or []))
-    if plans:
-        return got, plans, "hoistra"
-    # Hoistra answered with another tool (16 Nov 2026, R59): the answer key's query for the same question is the start.
-    found = match(got.get("text"))
-    return (got, [found[0].plan(found[1])], "answer_key") if found else (got, [], None)
+    ev = ((got.get("expected") or {}).get("evidence") or {})
+    ev = ev if isinstance(ev, dict) else {}
+    asked = str(got.get("text") or "")
+
+    def listed(index: int, source: Any, question: Any, plan: dict, block: dict | None) -> dict:
+        words = records_queries.SOURCE_WORDS.get(source) or (PERSON_WORDS if source == "person" else "")
+        return {"index": index, "source": source, "source_words": words, "question": question or asked, "plan": plan,
+                "_block": block}
+
+    stored = ev.get("queries") if got.get("kind") == "records" else None
+    if isinstance(stored, list) and stored:
+        return got, [listed(i, b.get("source"), b.get("question"), b["plan"], b) for i, b in enumerate(stored)
+                     if isinstance(b, dict) and isinstance(b.get("plan"), dict)], None
+    try:
+        nodes = (await eval_store.trace_tree_of(m, turn_id)).get("nodes") or []
+    except NotFound:                                    # the conversation is not filed in Trace Lab yet
+        nodes = []
+    found = await records_queries.queries_for(nodes, asked, propose=False)
+    return (got, [listed(i, q["source"], q.get("question"), q["plan"], None) for i, q in enumerate(found["queries"])],
+            found["none"] or ev.get("no_query"))
 
 
 async def orchestrator_query(m: Any, turn_id: str) -> dict:
-    """The records queries the orchestrator made for this turn, as plain fields (GET .../expected/query)."""
-    from . import db
+    """GET .../expected/query: the turn's records queries for the editor, with Hoistra's map to pick from.
 
-    got, plans, source = await _turn_plans(m, turn_id)
-    if not plans:
-        return {"ready": True, "plans": [], "source": None}
-    if db._main is None:
-        return {"ready": False, "plans": []}
-    from src.agents import ontology_qa as oq
+    {"ready": the map is built, "can_run": the caller may run a plan (curators and the platform team), "queries": [{"index",
+    "source", "source_words", "question", "plan"}], "none": why there is no query (or None), "map": records_form.query_map}.
+    A turn that is not a live question's, or another company's, is refused (Invalid / NotFound)."""
+    from . import records_form, runs
 
+    _got, queries, none = await _turn_queries(m, turn_id)
+    mapped, ready = None, True
     try:
-        onto = await _ontology(oq)
+        onto = await records_run.load_map()
+        if queries:                                      # the map is big: not built for a turn with nothing to edit
+            mapped = await records_form.map_for(onto)
     except NotReady:
-        return {"ready": False, "plans": []}
-    return {"ready": True, "source": source, "buildings": await _buildings(got["company"]),
-            "plans": [{"index": i, "fields": plan_fields(onto, p)} for i, p in enumerate(plans)
-                      if (p.get("focus") or {}).get("concept") in onto.concepts]}
+        ready = False
+    except Exception as exc:  # noqa: BLE001 - a map that cannot be loaded is not ready; the stored queries still show
+        log.warning("trace_lab.answer_key.map_unavailable", error=_why(exc))
+        ready = False
+    return {"ready": ready, "can_run": runs.can_curate(m),
+            "queries": [{k: v for k, v in q.items() if k != "_block"} for q in queries], "none": none, "map": mapped}
 
 
-async def _buildings(org: str) -> list[str]:
-    """The company's building names, for the Building field to suggest (read-only, the company's own)."""
-    try:
-        from src.agents import ontology_qa as oq
-
-        async with oq.ScopedReader(SimpleNamespace(role="admin", organization_id=org, building_ids=None)) as r:
-            rows = await r.fetch("SELECT DISTINCT name FROM buildings WHERE name IS NOT NULL ORDER BY name LIMIT 500", {},
-                                 "building names")
-        return [str(x["name"]) for x in rows]
-    except Exception:  # noqa: BLE001 - suggestions are a convenience; the field still takes any name
-        return []
-
-
-async def try_query(m: Any, turn_id: str, *, index: int, fields: dict) -> dict:
-    """The orchestrator's query with a person's changes, read afresh for the same company: values, receipts, the
-    sentence and what changed. Nothing is stored; the page saves it as the expected answer when the person says so."""
+async def try_query(m: Any, turn_id: str, *, index: int, plan: dict) -> dict:
+    """POST .../expected/query: a person's own plan read, as written, beside the turn's query read the way Hoistra reads
+    it, both for the question's company (and with the asker's access when the query was drafted with it). Only curators and
+    the platform team; the plan must fit Hoistra's map (records_form.check_plan, else Invalid "bad_query" in words); nothing
+    is stored: the page saves it when the person says so. Returns {"before": Hoistra's query's values, "after": the
+    plan's, "changes": what changed in words, "scope", "scope_email"}; each side is read_plan's result (before carries an
+    `error` instead of values when Hoistra's own query could not be read now)."""
+    from . import records_form, runs
     from .review_errors import Invalid
 
-    got, plans, _source = await _turn_plans(m, turn_id)
-    if not 0 <= int(index) < len(plans):
+    runs.require_curator(m)
+    got, queries, _none = await _turn_queries(m, turn_id)
+    q = next((x for x in queries if _is_index(index) and x["index"] == index), None)
+    if q is None:
         raise Invalid("no_query", "That query is not in this turn.")
-    from src.agents import ontology_qa as oq
-
     try:
-        onto = await _ontology(oq)
+        onto = await records_run.load_map()
     except NotReady as exc:
-        raise Invalid("not_ready", "Hoistra's map of the records is not ready yet. Try again in a few minutes.") from exc
-    original = plans[int(index)]
-    try:
-        plan, changes = apply_fields(onto, original, fields)
-    except (ValueError, KeyError, TypeError) as exc:
-        raise Invalid("bad_change", str(exc)) from exc
-    # What the starting query found, beside what the changed one finds (16 Nov 2026: "very user friendly").
-    try:
-        was = await _run_plan(original, got["company"], generic_facts)
-        before = {"found": was["found"], "facts": was["facts"],
-                  "sentence": generic_sentence(onto, original, was["facts"]) if was["found"] else ""}
-    except Exception:  # noqa: BLE001 - the comparison is a help; the corrected answer still stands
-        before = None
-    try:
-        out = await _run_plan(plan, got["company"], generic_facts)
-    except NotReady as exc:
-        raise Invalid("not_ready", "Hoistra's map of the records is not ready yet. Try again in a few minutes.") from exc
-    except Exception as exc:  # noqa: BLE001 - a query the records engine refuses is the person's change, not a crash
-        raise Invalid("bad_query", "The records could not be read with this query: " + str(exc)[:200]) from exc
-    sentence_ = generic_sentence(onto, plan, out["facts"]) if out["found"] else ""
-    return {**out, "sentence": sentence_, "changes": changes, "original": jsonable(original), "before": before}
+        raise _not_ready() from exc
+    problems = records_form.check_plan(onto, plan)
+    if problems:
+        raise Invalid("bad_query", " ".join(problems), problems=problems)
+    scope, who = await _read_scope(got, turn_id, q["_block"])
+    read = dict(question=q["question"], org=got["company"], scope=scope)
+    # Hoistra's own query is read with every step of its records tool; one a person changed and saved is read as written.
+    mode = "as_written" if _edited(q["_block"]) else "hoistra"
+    was, now = await asyncio.gather(_read(q["plan"], mode=mode, person=False, **read),
+                                    _read(plan, mode="as_written", person=True, **read), return_exceptions=True)
+    if isinstance(now, BaseException):
+        raise now
+    if isinstance(was, BaseException):                  # the comparison is a help: the person's own plan still ran
+        if not isinstance(was, Invalid):
+            raise was
+        was = {"found": False, "facts": [], "receipts": [], "read_at": None, "unresolved": [], "notes": [], "sentence": "",
+               "plan": q["plan"], "error": was.error}
+    return {"before": was, "after": now, "changes": records_form.plan_changes(onto, q["plan"], plan), **who}
