@@ -467,3 +467,30 @@ test('the answer-key view and the SPEC.md draft are not changed by the records v
   assert.ok(!html({ data: KEYED }).includes('lab-xp-query'));
   assert.ok(!html({ data: DRAFT }).includes('lab-xp-query'));
 });
+
+// ── Fix round 1 (19 Nov 2026): Run again now on the first query must say so. `?index=0` is not "no index": an answer key's
+// re-run sends none, a records draft's re-run always names the query it reads again. ─────────────────────────────────
+test('Run again now names the query it reads again, the first one included', async () => {
+  const { labApi } = await import('../labApi.js');
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url: new URL(String(url)), method: (opts && opts.method) || 'GET' });
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '{"found":true}', headers: { get: () => null } };
+  };
+  try {
+    await labApi.turnExpectedCheck('t1', 0);
+    await labApi.turnExpectedCheck('t1', 2);
+    await labApi.turnExpectedCheck('t1');
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(calls.length, 3);
+  for (const c of calls) {
+    assert.equal(c.method, 'POST');
+    assert.equal(c.url.pathname, '/backend/trace-lab/api/trace-lab/lab/turns/t1/expected/check');
+  }
+  assert.equal(calls[0].url.searchParams.get('index'), '0', 'the first query is named too');
+  assert.equal(calls[1].url.searchParams.get('index'), '2');
+  assert.equal(calls[2].url.searchParams.has('index'), false, 'the answer key’s re-run names none');
+});
