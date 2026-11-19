@@ -97,9 +97,9 @@ test('a clicked value shows its query, the values filled in and the rows it read
 });
 
 test('running it again says whether the records changed since the question was asked', () => {
-  const same = html({ data: KEYED, openFact: 'f1', rerun: { facts: [{ id: 'f1', value: 5 }], read_at: '2026-11-16T10:00:00Z' } });
+  const same = html({ data: KEYED, openFact: 'f1', rerun: { facts: [{ id: 'f1', label: 'Blocked vendors', value: 5 }], read_at: '2026-11-16T10:00:00Z' } });
   assert.ok(same.includes('Now: 5') && same.includes('the same as when the question was asked'));
-  const moved = html({ data: KEYED, openFact: 'f1', rerun: { facts: [{ id: 'f1', value: 6 }], read_at: '2026-11-16T10:00:00Z' } });
+  const moved = html({ data: KEYED, openFact: 'f1', rerun: { facts: [{ id: 'f1', label: 'Blocked vendors', value: 6 }], read_at: '2026-11-16T10:00:00Z' } });
   assert.ok(moved.includes('Now: 6') && moved.includes('was 5 when the question was asked: the records have changed since'));
 });
 
@@ -256,10 +256,22 @@ test('Run again now shows where there is a query to read again, and says whether
   const none = JSON.parse(JSON.stringify(RECORDS));
   none.expected.evidence.queries[0].plan = null;
   assert.ok(!/>Run again now</.test(html({ data: none, openFact: '0:f1', onRerun: () => {} })), 'no stored query: nothing to run');
-  const moved = html({ data: RECORDS, openFact: '0:f1', rerun: { index: 0, facts: [{ id: 'f1', value: 3 }], read_at: '2026-11-19T10:00:00Z' } });
+  const moved = html({ data: RECORDS, openFact: '0:f1', rerun: { index: 0, facts: [{ id: 'f1', kind: 'count', label: 'Vendor records found', value: 3 }], read_at: '2026-11-19T10:00:00Z' } });
   assert.ok(moved.includes('Now: 3') && moved.includes('was 2 when the question was asked: the records have changed since'));
-  const other = html({ data: RECORDS, openFact: '1:f1', rerun: { index: 0, facts: [{ id: 'f1', value: 3 }] } });
-  assert.ok(!other.includes('Now: 3'), 'a re-run of another query says nothing here');
+  const other = html({ data: RECORDS, openFact: '1:f1', rerun: { index: 0, facts: [{ id: 'f1', kind: 'count', label: 'Vendor records found', value: 3 }] } });
+  assert.ok(!other.includes('Now: 3') && !other.includes('no longer found'), 'a re-run of another query says nothing here');
+});
+
+test('Run again now pairs a value by what it is, and says when it is no longer found', () => {
+  // A new figure first moves every id after it: the record that was f2 is f3 now.
+  const shifted = { index: 0, read_at: '2026-11-19T10:00:00Z', facts: [{ id: 'f1', kind: 'count', label: 'Vendor records found', value: 2, receipt: 'q1' },
+    { id: 'f2', kind: 'stated', label: 'Pennard states vendors', value: 9, receipt: 'q1' }, { id: 'f3', kind: 'record', label: '', value: 'Pennard Fire Services', receipt: 'q2' }] };
+  const same = html({ data: RECORDS, openFact: '0:f2', rerun: shifted });
+  assert.ok(same.includes('Now: Pennard Fire Services · the same as when the question was asked'), 'not the figure that took its place');
+  const gone = html({ data: RECORDS, openFact: '0:f3', rerun: shifted });
+  assert.ok(gone.includes('Now: no longer found') && !gone.includes('Now: Pennard'), 'Apex Mechanical is not in the fresh read');
+  const count = html({ data: KEYED, openFact: 'f1', rerun: { facts: [{ id: 'f1', label: 'Some other figure', value: 5 }] } });
+  assert.ok(count.includes('Now: no longer found'));
 });
 
 test('Accept saves the values as the person’s version, with the evidence as it was read', () => {
@@ -485,6 +497,14 @@ const SIDE_A = { found: true, sentence: 'Work order records found: 9.', unresolv
   facts: [{ id: 'f1', kind: 'count', label: 'Work order records found', value: 9, receipt: 'q1' }],
   receipts: [{ id: 'q1', label: 'count', sql: 'SELECT count(*) AS n FROM "work_orders" AS f WHERE f.status = :p0', params: { p0: 'Open' }, row_count: 1, rows: [{ n: 9 }], psql: 'BEGIN READ ONLY;' }] };
 const RAN = { before: SIDE_B, after: SIDE_A, changes: ['States: open, overdue → overdue'], plan: PLAN_A };
+
+test('Hoistra’s side that could not be read says why, not that it found nothing', () => {
+  const failed = { before: { found: false, facts: [], receipts: [], read_at: null, unresolved: [], notes: [], sentence: '', plan: PLAN_A,
+    error: 'The records could not be read just now. Try again in a minute.' }, after: SIDE_A, changes: [], plan: PLAN_A };
+  const out = view({ results: { 0: failed } });
+  assert.match(out, /<p[^>]*role="alert"[^>]*>The records could not be read just now\. Try again in a minute\.<\/p>/);
+  assert.ok(out.includes('Work order records found: 9.'), 'the person’s version still shows what it found');
+});
 
 test('the result puts what Hoistra’s query found beside what the person’s finds, each value a button to its receipt', () => {
   const out = view({ results: { 0: RAN } });

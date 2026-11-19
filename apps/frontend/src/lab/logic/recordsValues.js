@@ -78,6 +78,16 @@ export function receiptOf(block, fact) {
   return list(block.receipts).find((r) => r.id === fact.receipt) || null;
 }
 
+// The same value in a fresh read of the same query (Run again now). Ids are by place - one more figure, record or group
+// moves every id after it - so a value is paired by what it is: its kind and label, and for a record, a name not on
+// record, or an answer-key item (no kind, no label) its value too. null: the fresh read no longer has it.
+export function sameFact(fact, facts) {
+  const f = fact || {};
+  const byValue = f.kind === 'record' || f.kind === 'missing' || (!f.kind && !f.label);
+  return list(facts).find((x) => !!x && (x.kind || '') === (f.kind || '') && (x.label || '') === (f.label || '')
+    && (!byValue || String(x.value) === String(f.value))) || null;
+}
+
 // How a value was found, in plain words.
 export function explainOf(fact) {
   const f = fact || {};

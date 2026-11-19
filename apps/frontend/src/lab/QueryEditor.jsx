@@ -185,7 +185,8 @@ function Side({ title, side, which, openKey, onOpenKey }) {
     <section className="lab-xe-col" aria-label={title}>
       <span className="lab-xp-h">{title}</span>
       {when(side.read_at) ? <span className="lab-small">{'Read ' + when(side.read_at)}</span> : null}
-      <p className="lab-ses-pre">{side.sentence}</p>
+      {side.error ? <p className="lab-error" role="alert">{side.error}</p> : null}
+      {side.sentence ? <p className="lab-ses-pre">{side.sentence}</p> : null}
       {list(side.unresolved).length && side.found === false ? <p className="lab-small">{'The records do not hold ' + side.unresolved.join(', ') + '. Check the spelling.'}</p> : null}
       <div className="lab-xp-chips">
         {list(side.facts).map((f) => <Chip key={f.id} side={side} fact={f} which={which} openKey={openKey} onOpenKey={onOpenKey} />)}

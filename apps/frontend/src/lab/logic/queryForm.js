@@ -434,6 +434,9 @@ export function describePlan(plan, map, lead) {
 // theirs (their plan, the values and receipts their run read), every other query exactly as it was, and what changed in
 // words. The expected answer's sentence is one sentence per query, in order, as a draft holds them.
 export const DRAFT_VERSION = 3;
+// The longest expected answer the service keeps (svc-trace-lab runs.EXPECTED_MAX; ExpectedIn.expected refuses a longer
+// one): linked records can make a sentence long, so the answer is cut there, as drafting cuts it. The values keep theirs.
+export const EXPECTED_MAX = 8000;
 export function usedBody({ evidence, queries, index, plan, result }) {
   const ev = isObj(evidence) ? evidence : {};
   const had = list(ev.queries);
@@ -451,7 +454,7 @@ export function usedBody({ evidence, queries, index, plan, result }) {
     }));
   }
   return {
-    expected: out.map((q) => (q && q.sentence) || '').filter(Boolean).join(' '),
+    expected: out.map((q) => (q && q.sentence) || '').filter(Boolean).join(' ').slice(0, EXPECTED_MAX),
     evidence: { drafted_from: 'records', draft: DRAFT_VERSION, read_at: after.read_at || null, queries: out, changed: list(result && result.changes) }
   };
 }

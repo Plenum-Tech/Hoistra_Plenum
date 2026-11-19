@@ -108,3 +108,18 @@ test('a query the person changed and used is called theirs, and the words Trace 
   assert.equal(R.SOURCE_WORDS.person, undefined);
   assert.equal(R.blocksOf({ queries: [{ source: 'something_else' }] })[0].sourceWords, '');
 });
+
+test('a value read again is paired by what it is, not by its place: one more figure moves every id after it', () => {
+  const now = [{ id: 'f1', kind: 'count', label: 'Vendor records found', value: 3, receipt: 'q1' },
+    { id: 'f2', kind: 'stated', label: 'ABC states floors', value: 25, receipt: 'q1' },
+    { id: 'f3', kind: 'record', label: '', value: 'Apex Mechanical', receipt: 'q2' },
+    { id: 'f4', kind: 'record', label: '', value: 'Pennard Fire Services', receipt: 'q2' }];
+  assert.equal(R.sameFact(COUNT, now).value, 3, 'the count, by its kind and label');
+  assert.equal(R.sameFact(REC, now).id, 'f4', 'a record, by its value too');
+  assert.equal(R.sameFact(REC, now.slice(0, 3)), null, 'no longer found');
+  assert.equal(R.sameFact({ id: 'f1', kind: 'missing', label: 'Not on record', value: 'ABC' }, [{ id: 'f1', kind: 'missing', label: 'Not on record', value: 'XYZ' }]), null);
+  const key = [{ id: 'f1', label: 'Blocked vendors', value: 4 }, { id: 'f2', label: '', value: 'Ostley Power' }];
+  assert.equal(R.sameFact({ id: 'f1', label: 'Blocked vendors', value: 5 }, key).value, 4, 'an answer-key value has no kind');
+  assert.equal(R.sameFact({ id: 'f3', label: '', value: 'Ostley Power' }, key).id, 'f2', 'and its items are paired by value');
+  assert.equal(R.sameFact(COUNT, null), null);
+});

@@ -1,6 +1,7 @@
 // How one value was found (16 Nov 2026): in plain words, then the rows it read, the query, the values filled in, and what to do
 // about it. The session page's values and the query editor's results both open it. Nothing here reads the service.
 import React from 'react';
+import { sameFact } from './logic/recordsValues.js';
 
 export const factText = (f) => (f.label ? f.label + ': ' : '') + String(f.value);
 
@@ -52,7 +53,7 @@ export function Receipt({ fact, receipt, readAt, mark, rerun, rerunBusy, copied,
         : 'This number is how many records the query below found.')
       : 'This is one of the records the query below found.';
   const params = Object.entries(receipt.params || {});
-  const now = rerun ? ((rerun.facts || []).find((x) => x.id === fact.id) || null) : null;
+  const now = rerun ? sameFact(fact, rerun.facts) : null;      // by what the value is: ids move when the records do
   const m = mark || {};
   return (
     <div className="lab-xp-receipt" role="region" aria-label={'How ' + factText(fact) + ' was found'}>
@@ -81,6 +82,8 @@ export function Receipt({ fact, receipt, readAt, mark, rerun, rerunBusy, copied,
         <p className="lab-xp-now" role="status">{'Now: ' + String(now.value) + (String(now.value) === String(fact.value)
           ? ' · the same as when the question was asked'
           : ' · was ' + String(fact.value) + ' when the question was asked: the records have changed since')}</p>
+      ) : rerun ? (
+        <p className="lab-xp-now" role="status">{'Now: no longer found · ' + factText(fact) + ' was found when the question was asked: the records have changed since'}</p>
       ) : null}
       <div className="lab-row lab-xp-actions">
         {receipt.psql ? <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={() => onCopy && onCopy(receipt.psql)}

@@ -430,3 +430,12 @@ test('a comparison on a number column reads the number words the map gives', () 
   assert.equal(Q.opWords(map, 'lt', 'date'), 'is before');
   assert.equal(Q.opWords(null, 'lt', 'number'), 'is less than', 'without a map, ours');
 });
+
+test('the expected answer saved from a query is cut to what the service keeps', () => {
+  const long = Object.assign({}, SIDE, { sentence: 'Linked: ' + 'x, '.repeat(4000) });
+  const body = Q.usedBody({ evidence: null, queries: [{ index: 0, source: 'hoistra', plan: R62, question: 'Q?' }], index: 0, plan: R62,
+    result: { after: long, changes: [] } });
+  assert.equal(Q.EXPECTED_MAX, 8000, 'the service refuses a longer one (ExpectedIn.expected)');
+  assert.equal(body.expected.length, Q.EXPECTED_MAX);
+  assert.equal(body.evidence.queries[0].sentence, long.sentence, 'the values keep their whole sentence');
+});
