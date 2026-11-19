@@ -123,3 +123,46 @@ test('a value read again is paired by what it is, not by its place: one more fig
   assert.equal(R.sameFact({ id: 'f3', label: '', value: 'Ostley Power' }, key).id, 'f2', 'and its items are paired by value');
   assert.equal(R.sameFact(COUNT, null), null);
 });
+
+// ── long lists fold (19 Nov 2026, Hussain: "make this collapsable the 14 cert or anything like this") ──────────────────
+const CERTS = (n, from = 0) => Array.from({ length: n }, (_, i) => ({ id: 'r' + (from + i), kind: 'record', label: '', value: 'CERT-' + (from + i), receipt: 'q2' }));
+const CERT_COUNT = (n) => ({ id: 'c', kind: 'count', label: 'Compliance certificate records found', value: n, receipt: 'q1' });
+
+test('a long list folds behind one line that says how many; the single values stay open', () => {
+  const out = R.foldFacts([CERT_COUNT(14), ...CERTS(14)]);
+  assert.deepEqual(out.shown.map((f) => f.id), ['c']);
+  assert.equal(out.folds.length, 1);
+  assert.equal(out.folds[0].kind, 'record');
+  assert.equal(out.folds[0].words, 'Show the 14 records');
+  assert.deepEqual(out.folds[0].facts.map((f) => f.value), CERTS(14).map((f) => f.value));
+});
+
+test('a short list stays open, as it was', () => {
+  const out = R.foldFacts([CERT_COUNT(4), ...CERTS(4)]);
+  assert.equal(out.folds.length, 0);
+  assert.equal(out.shown.length, 5);
+});
+
+test('past the records shown, the line says how many of how many', () => {
+  assert.equal(R.foldFacts([CERT_COUNT(80), ...CERTS(20)]).folds[0].words, 'Show 20 of the 80 records');
+});
+
+test('every kind of list folds: counts by group, a record’s details, linked records, what is still open', () => {
+  const many = (kind, n) => Array.from({ length: n }, (_, i) => ({ id: kind + i, kind, label: kind + ' ' + i, value: i, receipt: 'q1' }));
+  const out = R.foldFacts([...many('group', 6), ...many('field', 9), ...many('linked', 5), ...many('pending', 7), ...many('stated', 1)]);
+  assert.deepEqual(out.folds.map((f) => f.words), ['Show the 6 counts', 'Show the 9 details', 'Show the 5 linked records', 'Show the 7 open-item counts']);
+  assert.deepEqual(out.shown.map((f) => f.id), ['stated0']);
+  assert.deepEqual(R.foldFacts(null), { shown: [], folds: [] });
+});
+
+test('a long sentence shows its start, cut between two items; a short one is whole', () => {
+  assert.equal(R.foldSentence('Vendor records found: 2. Vendors: Pennard Fire Services.'), null);
+  const long = 'Compliance certificate records found: 80. Compliance certificates: '
+    + Array.from({ length: 20 }, (_, i) => 'SYN-PL-' + (100000 + i)).join(', ') + ', and 60 more.';
+  const short = R.foldSentence(long);
+  assert.ok(short.endsWith(' …') && short.length <= R.SENTENCE_FOLD_AT + 2);
+  assert.ok(long.startsWith(short.slice(0, -2)), 'the start of the sentence, word for word');
+  assert.match(short, /SYN-PL-\d{6} …$/, 'cut between two items, not inside one');
+  assert.ok(short.startsWith('Compliance certificate records found: 80. Compliance certificates: SYN-PL-100000'));
+  assert.equal(R.foldSentence(''), null);
+});

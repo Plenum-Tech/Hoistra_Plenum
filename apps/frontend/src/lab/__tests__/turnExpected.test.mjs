@@ -13,6 +13,7 @@ const { renderToStaticMarkup } = await import('react-dom/server');
 const TE = await bundle('../lab/TurnExpected.jsx');
 const QE = await bundle('../lab/QueryEditor.jsx');
 const QF = await import('../logic/queryForm.js');
+const R2 = await import('../logic/recordsValues.js');
 const html = (p) => renderToStaticMarkup(React.createElement(TE.ExpectedView, p || {}));
 const src = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf-8');
 
@@ -679,4 +680,40 @@ test('the editor’s requests: the turn’s queries with the map, and one query 
   assert.equal(calls[1].method, 'POST');
   assert.deepEqual(calls[1].body, { index: 1, plan: PLAN_B }, 'the number of the query and the whole plan, nothing else');
   assert.deepEqual(calls[2].body, { index: 0, plan: PLAN_B }, 'the first query is named too');
+});
+
+// ── long lists fold (19 Nov 2026, Hussain: "make this collapsable the 14 cert or anything like this") ──────────────────
+const LONG = 'Compliance certificate records found: 14. Compliance certificates: '
+  + Array.from({ length: 14 }, (_, i) => 'SYN-PL-' + (100000 + i)).join(', ') + '.';
+const CERT_FACTS = [{ id: 'f1', kind: 'count', label: 'Compliance certificate records found', value: 14, receipt: 'q1' }]
+  .concat(Array.from({ length: 14 }, (_, i) => ({ id: 'f' + (i + 2), kind: 'record', label: '', value: 'SYN-PL-' + (100000 + i), receipt: 'q2' })));
+const CERTS_DATA = (() => {
+  const d = JSON.parse(JSON.stringify(RECORDS));
+  const q = d.expected.evidence.queries[0];
+  Object.assign(q, { sentence: LONG, facts: CERT_FACTS });
+  d.expected.evidence.queries = [q];
+  d.expected.expected = LONG;
+  return d;
+})();
+
+test('a long list of records folds behind one line that says how many, and the count stays in view', () => {
+  const out = html({ data: CERTS_DATA });
+  assert.match(out, /<details class="lab-xp-fold"><summary[^>]*>Show the 14 records<\/summary>/);
+  const fold = out.slice(out.indexOf('<details class="lab-xp-fold">'));
+  assert.equal((fold.match(/class="lab-xp-chip[ "]/g) || []).length, 14, 'every record is still a button, inside the fold');
+  assert.ok(out.indexOf('Compliance certificate records found') < out.indexOf('<details class="lab-xp-fold">'), 'the count is outside it');
+});
+
+test('a long sentence shows its start, with Show all for the whole of it', () => {
+  const out = html({ data: CERTS_DATA });
+  assert.match(out, /<details class="lab-xp-more">/);
+  assert.ok(out.includes(R2.foldSentence(LONG)) && out.includes('Show all') && out.includes(LONG));
+  assert.equal((out.match(new RegExp(LONG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1, 'the whole sentence once');
+});
+
+test('the query editor folds a long list and a long sentence on each side too', () => {
+  const side = { found: true, facts: CERT_FACTS, receipts: [RQ1, RQ2], read_at: '2026-11-19T09:30:01+00:00', unresolved: [], notes: [], sentence: LONG, plan: PLAN_A };
+  const out = view({ results: { 0: { before: side, after: side } } });
+  assert.equal((out.match(/<details class="lab-xp-fold">/g) || []).length, 2);
+  assert.equal((out.match(/<details class="lab-xp-more">/g) || []).length, 2);
 });

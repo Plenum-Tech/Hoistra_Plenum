@@ -97,3 +97,38 @@ export function explainOf(fact) {
   if (f.kind === 'missing') return 'The records do not hold ' + f.value + '. The query below looked for it.';
   return 'This value was read by the query below.';
 }
+
+// ── Long lists fold (19 Nov 2026, Hussain: "make this collapsable the 14 cert or anything like this") ────────────────
+// A query's records, its counts by group, one record's details, its linked records and its open-item counts are each a
+// list; past FOLD_AT items a list is behind one line that says how many ("Show the 14 records"). The single values (the
+// count, a stated figure, a name not on record) stay in view. A sentence past SENTENCE_FOLD_AT characters shows its start,
+// cut between two items, with the whole of it a click away.
+export const FOLD_AT = 4;
+export const SENTENCE_FOLD_AT = 160;
+const LIST_WORDS = { record: 'records', group: 'counts', field: 'details', linked: 'linked records', pending: 'open-item counts' };
+
+// { shown, folds }: the values left in view, in their order, and one fold per kind of list longer than FOLD_AT
+// ({ kind, words, facts }, in the order its kind first appears).
+export function foldFacts(facts) {
+  const all = list(facts).filter(Boolean);
+  const byKind = {};
+  for (const f of all) if (LIST_WORDS[f.kind]) (byKind[f.kind] = byKind[f.kind] || []).push(f);
+  const folded = Object.keys(byKind).filter((k) => byKind[k].length > FOLD_AT);
+  const count = all.find((f) => f.kind === 'count');
+  const folds = folded.map((kind) => {
+    const n = byKind[kind].length;
+    const total = kind === 'record' && count && typeof count.value === 'number' ? count.value : n;
+    return { kind, facts: byKind[kind], words: total > n ? 'Show ' + n + ' of the ' + total + ' ' + LIST_WORDS[kind] : 'Show the ' + n + ' ' + LIST_WORDS[kind] };
+  });
+  return { shown: all.filter((f) => !folded.includes(f.kind)), folds };
+}
+
+// The start of a long sentence, ending " …"; null when the sentence is short enough to show whole.
+export function foldSentence(sentence) {
+  const s = String(sentence || '');
+  if (s.length <= SENTENCE_FOLD_AT) return null;
+  const head = s.slice(0, SENTENCE_FOLD_AT);
+  const cut = Math.max(head.lastIndexOf(', '), head.lastIndexOf('. '));
+  const at = cut > 0 ? cut : head.lastIndexOf(' ') > 0 ? head.lastIndexOf(' ') : SENTENCE_FOLD_AT;
+  return s.slice(0, at) + ' …';
+}

@@ -9,6 +9,7 @@
 // the same markup. The words and rules are in logic/queryForm.js. Nobody types SQL: every name comes from the map.
 import React from 'react';
 import { Receipt, when } from './Receipt.jsx';
+import { Sentence, Values } from './Folds.jsx';
 import { SOURCE_WORDS, PERSON_WORDS, explainOf, receiptOf } from './logic/recordsValues.js';
 import {
   KIND_WORDS, addGroup, addInclude, addLimit, attributesOf, blankCondition, canUse, changeColumn, changeFocusConcept, changeNodeConcept, changeOp, columnWords, conceptWords,
@@ -186,11 +187,9 @@ function Side({ title, side, which, openKey, onOpenKey }) {
       <span className="lab-xp-h">{title}</span>
       {when(side.read_at) ? <span className="lab-small">{'Read ' + when(side.read_at)}</span> : null}
       {side.error ? <p className="lab-error" role="alert">{side.error}</p> : null}
-      {side.sentence ? <p className="lab-ses-pre">{side.sentence}</p> : null}
+      {side.sentence ? <Sentence text={side.sentence} /> : null}
       {list(side.unresolved).length && side.found === false ? <p className="lab-small">{'The records do not hold ' + side.unresolved.join(', ') + '. Check the spelling.'}</p> : null}
-      <div className="lab-xp-chips">
-        {list(side.facts).map((f) => <Chip key={f.id} side={side} fact={f} which={which} openKey={openKey} onOpenKey={onOpenKey} />)}
-      </div>
+      <Values facts={side.facts} chip={(f) => <Chip key={f.id} side={side} fact={f} which={which} openKey={openKey} onOpenKey={onOpenKey} />} />
       {list(side.notes).length ? (
         <details className="lab-xp-block lab-xp-tech">
           <summary>{'How the query was read'}</summary>

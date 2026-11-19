@@ -80,3 +80,12 @@
   .lab-xe-grid, .lab-xe-cols { grid-template-columns: minmax(0, 1fr); }
   .lab-xe-side { position: static; }
 }
+/* Long lists and long sentences fold (Folds.jsx) */
+.lab-xp-fold { margin-top: 6px; }
+.lab-xp-fold > summary { cursor: pointer; width: fit-content; font-size: 13px; color: var(--color-accent); }
+.lab-xp-fold[open] > summary { margin-bottom: 2px; }
+.lab-xp-more > summary { cursor: pointer; list-style: none; }
+.lab-xp-more > summary::-webkit-details-marker { display: none; }
+.lab-xp-more .lab-xp-toggle { margin-left: 6px; font-size: 13px; color: var(--color-accent); white-space: nowrap; }
+.lab-xp-more:not([open]) .lab-xp-opened, .lab-xp-more[open] .lab-xp-closed, .lab-xp-more[open] .lab-xp-short { display: none; }
+.lab-xp-more[open] .lab-xp-toggle { margin-left: 0; }

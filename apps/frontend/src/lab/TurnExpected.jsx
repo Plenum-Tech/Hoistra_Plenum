@@ -25,6 +25,7 @@ import { blocksOf, scopeWords, changedWords, factKey, findFact, receiptOf, expla
 import { usedBody, noQueryWords } from './logic/queryForm.js';
 import { Receipt, factText, columnsOf, when } from './Receipt.jsx';
 import QueryEditor from './QueryEditor.jsx';
+import { Sentence, Values } from './Folds.jsx';
 import './turnExpected.css';
 
 export { Receipt, factText, columnsOf };
@@ -159,10 +160,8 @@ function RecordValues({ blocks, openKey, onOpen, marks, onMark, rerun, rerunBusy
               {when(b.readAt) ? <span className="lab-small">{'Read ' + when(b.readAt)}</span> : null}
             </div>
             {changedWords(b) ? <p className="lab-small lab-xp-changed" role="status">{changedWords(b)}</p> : null}
-            <p className="lab-ses-pre">{b.sentence}</p>
-            <div className="lab-xp-chips">
-              {b.facts.map((f) => <RecordChip key={f.id} block={b} fact={f} openKey={openKey} onOpen={onOpen} marks={marks} />)}
-            </div>
+            <Sentence text={b.sentence} />
+            <Values facts={b.facts} chip={(f) => <RecordChip key={f.id} block={b} fact={f} openKey={openKey} onOpen={onOpen} marks={marks} />} />
             {here && here.receipt ? (
               <Receipt fact={here.fact} receipt={here.receipt} readAt={b.readAt} explain={explainOf(here.fact)}
                 mark={(marks || {})[openKey] || (here.fact.check ? here.fact : null)} rerun={rerun && rerun.index === b.index ? rerun : null}
@@ -212,7 +211,8 @@ export function ExpectedView({ data, busy, error, editing, draftText, onAccept, 
         </div>
       ) : e ? (
         <>
-          {records && blocks.length && blocks.map((b) => b.sentence).join(' ') === e.expected ? null : <p className="lab-ses-pre">{e.expected}</p>}
+          {records && blocks.length && blocks.map((b) => b.sentence).join(' ') === e.expected ? null
+            : records || keyed ? <Sentence text={e.expected} /> : <p className="lab-ses-pre">{e.expected}</p>}
           {records && blocks.length ? (
             <RecordValues blocks={blocks} openKey={openFact} onOpen={onOpenFact} marks={marks} onMark={onMark} rerun={rerun} rerunBusy={rerunBusy}
               onRerun={onRerun} copied={copied} busy={busy} onCopy={onCopy} />
