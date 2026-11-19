@@ -8,13 +8,20 @@
 // button. It opens how the value was found - the query, the values filled into it and the rows it read - with Copy to
 // check in the database (psql, read-only), Run again now, and This is right / This is wrong. Nobody edits the database:
 // the checks are saved in Trace Lab, as the person's own version of the expected answer.
+//
+// Values read from the records, with their source (19 Nov 2026): every live question's draft holds exact values read by
+// each query Hoistra made for it (or Trace Lab's fixed query, or one it proposed). The page shows one block per query -
+// where it came from, whose access it was read with, the sentence, a button per value, how the query was read - and a
+// value opens its own receipt. See logic/recordsValues.js.
 import React from 'react';
 import { labApi } from './labApi.js';
 import { errText } from './logic/labelling.js';
+import { blocksOf, scopeWords, changedWords, factKey, findFact, receiptOf, explainOf } from './logic/recordsValues.js';
 import './turnExpected.css';
 
 const evidenceOf = (d) => (((d || {}).expected || {}).evidence) || {};
 const isKey = (d) => !!d && d.kind === 'answer_key' && Array.isArray(evidenceOf(d).facts);
+const isRecords = (d) => !!d && d.kind === 'records' && Array.isArray(evidenceOf(d).queries);
 export const factText = (f) => (f.label ? f.label + ': ' : '') + String(f.value);
 
 function when(iso) {
@@ -26,6 +33,7 @@ function when(iso) {
 // What Accept saves: the draft's words as the person's own expected answer, with what it was drawn from.
 export function acceptBody(data) {
   const d = data || {};
+  if (isRecords(d)) return { expected: ((d.expected || {}).expected) || '', evidence: Object.assign({}, evidenceOf(d), { drafted_from: 'records' }) };
   if (isKey(d)) return { expected: ((d.expected || {}).expected) || '', evidence: Object.assign({}, evidenceOf(d), { drafted_from: 'answer_key' }) };
   const rule = (d.rules || [])[0];
   const evidence = Object.assign(rule ? { spec_rule: rule } : {}, { drafted_from: 'SPEC.md', spec_version: d.spec_version });
@@ -33,21 +41,32 @@ export function acceptBody(data) {
 }
 
 // What Save my checks saves: the same answer, each value marked right or wrong (with what it should be and why).
+function withMark(f, m) {
+  if (!m || !m.check) return f;
+  const out = Object.assign({}, f, { check: m.check });
+  if (m.check === 'wrong' && String(m.corrected || '').trim()) out.corrected = String(m.corrected).trim();
+  if (m.check === 'wrong' && String(m.note || '').trim()) out.note = String(m.note).trim();
+  return out;
+}
 export function checksBody(data, marks) {
   const ev = evidenceOf(data);
-  const facts = (ev.facts || []).map((f) => {
-    const m = (marks || {})[f.id];
-    if (!m || !m.check) return f;
-    const out = Object.assign({}, f, { check: m.check });
-    if (m.check === 'wrong' && String(m.corrected || '').trim()) out.corrected = String(m.corrected).trim();
-    if (m.check === 'wrong' && String(m.note || '').trim()) out.note = String(m.note).trim();
-    return out;
-  });
-  return { expected: ((data || {}).expected || {}).expected || '', evidence: Object.assign({}, ev, { drafted_from: 'answer_key', facts }) };
+  const expected = ((data || {}).expected || {}).expected || '';
+  if (isRecords(data)) {          // values of different queries share ids: each is marked under its query's number
+    const queries = ev.queries.map((q, i) => Object.assign({}, q, { facts: ((q || {}).facts || []).map((f) => withMark(f, (marks || {})[i + ':' + f.id])) }));
+    return { expected, evidence: Object.assign({}, ev, { drafted_from: 'records', queries }) };
+  }
+  const facts = (ev.facts || []).map((f) => withMark(f, (marks || {})[f.id]));
+  return { expected, evidence: Object.assign({}, ev, { drafted_from: 'answer_key', facts }) };
 }
 
 function whereFrom(d) {
   const e = d.expected || {};
+  if (isRecords(d)) {
+    const ev = evidenceOf(d);
+    if (d.draft) return 'Read from the records' + (when(ev.read_at) ? ' at ' + when(ev.read_at) : '') + ' · not accepted yet';
+    if (blocksOf(ev).some((b) => b.facts.some((f) => f.check))) return 'Checked by ' + (e.author_email || 'a person');
+    return ['Accepted from the records', e.author_email].filter(Boolean).join(' · ');
+  }
   if (isKey(d)) {
     if (d.draft) return 'Read from the records' + (when(evidenceOf(d).read_at) ? ' at ' + when(evidenceOf(d).read_at) : '') + ' · not accepted yet';
     return 'Checked by ' + (e.author_email || 'a person');
@@ -111,11 +130,11 @@ function Rows({ rows, count }) {
 }
 
 // How one value was found: in plain words, then the query, the values filled in, the rows, and what to do about it.
-export function Receipt({ fact, receipt, readAt, mark, rerun, rerunBusy, copied, busy, onCopy, onRerun, onMark, onClose }) {
+export function Receipt({ fact, receipt, readAt, mark, rerun, rerunBusy, copied, busy, onCopy, onRerun, onMark, onClose, explain: said }) {
   if (!fact || !receipt) return null;
   const counted = typeof fact.value === 'number';
   const listed = counted && receipt.id !== fact.receipt;
-  const explain = listed ? 'These are the ' + fact.value + ' records the query below found.'
+  const explain = said ? said : listed ? 'These are the ' + fact.value + ' records the query below found.'
     : counted
       ? (fact.label && /aggregate/i.test(receipt.label || '') ? 'This number is the count the query below gives for ' + fact.label + '.'
         : 'This number is how many records the query below found.')
@@ -191,6 +210,64 @@ function KeyValues({ data, openFact, onOpen, marks }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// One value of a block: a button that opens how it was found, or - with no query behind it - the value and a plain note.
+function RecordChip({ block, fact, openKey, onOpen, marks }) {
+  const key = factKey(block, fact);
+  const m = (marks || {})[key] || (fact.check ? { check: fact.check, corrected: fact.corrected } : null);
+  const tail = m && m.check === 'right' ? ' · Right' : m && m.check === 'wrong' ? ' · Wrong' + (m.corrected ? ', should be ' + m.corrected : '') : '';
+  const shown = fact.kind === 'missing' ? <strong>{factText(fact)}</strong>
+    : <>{fact.label ? <span className="lab-xp-k">{fact.label}</span> : null}<strong>{String(fact.value)}</strong></>;
+  if (!receiptOf(block, fact)) {
+    return <span className="lab-xp-chip lab-xp-static">{shown}{tail}<span className="lab-small lab-xp-nolink">{'no query to show'}</span></span>;
+  }
+  return (
+    <button type="button" aria-label={'See how ' + factText(fact) + ' was found'} aria-expanded={openKey === key ? 'true' : 'false'}
+      className={'lab-xp-chip' + (openKey === key ? ' lab-on' : '') + (m && m.check ? ' lab-xp-' + m.check : '')}
+      onClick={() => onOpen && onOpen(openKey === key ? null : key)}>
+      {shown}{tail}
+    </button>
+  );
+}
+
+// The values of a records draft: one block per query, then the receipt of the value that is open.
+function RecordValues({ blocks, openKey, onOpen, marks, onMark, rerun, rerunBusy, onRerun, copied, busy, onCopy }) {
+  const open = findFact(blocks, openKey);
+  return (
+    <div className="lab-xp-values">
+      <p className="lab-small">{'Click a value to see exactly how it was found.'}</p>
+      {blocks.map((b) => {
+        const here = open && open.block.index === b.index ? open : null;
+        return (
+          <div key={b.index} className="lab-xp-query">
+            <div className="lab-row lab-xp-src">
+              {b.sourceWords ? <strong className={'lab-xp-source' + (b.source === 'proposed' ? ' lab-xp-proposed' : '')}>{b.sourceWords}</strong> : null}
+              {scopeWords(b) ? <span className="lab-small">{scopeWords(b)}</span> : null}
+              {when(b.readAt) ? <span className="lab-small">{'Read ' + when(b.readAt)}</span> : null}
+            </div>
+            {changedWords(b) ? <p className="lab-small lab-xp-changed" role="status">{changedWords(b)}</p> : null}
+            <p className="lab-ses-pre">{b.sentence}</p>
+            <div className="lab-xp-chips">
+              {b.facts.map((f) => <RecordChip key={f.id} block={b} fact={f} openKey={openKey} onOpen={onOpen} marks={marks} />)}
+            </div>
+            {here && here.receipt ? (
+              <Receipt fact={here.fact} receipt={here.receipt} readAt={b.readAt} explain={explainOf(here.fact)}
+                mark={(marks || {})[openKey] || (here.fact.check ? here.fact : null)} rerun={rerun && rerun.index === b.index ? rerun : null}
+                rerunBusy={rerunBusy} copied={copied} busy={busy} onCopy={onCopy} onRerun={b.rerunnable && onRerun ? () => onRerun(b.index) : undefined}
+                onMark={onMark ? (change) => onMark(openKey, change) : undefined} onClose={() => onOpen && onOpen(null)} />
+            ) : null}
+            {b.notes.length ? (
+              <details className="lab-xp-block lab-xp-tech">
+                <summary>{'How the query was read'}</summary>
+                <ul className="lab-small lab-xp-notes">{b.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+              </details>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -407,7 +484,9 @@ export function ExpectedView({ data, busy, error, editing, draftText, onAccept, 
   if (!d || !d.question || !d.live) return null;
   const e = d.expected;
   const keyed = isKey(d);
+  const records = isRecords(d);
   const ev = evidenceOf(d);
+  const blocks = records ? blocksOf(ev) : [];
   const fact = keyed && openFact ? (ev.facts || []).find((f) => f.id === openFact) : null;
   const receipt = fact ? receiptFor(ev, fact) : null;
   const marked = Object.keys(marks || {}).some((k) => (marks[k] || {}).check);
@@ -426,7 +505,11 @@ export function ExpectedView({ data, busy, error, editing, draftText, onAccept, 
         </div>
       ) : e ? (
         <>
-          <p className="lab-ses-pre">{e.expected}</p>
+          {records && blocks.length && blocks.map((b) => b.sentence).join(' ') === e.expected ? null : <p className="lab-ses-pre">{e.expected}</p>}
+          {records && blocks.length ? (
+            <RecordValues blocks={blocks} openKey={openFact} onOpen={onOpenFact} marks={marks} onMark={onMark} rerun={rerun} rerunBusy={rerunBusy}
+              onRerun={onRerun} copied={copied} busy={busy} onCopy={onCopy} />
+          ) : null}
           {keyed ? <KeyValues data={d} openFact={openFact} onOpen={onOpenFact} marks={marks} /> : null}
           {keyed && fact ? (
             <Receipt fact={fact} receipt={receipt} readAt={ev.read_at} mark={(marks || {})[fact.id] || (fact.check ? fact : null)} rerun={rerun}
@@ -436,7 +519,7 @@ export function ExpectedView({ data, busy, error, editing, draftText, onAccept, 
           <div className="lab-row">
             <span className="lab-small">{whereFrom(d)}</span>
             {d.draft ? <button type="button" className="lab-btn lab-btn-sm" disabled={!!busy} onClick={() => onAccept && onAccept()}>{busy ? 'Saving…' : 'Accept'}</button> : null}
-            {keyed && marked ? <button type="button" className="lab-btn lab-btn-sm" disabled={!!busy} onClick={() => onSaveChecks && onSaveChecks()}>{busy ? 'Saving…' : 'Save my checks'}</button> : null}
+            {(keyed || records) && marked ? <button type="button" className="lab-btn lab-btn-sm" disabled={!!busy} onClick={() => onSaveChecks && onSaveChecks()}>{busy ? 'Saving…' : 'Save my checks'}</button> : null}
             <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" disabled={!!busy} onClick={() => onEdit && onEdit()}>{'Edit'}</button>
           </div>
         </>
@@ -485,9 +568,12 @@ export default function TurnExpected({ turnId }) {
       setBusy(false);
     }
   };
-  const runAgain = async () => {
+  const runAgain = async (index) => {   // a records draft reads one of its queries again (by number); the answer key reads its one
     setRerunBusy(true); setError('');
-    try { setRerun(await labApi.turnExpectedCheck(turnId)); } catch (e) { setError('Could not read the records again: ' + errText(e)); } finally { setRerunBusy(false); }
+    try {
+      const out = await labApi.turnExpectedCheck(turnId, index);
+      setRerun(typeof index === 'number' ? Object.assign({}, out, { index }) : out);
+    } catch (e) { setError('Could not read the records again: ' + errText(e)); } finally { setRerunBusy(false); }
   };
   const copy = (textToCopy) => {
     try { navigator.clipboard.writeText(textToCopy).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); } catch (e) { /* the text is on the page too */ }

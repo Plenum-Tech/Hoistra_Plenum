@@ -49,3 +49,12 @@
 .lab-xp-tech summary { cursor: pointer; font-size: 12.5px; color: var(--color-neutral-500); }
 .lab-xq-top { justify-content: space-between; align-items: baseline; gap: 12px; }
 .lab-xq-hide { flex: none; }
+/* Values read from the records, one block per query (19 Nov 2026). */
+.lab-xp-query { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--color-divider); border-radius: 10px; }
+.lab-xp-src { flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.lab-xp-source { font-size: 12.5px; }
+.lab-xp-proposed { padding: 2px 8px; border-radius: 6px; background: var(--st-warn-bg); color: var(--color-text); }
+.lab-xp-changed { margin: 6px 0 0; }
+.lab-xp-static { cursor: default; text-decoration: none; }
+.lab-xp-nolink { color: var(--color-neutral-500); }
+.lab-xp-notes { margin: 4px 0 0; padding-left: 18px; }

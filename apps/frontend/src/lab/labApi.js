@@ -72,7 +72,7 @@ export const labApi = {
   // A turn's expected answer for the session page: a live question's draft from SPEC.md, or a person's (14 Nov 2026).
   turnExpected: (id) => call('GET', '/lab/turns/' + enc(id) + '/expected'),
   // Run again now: the answer key's values read afresh, read-only, nothing stored (16 Nov 2026).
-  turnExpectedCheck: (id) => call('POST', '/lab/turns/' + enc(id) + '/expected/check'),
+  turnExpectedCheck: (id, index) => call('POST', '/lab/turns/' + enc(id) + '/expected/check' + (index ? '?index=' + enc(index) : '')),
   // Correcting Hoistra's query: its records query as fields, and that query with a person's changes, read again.
   turnExpectedQuery: (id) => call('GET', '/lab/turns/' + enc(id) + '/expected/query'),
   turnExpectedTry: (id, body) => call('POST', '/lab/turns/' + enc(id) + '/expected/query', { body }),

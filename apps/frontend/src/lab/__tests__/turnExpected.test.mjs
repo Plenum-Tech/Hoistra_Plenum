@@ -318,3 +318,152 @@ test('while Hoistra’s query is read the check says so, not that there is nothi
   const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: null }));
   assert.ok(out.includes('Reading Hoistra’s query…') && !out.includes('nothing to correct'));
 });
+
+// ── Values read from the records, with their source (19 Nov 2026, Hussain and Bala): one block per query Hoistra (or Trace
+// Lab) read - where the query came from, whose access it was read with, the sentence, a button per value that opens the
+// receipt (the rows, the query, Copy to check, Run again now), and how the query was read. ────────────────────────────
+const RQ1 = { id: 'q1', label: 'count', sql: 'SELECT count(*) AS n FROM "vendors" AS f WHERE f.block_state IN (:p0)', params: { p0: 'Blocked' },
+  row_count: 1, rows: [{ n: 2 }], psql: 'BEGIN READ ONLY;\nSELECT count(*) ...;\nROLLBACK;' };
+const RQ2 = { id: 'q2', label: 'focus Vendor', sql: 'SELECT f.vendor_name FROM "vendors" AS f', params: {}, row_count: 2,
+  rows: [{ vendor_name: 'Pennard Fire Services', block_state: 'Blocked' }, { vendor_name: 'Apex Mechanical', block_state: 'Blocked' }],
+  psql: 'BEGIN READ ONLY;\nSELECT f.vendor_name ...;\nROLLBACK;' };
+const SENTENCE = 'Vendor records found: 2. Vendors: Pennard Fire Services, Apex Mechanical.';
+const RECORDS = { question: 'R53-3', live: true, draft: true, from_draft: false, kind: 'records', company: 'org-1', rules: [],
+  expected: { id: 'r1', source: 'coding_agent', expected: SENTENCE + ' Not on record: ABC',
+    evidence: { drafted_from: 'records', draft: 3, read_at: '2026-11-19T09:30:02+00:00', queries: [
+      { source: 'hoistra', question: 'Which vendors are blocked?', plan: { focus: { concept: 'Vendor' } }, found: true, unresolved: [],
+        notes: ['Read "blocked" as block_state = Blocked.', 'Also read, as always for this kind of record: block_reason'],
+        read_at: '2026-11-19T09:30:01+00:00', sentence: SENTENCE, scope: 'asker', scope_email: 'me@x.test',
+        changed: [{ label: 'focus Vendor', then: 3, now: 2 }],
+        facts: [{ id: 'f1', kind: 'count', label: 'Vendor records found', value: 2, receipt: 'q1' },
+          { id: 'f2', kind: 'record', label: '', value: 'Pennard Fire Services', receipt: 'q2' },
+          { id: 'f3', kind: 'record', label: '', value: 'Apex Mechanical', receipt: 'q2' }], receipts: [RQ1, RQ2] },
+      { source: 'proposed', question: 'Which vendors are blocked?', plan: { focus: { concept: 'Vendor' } }, found: false, unresolved: ['ABC'], notes: [],
+        read_at: '2026-11-19T09:30:02+00:00', sentence: 'Not on record: ABC', scope: 'company', scope_email: null, changed: [],
+        facts: [{ id: 'f1', kind: 'missing', label: 'Not on record', value: 'ABC', receipt: 'q1' }],
+        receipts: [{ id: 'q1', label: 'lookup Vendor', sql: 'SELECT f.vendor_name FROM "vendors" AS f WHERE f.vendor_name = :p0', params: { p0: 'ABC' }, row_count: 0, rows: [], psql: 'BEGIN READ ONLY;' }] }] } } };
+
+test('values read from the records are one block per query, each with where it came from', () => {
+  const out = html({ data: RECORDS });
+  assert.ok(out.includes('Hoistra’s query') && out.includes('Proposed for this question - check it before accepting'));
+  assert.equal((out.match(/class="lab-xp-query[ "]/g) || []).length, 2, 'one block per query');
+  assert.ok(out.includes(SENTENCE));
+  assert.match(out, /Read \d{1,2} [A-Z][a-z]{2}, \d{2}:\d{2}/, 'the time the block was read');
+  assert.ok(out.includes('Read from the records') && out.includes('· not accepted yet'));
+  assert.ok(out.includes('Click a value to see exactly how it was found.'));
+  assert.match(out, />Accept</);
+  assert.match(out, />Edit</);
+});
+
+test('every value of a block is a button, and the block says how its query was read', () => {
+  const out = html({ data: RECORDS });
+  for (const text of ['Vendor records found: 2', 'Pennard Fire Services', 'Apex Mechanical', 'Not on record: ABC']) {
+    assert.ok(out.includes('aria-label="See how ' + text + ' was found"'), text);
+  }
+  assert.ok(out.includes('How the query was read'));
+  assert.ok(out.includes('Read &quot;blocked&quot; as block_state = Blocked.') && out.includes('Also read, as always for this kind of record: block_reason'));
+  assert.equal((out.match(/How the query was read/g) || []).length, 1, 'a block with no notes has no such section');
+});
+
+test('each block says whose access it was read with, and when the records changed since Hoistra answered', () => {
+  const out = html({ data: RECORDS });
+  assert.ok(out.includes("Read with me@x.test&#x27;s access") && out.includes('Read for the whole company'));
+  assert.ok(out.includes('The records have changed since Hoistra answered: Hoistra read 3 rows, now 2'));
+  assert.equal((out.match(/The records have changed since/g) || []).length, 1, 'only the block whose rows changed');
+});
+
+test('a proposed query is marked as one to check before it is accepted', () => {
+  const out = html({ data: RECORDS });
+  assert.match(out, /class="lab-xp-source lab-xp-proposed"[^>]*>Proposed for this question - check it before accepting</);
+  assert.match(out, /class="lab-xp-source"[^>]*>Hoistra’s query</);
+});
+
+test('a value that is not on record reads that way', () => {
+  const out = html({ data: RECORDS });
+  assert.ok(out.includes('Not on record: ABC'));
+  assert.ok(out.includes('>Not on record: ABC<'), 'as one piece of text');
+});
+
+test('a value is opened by clicking it: the query’s rows, the query, copy it, run it again, and the values filled in', () => {
+  const out = html({ data: RECORDS, openFact: '0:f2', onRerun: () => {}, onCopy: () => {} });
+  assert.ok(out.includes('How this value was found') && out.includes('This is one of the records the query below found.'));
+  assert.ok(out.includes('2 rows') && out.includes('<td>Pennard Fire Services</td>') && out.includes('<td>Apex Mechanical</td>'));
+  assert.ok(out.includes('SELECT f.vendor_name FROM'));
+  for (const b of ['Copy to check in the database', 'Run again now']) assert.match(out, new RegExp('>' + b + '<'));
+  assert.ok(out.includes('aria-expanded="true"'));
+  const count = html({ data: RECORDS, openFact: '0:f1' });
+  assert.ok(count.includes('This number is how many records the query below found.') && count.includes('f.block_state IN (:p0)') && count.includes('<th>p0</th><td>Blocked</td>'));
+});
+
+test('two queries’ values share ids but open their own receipts', () => {
+  const second = html({ data: RECORDS, openFact: '1:f1', onRerun: () => {} });
+  assert.ok(second.includes('The records do not hold ABC. The query below looked for it.') && second.includes('WHERE f.vendor_name = :p0'));
+  assert.ok(!second.includes('<td>Pennard Fire Services</td>'), 'not the first query’s rows');
+});
+
+test('a value with no query to show has no link and says so', () => {
+  const data = JSON.parse(JSON.stringify(RECORDS));
+  data.expected.evidence.queries[1].facts[0].receipt = null;
+  const out = html({ data, openFact: '1:f1' });
+  assert.ok(!out.includes('aria-label="See how Not on record: ABC was found"'));
+  assert.ok(out.includes('Not on record: ABC') && out.includes('no query to show'));
+  assert.ok(!out.includes('How this value was found'));
+});
+
+test('Run again now shows where there is a query to read again, and says whether the records changed', () => {
+  assert.ok(!/>Run again now</.test(html({ data: RECORDS, openFact: '0:f1' })), 'no action to run it: no button');
+  const none = JSON.parse(JSON.stringify(RECORDS));
+  none.expected.evidence.queries[0].plan = null;
+  assert.ok(!/>Run again now</.test(html({ data: none, openFact: '0:f1', onRerun: () => {} })), 'no stored query: nothing to run');
+  const moved = html({ data: RECORDS, openFact: '0:f1', rerun: { index: 0, facts: [{ id: 'f1', value: 3 }], read_at: '2026-11-19T10:00:00Z' } });
+  assert.ok(moved.includes('Now: 3') && moved.includes('was 2 when the question was asked: the records have changed since'));
+  const other = html({ data: RECORDS, openFact: '1:f1', rerun: { index: 0, facts: [{ id: 'f1', value: 3 }] } });
+  assert.ok(!other.includes('Now: 3'), 'a re-run of another query says nothing here');
+});
+
+test('Accept saves the values as the person’s version, with the evidence as it was read', () => {
+  const body = TE.acceptBody(RECORDS);
+  assert.equal(body.expected, RECORDS.expected.expected);
+  assert.deepEqual(body.evidence, Object.assign({}, RECORDS.expected.evidence, { drafted_from: 'records' }));
+  assert.equal(body.evidence.queries.length, 2, 'every query with its receipts');
+});
+
+test('the answer’s source line says it was read from the records, then who accepted it', () => {
+  const took = Object.assign({}, RECORDS, { draft: false, from_draft: true, expected: Object.assign({}, RECORDS.expected, { source: 'manual', author_email: 'me@x.test' }) });
+  const out = html({ data: took });
+  assert.ok(out.includes('Accepted from the records · me@x.test') && !/>Accept</.test(out) && />Edit</.test(out));
+  assert.ok(out.includes('aria-label="See how Pennard Fire Services was found"'), 'its values still open');
+});
+
+test('values can be marked right or wrong, each in its own query, and the checks are saved with the evidence', () => {
+  const out = html({ data: RECORDS, openFact: '1:f1', marks: { '1:f1': { check: 'wrong', corrected: 'ABC Ltd', note: '' } }, onMark: () => {} });
+  assert.ok(out.includes('This is right') && out.includes('This is wrong') && out.includes('What should it be?') && />Save my checks</.test(out));
+  assert.ok(out.includes('Wrong, should be ABC Ltd'));
+  const body = TE.checksBody(RECORDS, { '1:f1': { check: 'wrong', corrected: 'ABC Ltd', note: 'Typo' }, '0:f2': { check: 'right' } });
+  assert.equal(body.expected, RECORDS.expected.expected);
+  assert.equal(body.evidence.drafted_from, 'records');
+  assert.deepEqual(body.evidence.queries[0].facts.map((f) => [f.id, f.check || null]), [['f1', null], ['f2', 'right'], ['f3', null]]);
+  assert.deepEqual(body.evidence.queries[1].facts.map((f) => [f.id, f.check, f.corrected, f.note]), [['f1', 'wrong', 'ABC Ltd', 'Typo']]);
+  assert.equal(body.evidence.queries[0].receipts.length, 2, 'the receipts are kept with the person’s version');
+});
+
+test('a checked records answer shows each value’s mark and who checked it', () => {
+  const checked = JSON.parse(JSON.stringify(RECORDS));
+  Object.assign(checked, { draft: false, from_draft: true });
+  Object.assign(checked.expected, { source: 'manual', author_email: 'me@x.test' });
+  checked.expected.evidence.queries[0].facts[1].check = 'right';
+  const out = html({ data: checked });
+  assert.ok(out.includes('Checked by me@x.test') && out.includes('· Right'));
+});
+
+test('a draft with one query and one sentence shows the sentence once', () => {
+  const one = JSON.parse(JSON.stringify(RECORDS));
+  one.expected.evidence.queries = one.expected.evidence.queries.slice(0, 1);
+  one.expected.expected = SENTENCE;
+  assert.equal(html({ data: one }).split(SENTENCE).length - 1, 1);
+});
+
+test('the answer-key view and the SPEC.md draft are not changed by the records view', () => {
+  assert.ok(!html({ data: KEYED }).includes('lab-xp-query'));
+  assert.ok(!html({ data: DRAFT }).includes('lab-xp-query'));
+});
