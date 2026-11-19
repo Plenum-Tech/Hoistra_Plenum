@@ -78,6 +78,8 @@ class ReceiptReader(oq.ScopedReader):
     def __init__(self, principal):
         super().__init__(principal)
         self.org = str(getattr(principal, "organization_id", None) or "")
+        # The buildings the read is limited to, exactly as scope_settings set them: the psql text must read the same rows.
+        self.buildings = dict(self.settings).get("app.udr_buildings", "")
         self.receipts: list[dict] = []
 
     async def fetch(self, sql, p, label=""):
@@ -87,7 +89,7 @@ class ReceiptReader(oq.ScopedReader):
         values = p.d if isinstance(p, oq.Params) else (p or {})
         receipt = {"id": "q" + str(len(self.receipts) + 1), "label": label or "query", "sql": sql,
                    "params": ak.jsonable(dict(values)), "row_count": len(rows), "rows": ak.jsonable(rows[:ak.ROWS_KEPT])}
-        receipt["psql"] = ak.psql_text(receipt, org=self.org)
+        receipt["psql"] = ak.psql_text(receipt, org=self.org, buildings=self.buildings)
         self.receipts.append(receipt)
         return rows
 

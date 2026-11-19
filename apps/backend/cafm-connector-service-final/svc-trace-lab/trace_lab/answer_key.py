@@ -300,16 +300,17 @@ def _literal(v: Any) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
-def psql_text(receipt: dict, *, org: str) -> str:
+def psql_text(receipt: dict, *, org: str, buildings: str = "") -> str:
     """The query as it ran, every value filled in, after the company scope plenum_scoped's views read - paste it into
-    psql (any read-only session) to check the value yourself."""
+    psql (any read-only session) to check the value yourself. `buildings` is the comma-joined building ids the read was
+    limited to (what app.udr_buildings held); empty is the whole company."""
     params = receipt.get("params") or {}
     sql = re.sub(r":(p\d+)\b", lambda m: _literal(params.get(m.group(1))) if m.group(1) in params else m.group(0),
                  str(receipt.get("sql") or ""))
     head = ["BEGIN READ ONLY;",
             "SELECT set_config('app.udr_unrestricted', '0', false);",
             f"SELECT set_config('app.udr_org', {_literal(str(org))}, false);",
-            "SELECT set_config('app.udr_buildings', '', false);",
+            f"SELECT set_config('app.udr_buildings', {_literal(str(buildings or ''))}, false);",
             f"SET search_path TO {SCOPED_SCHEMA}, public;"]
     return "\n".join(head) + "\n" + sql.strip().rstrip(";") + ";\nROLLBACK;"
 

@@ -331,6 +331,29 @@ async def test_every_query_is_a_receipt_scoped_to_the_company():
     assert r.receipts[1]["label"] == "second" and r.receipts[1]["params"] == {}
 
 
+async def test_an_unscoped_receipt_says_the_whole_company():
+    r = _reader([{"n": 1}])
+    await r.fetch("SELECT 1", {}, "x")
+    assert "SELECT set_config('app.udr_buildings', '', false);" in r.receipts[0]["psql"]
+
+
+async def test_a_scoped_receipts_psql_reads_the_same_buildings_the_receipt_did():
+    r = rr.ReceiptReader(SimpleNamespace(role="admin", organization_id=ORG, building_ids=["b1", "b'2"], email="fm@x.test"))
+    r.s = _Session([{"n": 1}])
+    await r.fetch("SELECT 1", {}, "x")
+    assert dict(r.settings)["app.udr_buildings"] == "b1,b'2"                 # what the read itself ran with
+    psql = r.receipts[0]["psql"]
+    assert "SELECT set_config('app.udr_buildings', 'b1,b''2', false);" in psql
+    assert "SELECT set_config('app.udr_buildings', '', false);" not in psql
+    assert f"SELECT set_config('app.udr_org', '{ORG}', false);" in psql
+
+
+def test_psql_text_names_the_buildings_only_when_it_is_given_them():
+    receipt = {"sql": "SELECT 1", "params": {}}
+    assert "set_config('app.udr_buildings', '', false)" in ak.psql_text(receipt, org=ORG)
+    assert "set_config('app.udr_buildings', 'b1,b2', false)" in ak.psql_text(receipt, org=ORG, buildings="b1,b2")
+
+
 async def test_a_query_with_no_label_is_called_query():
     r = _reader([])
     await r.fetch("SELECT 1", {}, "")
