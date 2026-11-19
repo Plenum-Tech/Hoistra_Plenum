@@ -5,6 +5,7 @@
 // an "Asked by" column and a filter by person, and the top bar's picker has one option for the day.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { bundle, cleanBundles } from '../../tracelab/__tests__/esbuild-helper.mjs';
 
 globalThis.window = globalThis.window || { location: { origin: 'http://test.local', pathname: '/lab/', search: '' }, history: { replaceState: () => {} } };
@@ -169,4 +170,19 @@ test('Labels and Progress title a live day by its day, whatever its first run wa
   assert.ok(one.includes('Failure modes for R60 · Live questions · 2026-11-17'), one);
   const prog = html(PV.ProgressBody, { data: { run: DAY, tiles: { questions: 5, reviewed: 0, traced: 5, modes: 0, cells_filled: 0, cells_total: 0, notes: 0 }, modes: [], runs: [] } });
   assert.ok(prog.includes('R60 · Live questions · 2026-11-17'), prog);
+});
+
+test('the company of a run code is its own, not the representative\'s, when a day spans companies', () => {
+  const day = { code: 'R60', title: 'Live questions · 2026-11-17', kind: 'production', organization_id: 'orgA', organization_ids: ['orgA', 'orgB'],
+    codes: ['R60', 'R61'], code_orgs: { R60: 'orgA', R61: 'orgB' }, people: [ANN, 'cat@b.test'] };
+  const one = { code: 'R70', kind: 'production', organization_id: 'orgA', codes: ['R70'], code_orgs: { R70: 'orgA' } };
+  const old = { code: 'R5', kind: 'synthetic', organization_id: 'orgC' };
+  assert.equal(R.orgOfCode([day, one, old], 'R60'), 'orgA');
+  assert.equal(R.orgOfCode([day, one, old], 'R61'), 'orgB', 'R61 is company B\'s run, though R60 stands for the day');
+  assert.equal(R.orgOfCode([day, one, old], 'R5'), 'orgC', 'a run with no code_orgs is its own company\'s');
+  assert.equal(R.orgOfCode([day], 'R99'), null);
+  assert.equal(R.orgOfCode(null, 'R60'), null);
+  const app = readFileSync(new URL('../LabApp.jsx', import.meta.url), 'utf-8');
+  assert.ok(app.includes('orgOfCode(runs, run)') && app.includes('orgOfCode(runs, want)'), 'the open run and the Learning draft ask for the code\'s own company');
+  assert.ok(!/runEntry\(runs, (run|want)\);\s*return \(r && r\.organization_id\)/.test(app));
 });

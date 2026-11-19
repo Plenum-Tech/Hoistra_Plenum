@@ -171,13 +171,19 @@ async def test_the_platform_team_sees_one_run_for_the_day_and_a_company_only_its
     # The companies of the day and who asked in each (the Loop names a company by an asker's email domain).
     assert set(day["organization_ids"]) == {ORG, OTHER_ORG}
     assert day["people_by_company"] == {ORG: [ANN, BOB], OTHER_ORG: [CAT]}
+    # Each run code of the day keeps its own company: R2 is the other company's, not the representative's (the page asks
+    # the Learning draft for the company of the run code that is open).
+    assert day["code_orgs"] == {"R1": ORG, "R2": OTHER_ORG}
+    assert (await runs.get_run(member(), "R2"))["code_orgs"] == {"R1": ORG, "R2": OTHER_ORG}
     for code in ("R1", "R2"):
         assert (await runs.get_run(member(), code))["codes"] == ["R1", "R2"]
     mine = (await runs.list_runs(_admin(ORG), kind="production"))["runs"]
     assert [(r["code"], r["codes"], r["n_questions"], r["people"]) for r in mine] == [("R1", ["R1"], 3, [ANN, BOB])]
     assert mine[0]["organization_ids"] == [ORG] and mine[0]["people_by_company"] == {ORG: [ANN, BOB]}
+    assert mine[0]["code_orgs"] == {"R1": ORG}, "a company member's day names only their own company's runs"
     theirs = (await runs.list_runs(_admin(OTHER_ORG), kind="production"))["runs"]
     assert [(r["code"], r["codes"], r["n_questions"], r["people"]) for r in theirs] == [("R2", ["R2"], 1, [CAT])]
+    assert theirs[0]["code_orgs"] == {"R2": OTHER_ORG}
     with pytest.raises(NotFound):
         await runs.get_run(_admin(ORG), "R2")
     with pytest.raises(NotFound):

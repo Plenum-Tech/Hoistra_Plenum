@@ -14,7 +14,7 @@ import { setActingOrg } from '../api/client.js';
 import { createLabAuth } from './authFlow.js';
 import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
-import RunsPage, { runEntry, runLabel, sessionsTagOf, syncLines } from './Runs.jsx';
+import RunsPage, { orgOfCode, runEntry, runLabel, sessionsTagOf, syncLines } from './Runs.jsx';
 // Sessions is commented out (14 Nov 2026, Hussain): its list opens inside Runs (a run's conversations), its Read buttons
 // and Scenarios view are on Runs. The page is kept: put this line, the menu item and the page line below back.
 // import Sessions from './Sessions.jsx';
@@ -288,15 +288,13 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
   // company picker of its own: it takes the company of the run that is open (labApi), which
   // is why Synthetic has to be told it rather than working it out.
   const orgOfRun = React.useMemo(() => {
-    const r = runEntry(runs, run);
-    return (r && r.organization_id) || null;
+    return orgOfCode(runs, run);
   }, [runs, run]);
   const pickInstance = React.useCallback((k) => { setInstance(k); writeInstance(k); }, []);
   // The company the Learning draft is read as: the named run's, else the run in view's (10 Nov 2026).
   const learningOrg = React.useCallback((code) => {
     const want = String(code || '').trim().toUpperCase() || run;
-    const r = runEntry(runs, want);
-    return (r && r.organization_id) || null;
+    return orgOfCode(runs, want);
   }, [runs, run]);
   const [syncing, setSyncing] = React.useState(false);
   const [synced, setSynced] = React.useState('');

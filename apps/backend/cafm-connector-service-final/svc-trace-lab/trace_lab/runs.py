@@ -237,8 +237,9 @@ def _is_rep(m: labelling.Member, company: str | None = None) -> tuple[str, dict[
 async def with_group(conn: Any, m: labelling.Member, rows: Any, company: str | None = None) -> list[dict[str, Any]]:
     """Runs as _RUN_COLS reads them (each a day's representative or a run on its own), each with what it stands for:
     run_ids and codes (every run of its day the caller may see, lowest number first), people (who asked: the emails of
-    the questions' askers, else the owner of the run they are in), organization_ids and people_by_company (who asked
-    in each of them). Read only."""
+    the questions' askers, else the owner of the run they are in), organization_ids, people_by_company (who asked
+    in each of them) and code_orgs (each run code's own company: a page that needs "the company of the run that is open"
+    asks for the code's, never the representative's). Read only."""
     out = [dict(r) for r in rows]
     if not out:
         return out
@@ -256,9 +257,10 @@ async def with_group(conn: Any, m: labelling.Member, rows: Any, company: str | N
         f"AND r.kind = 'production' AND NOT {SCENARIO_Q}"), {**p, "ids": ids, "co": COMPANY_OWNER})).mappings().all()
     by: dict[str, dict[str, Any]] = {}
     for x in members:
-        got = by.setdefault(x["rep"], {"run_ids": [], "codes": [], "organization_ids": []})
+        got = by.setdefault(x["rep"], {"run_ids": [], "codes": [], "organization_ids": [], "code_orgs": {}})
         got["run_ids"].append(x["gid"])
         got["codes"].append(run_code(x["run_no"]))
+        got["code_orgs"][run_code(x["run_no"])] = x["org"]
         if x["org"] and x["org"] not in got["organization_ids"]:
             got["organization_ids"].append(x["org"])
     people: dict[str, set[str]] = {}
@@ -274,7 +276,8 @@ async def with_group(conn: Any, m: labelling.Member, rows: Any, company: str | N
 
     for r in out:
         got = by.get(r["id"]) or {"run_ids": [r["id"]], "codes": [run_code(r["run_no"])],
-                                  "organization_ids": [r["organization_id"]] if r.get("organization_id") else []}
+                                  "organization_ids": [r["organization_id"]] if r.get("organization_id") else [],
+                                  "code_orgs": {run_code(r["run_no"]): r.get("organization_id")}}
         r.update(got, people=ordered(people.get(r["id"], ())),
                  people_by_company={o: ordered(es) for o, es in by_org.get(r["id"], {}).items()})
     return out
@@ -311,6 +314,8 @@ def run_out(r: Any, batch: dict[str, Any] | None = None) -> dict[str, Any]:
     for k in ("run_ids", "codes", "people", "organization_ids"):
         if k in r:
             out[k] = list(r[k])
+    if "code_orgs" in r:
+        out["code_orgs"] = dict(r["code_orgs"])
     if "people_by_company" in r:
         out["people_by_company"] = {o: list(es) for o, es in r["people_by_company"].items()}
     # A sessions run (a batch of a run tag) is counted from its batch's sessions, and was asked when they were.

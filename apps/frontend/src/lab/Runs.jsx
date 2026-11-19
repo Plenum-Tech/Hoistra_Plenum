@@ -142,6 +142,15 @@ export function runEntry(runs, code) {
   return list.find((r) => r && r.code === code) || list.find((r) => r && Array.isArray(r.codes) && r.codes.includes(code)) || null;
 }
 
+// The company a run code belongs to: its own, which for a live day across companies (the platform team's) is not always the
+// representative's - R61 can be company B's while R60, which stands for the day, is company A's. null when it is in none.
+export function orgOfCode(runs, code) {
+  const r = runEntry(runs, code);
+  if (!r) return null;
+  const own = r.code_orgs && Object.prototype.hasOwnProperty.call(r.code_orgs, code) ? r.code_orgs[code] : r.organization_id;
+  return own || null;
+}
+
 // The conversation a question of the run is a turn of, and that turn ({ id, turn }), or null when it is in none yet.
 export function sessionForQuestion(data, code) {
   const want = String(code || '').toUpperCase();
