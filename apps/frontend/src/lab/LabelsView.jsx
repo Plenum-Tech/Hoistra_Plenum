@@ -8,6 +8,7 @@
 import React from 'react';
 import { labApi } from './labApi.js';
 import { ROLE_TEXT, errText } from './logic/labelling.js';
+import { runTitle } from './logic/format.js';
 import './labels.css';
 
 const VALUES = ['negative', 'positive'];
@@ -243,7 +244,7 @@ export function LabelsMatrix({ run, all, data, me, loading, error, saving, onCel
       <div>
         <h1>{'Labels'}</h1>
         <p className="lab-small lab-big">{(all ? 'Failure modes for every run, latest asked first'
-          : 'Failure modes for ' + r.code + (r.title ? ' · ' + r.title : ''))
+          : 'Failure modes for ' + r.code + (runTitle(r) ? ' · ' + runTitle(r) : ''))
           + '. Positive means the failure is in the question’s answer; negative means it is not.'}</p>
         {picker || null}
       </div>
@@ -334,7 +335,7 @@ export function LabelsMatrix({ run, all, data, me, loading, error, saving, onCel
                   <tr key={'g-' + g.run.code} className="lab-lv-group">
                     <th scope="colgroup" colSpan={1 + modes.length}>
                       <span className="lab-lv-group-label">
-                        <span className="lab-lv-group-name">{g.run.code + (g.run.title ? ' · ' + g.run.title : '')}</span>
+                        <span className="lab-lv-group-name">{g.run.code + (runTitle(g.run) ? ' · ' + runTitle(g.run) : '')}</span>
                         <span className="lab-lv-group-count">{g.questions.length + (g.questions.length === 1 ? ' question' : ' questions')}</span>
                       </span>
                     </th>

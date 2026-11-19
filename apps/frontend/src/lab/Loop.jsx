@@ -598,12 +598,20 @@ export function CompareView({ data, onClose, onOpenQuestion }) {
 }
 
 // Companies a regression run can be made for, from the runs in view (the platform team and the consultant see them all).
+// A live day is one entry however many companies asked in it (19 Nov 2026): its `organization_ids` are all of them, each
+// named by the email domain of someone who asked in it (`people_by_company`), else by the run (the day's title).
 export function companiesOf(runs) {
   const seen = {};
+  const domain = (e) => (e && String(e).indexOf('@') > 0 ? String(e).split('@')[1] : '');
   (runs || []).forEach((r) => {
-    if (!r || !r.organization_id || seen[r.organization_id]) return;
-    const who = r.owner_email && r.owner_email.indexOf('@') > 0 ? r.owner_email.split('@')[1] : r.title;
-    seen[r.organization_id] = { id: r.organization_id, label: who || r.organization_id };
+    if (!r) return;
+    const orgs = Array.isArray(r.organization_ids) && r.organization_ids.length ? r.organization_ids : [r.organization_id];
+    orgs.forEach((org) => {
+      if (!org || seen[org]) return;
+      const asked = ((r.people_by_company || {})[org] || [])[0];
+      const who = domain(asked) || (orgs.length > 1 ? '' : domain(r.owner_email) || r.title);
+      seen[org] = { id: org, label: who || org };
+    });
   });
   return Object.keys(seen).map((k) => seen[k]);
 }

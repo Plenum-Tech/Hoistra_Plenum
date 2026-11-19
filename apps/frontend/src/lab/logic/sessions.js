@@ -124,12 +124,44 @@ export function askedText(x) {
   return where ? where + (attempt > 1 ? ' · attempt ' + attempt : '') : '';
 }
 
+// Who asked (19 Nov 2026, Hussain: a live day is one run for everyone who asked in it). A row of a live day carries the
+// asker's email (`asked_by`); a conversation lists everyone who asked in it (`askers`).
+export function askersOf(row) {
+  const x = row || {};
+  const list = Array.isArray(x.askers) && x.askers.length ? x.askers : (x.asked_by ? [x.asked_by] : []);
+  return list.filter(Boolean);
+}
+
+// The people of a live day, sorted without regard to case: the ones the run says, else the ones its rows say.
+export function peopleOf(run, sessions, waiting) {
+  const found = new Set(Array.isArray(run && run.people) ? run.people.filter(Boolean) : []);
+  if (!found.size) [].concat(sessions || [], waiting || []).forEach((r) => askersOf(r).forEach((e) => found.add(e)));
+  return Array.from(found).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// The rows one person asked (every row for no person): a conversation that person asked in counts as theirs.
+export function filterByPerson(sessions, waiting, person) {
+  const rows = sessions || [];
+  const held = waiting || [];
+  if (!person) return { sessions: rows, waiting: held };
+  return { sessions: rows.filter((r) => askersOf(r).includes(person)), waiting: held.filter((w) => askersOf(w).includes(person)) };
+}
+
+// What a filtered day holds, in words: "2 conversations · 1 reading in".
+export function personCounts(sessions, waiting) {
+  const n = (sessions || []).length;
+  const w = (waiting || []).length;
+  if (!n && !w) return 'No conversations';
+  return [n ? plural(n, 'conversation', 'conversations') : '', w ? w + ' reading in' : ''].filter(Boolean).join(' · ');
+}
+
 // One row of the sessions list, as it is read. A row is titled by the conversation's first question when the service
 // sends it (14 Nov 2026), its scenario then a chip; "asked here" when it was asked on this environment.
 export function sessionRow(s) {
   const x = s || {};
   const scores = x.scores || {};
   return {
+    askers: askersOf(x), askedBy: askersOf(x).join(', '), orgId: x.organization_id || null,
     question: shortQuestion(x.first_question), questionFull: String(x.first_question || '').trim(), scenario: x.scenario_id || '',
     askedHere: !!x.asked_here, askedText: askedText(x),
     id: x.id, title: sessionTitle(x), runTag: x.run_tag || '', origin: x.origin || '', attempt: Number(x.attempt) || 1,

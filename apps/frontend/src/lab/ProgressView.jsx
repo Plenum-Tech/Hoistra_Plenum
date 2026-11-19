@@ -6,6 +6,7 @@
 import React from 'react';
 import { labApi } from './labApi.js';
 import { errText } from './logic/labelling.js';
+import { runTitle } from './logic/format.js';
 import './labels.css';
 
 const num = (n) => (Number(n) || 0).toLocaleString('en-GB');
@@ -145,7 +146,7 @@ export function ProgressBody({ data, loading, error, canEdit, onRetry }) {
     || String(a.name || '').localeCompare(String(b.name || '')));
   return (
     <div className="lab-page-body lab-page-full lab-lv-page">
-      {head('Review completion for ' + code + (data.run.title ? ' · ' + data.run.title : '') + ', and the failure modes its labels found.')}
+      {head('Review completion for ' + code + (runTitle(data.run) ? ' · ' + runTitle(data.run) : '') + ', and the failure modes its labels found.')}
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
       {loading ? <p className="lab-small">{'Reading…'}</p> : null}
       <section className="lab-lv-block" aria-labelledby="lab-lv-done">

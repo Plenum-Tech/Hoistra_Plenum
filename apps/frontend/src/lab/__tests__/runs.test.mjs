@@ -52,14 +52,15 @@ const DATA = {
   active: { turn_id: 'tq', organization_id: 'o1', conversation_key: 'c1', trace: REC },
   labels: LABELS, me: 'me' };
 
-test('runs: each card has its code, title, synthetic or live with owner and day, source, time range and counts', () => {
+test('runs: each card has its code, title, synthetic or live with its day, who asked, source, time range and counts', () => {
   const out = html(R.RunsList, { runs: [
     { code: 'R3', title: 'Certificates batch', kind: 'synthetic', source: 'coding_agent', n_questions: 12, n_traced: 9, n_expected: 10, n_notes: 4,
       n_reviewed: 3, first_at: '2026-10-21T09:00:00Z', last_at: '2026-10-22T17:00:00Z' },
     { code: 'R2', title: 'ana@northbridge.example · 2026-10-21', kind: 'production', owner_email: 'ana@northbridge.example', run_day: '2026-10-21',
       source: 'sync', n_questions: 1, n_traced: 1, n_expected: 0, n_notes: 1, n_reviewed: 1 }], onOpen() {} });
   ['>R3<', 'Certificates batch', '>synthetic<', '>coding agent<', '12 questions · 9 with answers · 10 with expected · 4 notes · 3 reviewed', ' → ',
-    '>R2<', 'live · ana@northbridge.example · 21 Oct 2026', '>synced<', '1 question · 1 with answers · 0 with expected · 1 note · 1 reviewed']
+    '>R2<', 'Live questions · 2026-10-21', 'live · 21 Oct 2026', 'Asked by: ana@northbridge.example', '>synced<',
+    '1 question · 1 with answers · 0 with expected · 1 note · 1 reviewed']
     .forEach((t) => assert.ok(out.includes(t), t));
   assert.ok(html(R.RunsList, { runs: [], loading: false, curator: true }).includes('No runs yet'));
 });

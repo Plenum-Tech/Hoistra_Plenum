@@ -58,7 +58,7 @@ test('a sessions run and a live run open as conversations; a typed or imported r
 
 test('the conversation list: the Sessions table, one row per conversation, the way back, and a waiting row that cannot be opened', () => {
   const out = html(R.RunConversationsList, { run: LIVE_RUN, mode: 'live', sessions: [ROW], waiting: [WAITING], onOpen() {}, onBack() {} });
-  ['← All runs', '>R48<', 'aasim@x.test · 2026-11-13', '<th scope="col">Session</th>', '<th scope="col">Run tag</th>',
+  ['← All runs', '>R48<', 'Live questions · 2026-11-13', 'Asked by: aasim@x.test', '<th scope="col">Session</th>', '<th scope="col">Run tag</th>',
     '<th scope="col">Type</th>', '<th scope="col">Turns</th>', '<th scope="col">Status</th>', '<th scope="col">Started</th>',
     ROW.id, 'asked on hoistra-prod', '2 turns', 'Which vendors are blocked?', 'R48-3', 'Reading in…']
     .forEach((t) => assert.ok(out.includes(t), t));
@@ -173,7 +173,7 @@ test('a sessions run is a real run: its code, and counted from its sessions, on 
   assert.ok(!card.includes('0 questions'), 'not the questions it does not hold');
   const bar = html(L.RunPicker, { runs: [TAG_RUN, LIVE_RUN], run: null, onRun() {}, onSync() {} });
   assert.ok(bar.includes('R54 · Sessions · hussain_5q_v0 · 7 sessions'), bar);
-  assert.ok(bar.includes('R48 · aasim@x.test · 2026-11-13 · 3 questions'));
+  assert.ok(bar.includes('R48 · Live questions · 2026-11-13 · 3 questions'), 'a live day is titled by its day (19 Nov 2026)');
   assert.equal(R.runMode(TAG_RUN), 'sessions', 'it opens on its conversations');
 });
 

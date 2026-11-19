@@ -32,6 +32,14 @@ export function fmtDay(v) {
   return d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 }
 
+// A run's title as the pages name it. A live day is "Live questions · 2026-11-17" whatever its stored title is (19 Nov 2026,
+// Hussain: one run per day), so a day made of the old per-person runs is titled as the day too; any other run as it was made.
+export function runTitle(r) {
+  const x = r || {};
+  const day = x.kind === 'production' ? String(x.run_day || '').slice(0, 10) : '';
+  return day ? 'Live questions · ' + day : (x.title || '');
+}
+
 // "21 Oct 2026, 09:14 → 22 Oct 2026, 17:40", or "22 Oct 2026, 09:14 → 17:40" within one day.
 export function fmtRange(a, b) {
   const x = toDate(a);

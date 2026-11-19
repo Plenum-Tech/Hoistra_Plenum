@@ -18,7 +18,7 @@ import { fmtWhen, isCurator, plural } from './logic/format.js';
 import SessionPage from './SessionPage.jsx';
 import Compare from './Compare.jsx';
 import Scenarios from './Scenarios.jsx';
-import { LEVELS, LEVEL_TEXT, STATUS_OPTIONS, TYPE_OPTIONS, evaluateLevels, evaluateStep, evaluateText, ingestText, sessionQuery,
+import { LEVELS, LEVEL_TEXT, STATUS_OPTIONS, TYPE_OPTIONS, askersOf, evaluateLevels, evaluateStep, evaluateText, ingestText, sessionQuery,
   sessionRow } from './logic/sessions.js';
 import './runs.css';
 import './sessions.css';
@@ -149,9 +149,22 @@ export function SyncBar({ status, busy, said, error, onPush, onCheck }) {
   );
 }
 
+// Who asked a row of a live day, as its cell says it (19 Nov 2026): the email, and under it the company when the day
+// spans companies (`companies`, [{ id, name }], two or more) - the platform team's one run for the day.
+function AskedBy({ emails, orgId, companies }) {
+  const names = (companies || []).length > 1 ? (companies || []).filter((c) => c && c.id === orgId).map((c) => c.name || c.id) : [];
+  return (
+    <td>
+      {emails.length ? emails.map((e) => <div key={e}>{e}</div>) : '—'}
+      {names.length ? <div className="lab-small">{names[0]}</div> : null}
+    </td>
+  );
+}
+
 // The sessions as a table. `rows` null while reading. `waiting` (a run's questions whose conversation is not filed yet,
 // 14 Nov 2026) are rows that cannot be opened until a sync files them: the question, its code and "Reading in…".
-export function SessionsTable({ rows, runTag, onOpen, waiting, readingText }) {
+// `asker` (a live day, 19 Nov 2026) adds the "Asked by" column: the person who asked each row, and its company.
+export function SessionsTable({ rows, runTag, onOpen, waiting, readingText, asker, companies }) {
   if (rows == null) return <p className="lab-small" role="status">{readingText || 'Reading the sessions…'}</p>;
   const held = waiting || [];
   if (!rows.length && !held.length) {
@@ -166,7 +179,7 @@ export function SessionsTable({ rows, runTag, onOpen, waiting, readingText }) {
     <div className="lab-table-wrap lab-table-full">
       <table className="lab-table">
         <thead>
-          <tr><th scope="col">{'Session'}</th><th scope="col">{'Run tag'}</th><th scope="col">{'Type'}</th><th scope="col">{'Turns'}</th>
+          <tr><th scope="col">{'Session'}</th>{asker ? <th scope="col">{'Asked by'}</th> : null}<th scope="col">{'Run tag'}</th><th scope="col">{'Type'}</th><th scope="col">{'Turns'}</th>
             <th scope="col">{'Status'}</th>
             {SHOW_SCORES ? <><th scope="col">{'Logic'}</th><th scope="col">{'User experience'}</th><th scope="col">{'Domain'}</th></> : null}
             <th scope="col">{'Started'}</th></tr>
@@ -179,6 +192,7 @@ export function SessionsTable({ rows, runTag, onOpen, waiting, readingText }) {
                 <div className="lab-small lab-mono">{w.code}</div>
                 <div className="lab-small">{'Its conversation is filed by the next sync.'}</div>
               </td>
+              {asker ? <AskedBy emails={askersOf(w)} orgId={w.organization_id} companies={companies} /> : null}
               <td>{'—'}</td>
               <td>{'—'}</td>
               <td>{'—'}</td>
@@ -200,6 +214,7 @@ export function SessionsTable({ rows, runTag, onOpen, waiting, readingText }) {
                   {raw.stale ? <div className="lab-small">{'Expected outcome is out of date'}</div> : null}
                   {r.expectedFlagged ? <span className="lab-chip lab-ses-bad">{'Expected outcome flagged on ' + plural(r.expectedFlagged, 'turn', 'turns')}</span> : null}
                 </td>
+                {asker ? <AskedBy emails={r.askers} orgId={r.orgId} companies={companies} /> : null}
                 <td>{r.runTag ? <span className="lab-chip lab-chip-synth">{r.runTag}</span> : '—'}</td>
                 <td>{r.type}</td>
                 <td>{r.turns}</td>

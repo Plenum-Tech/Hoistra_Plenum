@@ -1,7 +1,7 @@
 // Runs — the review loop's runs (22 Oct 2026 feedback; laid out like the Cartwheel Trace Lab's "Scenario runs", in
 // Hoistra's look). Without a run: every run the person may see as a card (its code and title, synthetic or live with whose
 // questions and which day, where it came from, when its questions were asked, how far the review has got), a search, a
-// filter, "Sync now" (the chat's newer live answers become questions, one run per person per day) and, for curators
+// filter, "Sync now" (the chat's newer live answers become questions, one run per company per day) and, for curators
 // (company admins, the platform team, the consultant), an Excel / CSV import and a run typed on the page. With a run: its
 // questions on the left (code, question, role, expected answer, answers, notes) and the chosen question on the right
 // (QuestionPage.jsx).
@@ -11,10 +11,16 @@
 // table, and a row opens the session page (SessionPage.jsx): one page for scenario questions and live chat questions.
 // A live question whose conversation is not filed yet is a "Reading in…" row until a sync files it. A run typed on the
 // page or imported keeps its questions. The Read buttons and the Scenarios view are here too.
+//
+// A live day is one run (19 Nov 2026, Hussain: "on 17 nov i asked question through two accounts it should be stored in the
+// same run"; then "it should stay as one run only"). The service lists a day once - its first run's code, `codes` every run
+// it is made of and `people` who asked in it - so its card says "Asked by: …" and "Runs R60 + R61", the day's page has an
+// "Asked by" column and, for two or more people, a filter by person, and the top bar has one option for it.
 import React from 'react';
 import { labApi } from './labApi.js';
 import { errText } from './logic/labelling.js';
-import { ingestText } from './logic/sessions.js';
+import { runTitle } from './logic/format.js';
+import { filterByPerson, ingestText, peopleOf, personCounts } from './logic/sessions.js';
 import QuestionPage, { fmtDay, fmtRange, fmtWhen, isCurator, plural } from './QuestionPage.jsx';
 import SessionPage from './SessionPage.jsx';
 import Scenarios from './Scenarios.jsx';
@@ -28,6 +34,7 @@ const QUESTION_MAX = 4000;
 // Sessions in place of Synthetic (13 Nov 2026, Hussain): All shows every run; Sessions the runs the service makes from
 // a run tag's sessions ("Sessions · <tag>", runs.sync_sessions); Live the runs synced from what people ask by hand.
 export const KINDS = [['', 'All'], ['sessions', 'Sessions'], ['production', 'Live']];
+export { runTitle };
 export const SOURCE_TEXT = Object.freeze({ coding_agent: 'coding agent', excel: 'Excel', manual: 'manual', sync: 'synced' });
 
 // One run as its card says it.
@@ -35,19 +42,23 @@ export function runView(r) {
   const x = r || {};
   const live = x.kind === 'production';
   const n = (k) => Number(x[k]) || 0;
+  // Who asked in a live day, else (a list that sends no people) whose the one old run is; and the runs a day is made of.
+  const people = Array.isArray(x.people) && x.people.length ? x.people : (live && x.owner_email ? [x.owner_email] : []);
+  const codes = Array.isArray(x.codes) ? x.codes : [];
+  const who = { people, asked: live && people.length ? 'Asked by: ' + people.join(', ') : '', runsText: codes.length > 1 ? 'Runs ' + codes.join(' + ') : '' };
   // A run tag's run (a link's ?tag=, or a sessions run, 14 Nov 2026) is counted from its sessions, not the questions
   // linked to it: its turns may already be questions of live days, so it can hold none.
   const tagged = x.entry === 'tag' || (!!sessionsTagOf(x) && x.n_sessions != null);
   const sessionsCount = x.n_sessions == null ? '' : plural(n('n_sessions'), 'session', 'sessions') + ' · ' + plural(n('n_turns'), 'turn', 'turns');
   if (x.entry === 'tag') {
     return { key: 'tag:' + x.run_tag, code: '', title: x.title || 'Sessions · ' + (x.run_tag || ''), live: false, kindText: 'sessions',
-      source: SOURCE_TEXT.sync, range: fmtRange(x.first_at, x.last_at) || '', counts: sessionsCount };
+      source: SOURCE_TEXT.sync, range: fmtRange(x.first_at, x.last_at) || '', counts: sessionsCount, people: [], asked: '', runsText: '' };
   }
   return {
     key: x.code || 'run:' + x.run_no,
-    code: x.code || (x.run_no ? 'R' + x.run_no : '—'), title: x.title || '', live,
+    code: x.code || (x.run_no ? 'R' + x.run_no : '—'), title: runTitle(x), live, ...who,
     // A run made from a run tag's sessions is the one synthetic run the sync itself makes: say "sessions", not "synthetic".
-    kindText: live ? ['live', x.owner_email || 'unknown person', fmtDay(x.run_day)].filter(Boolean).join(' · ')
+    kindText: live ? ['live', fmtDay(x.run_day)].filter(Boolean).join(' · ')
       : (x.kind === 'synthetic' && x.source === 'sync' ? 'sessions' : 'synthetic'),
     source: SOURCE_TEXT[x.source] || x.source || '',
     range: fmtRange(x.first_at, x.last_at) || (x.created_at ? 'Created ' + fmtWhen(x.created_at) : ''),
@@ -121,7 +132,14 @@ export function runLabel(r) {
   const n = (k) => Number(x[k]) || 0;
   const what = sessionsTagOf(x) && x.n_sessions != null ? plural(n('n_sessions'), 'session', 'sessions')
     : plural(n('n_questions'), 'question', 'questions');
-  return x.code + ' · ' + x.title + ' · ' + what;
+  return x.code + ' · ' + runTitle(x) + ' · ' + what;
+}
+
+// The listed run a code belongs to (19 Nov 2026): the run itself, or the live day that code is one of the runs of (the
+// list has one entry per day, so R61 is found under R60). null when it is in none.
+export function runEntry(runs, code) {
+  const list = runs || [];
+  return list.find((r) => r && r.code === code) || list.find((r) => r && Array.isArray(r.codes) && r.codes.includes(code)) || null;
 }
 
 // The conversation a question of the run is a turn of, and that turn ({ id, turn }), or null when it is in none yet.
@@ -148,7 +166,7 @@ export function RunsList({ runs, onOpen, loading, error, filtered, curator }) {
         <div className="lab-empty">
           <h2>{filtered ? 'No runs match' : 'No runs yet'}</h2>
           <p className="lab-small">{filtered ? 'Try other words, or show all runs.'
-            : 'Sync now brings in the chat’s live questions, one run per person per day.'
+            : 'Sync now brings in the chat’s live questions, one run per day.'
               + (curator ? ' Import a file or start a new run for synthetic questions.' : '')}</p>
         </div>
       ) : null}
@@ -164,6 +182,8 @@ export function RunsList({ runs, onOpen, loading, error, filtered, curator }) {
                 <span className={'lab-chip ' + (r.live ? 'lab-chip-live' : 'lab-chip-synth')}>{r.kindText}</span>
                 {r.source ? <span className="lab-chip">{r.source}</span> : null}
               </span>
+              {r.asked ? <span className="lab-small lab-run-asked">{r.asked}</span> : null}
+              {r.runsText ? <span className="lab-small lab-run-codes">{r.runsText}</span> : null}
               {r.range ? <span className="lab-small">{r.range}</span> : null}
               <span className="lab-small lab-run-counts">{r.counts}</span>
             </button>
@@ -393,7 +413,7 @@ export function RunsHome({ me, onRun, startTab }) {
       <div className="lab-page-head lab-head-row">
         <div>
           <h1>{'Runs'}</h1>
-          <p className="lab-small lab-big">{'Sessions by run tag, and each person’s live questions by day. Open one to review its conversations.'}</p>
+          <p className="lab-small lab-big">{'Sessions by run tag, and the live questions of each day. Open one to review its conversations.'}</p>
         </div>
         <div className="lab-turns" role="tablist" aria-label="Runs views">
           {RUNS_TABS.map(([key, label]) => (
@@ -495,9 +515,18 @@ function RunDetail({ me, code, onRun, question, onQuestion, onOpenLoop, focus })
 
 // A sessions run's or a live day's conversations: the way back, the run's header, "Show every attempt" for a sessions
 // run, then the Sessions list's table, with the questions not filed yet as rows that cannot be opened.
-export function RunConversationsList({ run, code, mode, sessions, waiting, error, allAttempts, onAttempts, onOpen, onBack, more, onMore }) {
+// `person` / `onPerson`: a live day's filter by who asked (19 Nov 2026), drawn for two or more people; `companies` names
+// the companies of a day that spans them (the platform team's), for the Asked by column. The counts line follows the filter.
+export function RunConversationsList({ run, code, mode, sessions, waiting, error, allAttempts, onAttempts, onOpen, onBack, more, onMore,
+  person, onPerson, companies }) {
   const r = run ? runView(run) : null;
   const shown = r ? (r.code || r.title) : (code || 'this run');
+  const live = mode === 'live';
+  const people = live ? peopleOf(run, sessions, waiting) : [];
+  const picked = people.length > 1 && people.includes(person) ? person : '';
+  const view = filterByPerson(sessions, waiting, picked);
+  const rows = sessions == null ? null : view.sessions;
+  const pick = onPerson || (() => {});
   return (
     <section className="lab-ses-list" aria-label={'Conversations in ' + shown}>
       <div className="lab-runq-head">
@@ -509,8 +538,19 @@ export function RunConversationsList({ run, code, mode, sessions, waiting, error
             {r.source ? <span className="lab-chip">{r.source}</span> : null}
           </span>
         ) : null}
-        {r && r.counts ? <p className="lab-small">{r.counts}</p> : null}
+        {r && r.asked ? <p className="lab-small lab-run-asked">{r.asked}</p> : null}
+        {r && r.runsText ? <p className="lab-small lab-run-codes">{r.runsText}</p> : null}
+        {picked ? <p className="lab-small">{'Asked by ' + picked + ': ' + personCounts(view.sessions, view.waiting)}</p>
+          : r && r.counts ? <p className="lab-small">{r.counts}</p> : null}
       </div>
+      {people.length > 1 ? (
+        <div className="lab-seg lab-seg-people" role="radiogroup" aria-label="Asked by">
+          {[['', 'Everyone']].concat(people.map((e) => [e, e])).map(([k, t]) => (
+            <button key={k || 'all'} type="button" role="radio" aria-checked={picked === k ? 'true' : 'false'}
+              className={'lab-seg-btn' + (picked === k ? ' lab-on' : '')} onClick={() => pick(k)}>{t}</button>
+          ))}
+        </div>
+      ) : null}
       {mode === 'sessions' ? (
         <div className="lab-row">
           <label className="lab-ses-check">
@@ -519,8 +559,8 @@ export function RunConversationsList({ run, code, mode, sessions, waiting, error
         </div>
       ) : null}
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
-      <SessionsTable rows={error && sessions == null ? [] : sessions} waiting={waiting} onOpen={onOpen || (() => {})}
-        readingText="Reading the conversations…" />
+      <SessionsTable rows={error && sessions == null ? [] : rows} waiting={view.waiting} onOpen={onOpen || (() => {})}
+        readingText="Reading the conversations…" asker={live} companies={companies} />
       {more && sessions && sessions.length ? (
         <div className="lab-row lab-empty-actions">
           <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onMore}>{'Show older sessions'}</button>
@@ -532,6 +572,7 @@ export function RunConversationsList({ run, code, mode, sessions, waiting, error
 
 function RunConversations({ me, code, mode, run, session, onSession, question, onQuestion, focus, onBack, onOpenLoop, turnAt }) {
   const [allAttempts, setAllAttempts] = React.useState(false);
+  const [person, setPerson] = React.useState('');       // a live day's filter by who asked
   const [st, setSt] = React.useState({ data: null, error: '' });
   const ask = React.useRef(0);
   const load = React.useCallback(async (before) => {
@@ -556,7 +597,8 @@ function RunConversations({ me, code, mode, run, session, onSession, question, o
     if (onSession) onSession(named.id);
     if (onQuestion) onQuestion(null);
   }, [named && named.id, question]); // eslint-disable-line react-hooks/exhaustive-deps
-  const back = '← ' + code;
+  const d = st.data;
+  const back = '← ' + ((d && d.run && d.run.code) || code);
   if (session) {
     return (
       <div className="lab-page-body lab-runs-home">
@@ -574,13 +616,12 @@ function RunConversations({ me, code, mode, run, session, onSession, question, o
       </div>
     );
   }
-  const d = st.data;
   return (
     <div className="lab-page-body lab-runs-home">
       <RunConversationsList run={(d && d.run) || run} code={code} mode={(d && d.mode) || mode} sessions={d ? d.sessions || [] : null}
         waiting={(d && d.waiting) || []} error={st.error} allAttempts={allAttempts} onAttempts={setAllAttempts}
         onOpen={(id) => { setTurn(null); if (onSession) onSession(id); }} onBack={onBack}
-        more={d && d.next} onMore={() => load(d.next)} />
+        more={d && d.next} onMore={() => load(d.next)} person={person} onPerson={setPerson} companies={(d && d.companies) || []} />
     </div>
   );
 }
@@ -625,7 +666,7 @@ function TagConversations({ me, tag, session, onSession, onBack, onOpenLoop }) {
 // Which way a run opens, read from the runs already listed (`known`), else asked for once.
 function RunOpen(props) {
   const { code, known } = props;
-  const listed = (known || []).find((r) => r && r.code === code) || null;
+  const listed = runEntry(known, code);
   const [asked, setAsked] = React.useState({ run: null, error: '' });
   React.useEffect(() => {
     if (listed) return undefined;
