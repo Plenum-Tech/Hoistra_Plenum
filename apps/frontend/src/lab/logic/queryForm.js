@@ -114,10 +114,12 @@ export function periodsOf(map) {
   return all.filter((p) => !rollingOf(p.id) && !/[<>]/.test(p.id)).map((p) => ({ id: p.id, words: p.words || words(p.id) }));
 }
 
+// The map's words win (svc-trace-lab records_form.query_map says them: `words`, and `number_words` for a comparison on a
+// number column); ours are for a page with no map.
 export function opWords(map, id, kind) {
   if (id === 'not_null') return NOT_EMPTY_WORDS;
-  if (kind === 'number' && NUMBER_WORDS[id]) return NUMBER_WORDS[id];
   const given = list(map && map.ops).find((o) => o && o.id === id);
+  if (kind === 'number' && ((given && given.number_words) || NUMBER_WORDS[id])) return (given && given.number_words) || NUMBER_WORDS[id];
   return (given && given.words) || OP_WORDS[id] || words(id);
 }
 const allowedOps = (map, kind) => {

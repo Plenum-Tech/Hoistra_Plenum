@@ -31,10 +31,13 @@ MAX_PARTS = 20
 #: The most a plan may weigh as JSON: a plan is a few hundred bytes; one beyond this is not one a person wrote to read records.
 MAX_PLAN_BYTES = 60_000
 
-#: The conditions as the field offers them. The two "is before"-style ones read "less than" for a number.
-OP_WORDS = {"eq": "is", "ne": "is not", "in": "is one of", "not_in": "is not one of", "lt": "is before / less than",
-            "lte": "is on or before / at most", "gt": "is after / more than", "gte": "is on or after / at least",
-            "between": "is between", "within": "within a period", "contains": "contains", "is_null": "is empty"}
+#: The conditions in the words the editor uses: in its select and inside a sentence ("the expiry date is within the next
+#: 60 days"). The page (queryForm.js) reads them from query_map, so this is the one place they are written.
+OP_WORDS = {"eq": "is", "ne": "is not", "in": "is one of", "not_in": "is not one of", "lt": "is before",
+            "lte": "is on or before", "gt": "is after", "gte": "is on or after", "between": "is between",
+            "within": "is within", "contains": "contains", "is_null": "is empty"}
+#: The comparisons, for a column that holds a number ("the cost is less than 5").
+NUMBER_WORDS = {"lt": "is less than", "lte": "is at most", "gt": "is more than", "gte": "is at least"}
 _OP_ORDER = tuple(OP_WORDS)
 #: The same conditions inside a sentence about a change: by the kind of column, and "within" as it reads with a period.
 _SAY = {"eq": "is", "ne": "is not", "in": "is one of", "not_in": "is not one of", "between": "is between",
@@ -70,17 +73,19 @@ def _links(onto: Any, name: str) -> list[str]:
 
 
 def query_map(onto: Any) -> dict[str, Any]:
-    """What the query's fields offer, from Hoistra's map: every kind of record with its columns (and whether each is a
-    date, a number or text), its states with their descriptions, and the kinds of record it links to; the conditions
-    (id and words) and the periods a condition can name."""
+    """What the query's fields offer, from Hoistra's map: every kind of record (its name in plural words) with its columns
+    (and whether each is a date, a number or text), its states with their descriptions, and the kinds of record it links
+    to; the conditions (id, words, and for a comparison the words for a number) and the periods a condition can name."""
     types = getattr(onto, "col_types", None) or {}
     concepts = [{
-        "name": name, "words": ak._words(name, 1),
+        "name": name, "words": ak._words(name),         # plural, as the editor says it: "a count of floors"
         "attributes": [{"name": a, "kind": _kind(c, a, types)} for a in c.attributes],
         "states": [{"id": s, "description": str((v or {}).get("description") or "")[:240]} for s, v in (c.states or {}).items()],
         "links": _links(onto, name)} for name, c in onto.concepts.items()]
     ops = [o for o in _OP_ORDER if o in oq.OPS] + sorted(set(oq.OPS) - set(_OP_ORDER))
-    return {"concepts": concepts, "ops": [{"id": o, "words": OP_WORDS.get(o) or o.replace("_", " ")} for o in ops],
+    return {"concepts": concepts,
+            "ops": [{"id": o, "words": OP_WORDS.get(o) or o.replace("_", " "),
+                     **({"number_words": NUMBER_WORDS[o]} if o in NUMBER_WORDS else {})} for o in ops],
             "periods": list(oq.PERIODS)}
 
 

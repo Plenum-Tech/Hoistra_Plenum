@@ -403,3 +403,30 @@ test('the saved sentence is the changed query’s, and with several queries each
   assert.equal(one.evidence.queries[0].question, 'Q?');
   assert.deepEqual(Object.keys(one).sort(), ['evidence', 'expected']);
 });
+
+// ── The map as the service sends it (final review, 19 Nov 2026): a copy of svc-trace-lab records_form.query_map for the
+// map its tests build (test_trace_lab_records_form.py::test_the_maps_words_are_the_ones_the_editor_reads pins the same
+// words). Change both together. ─────────────────────────────────────────────────────────────────────────────────────
+const SERVICE_MAP = {"concepts": [{"name": "Building", "words": "buildings", "attributes": [{"name": "id", "kind": "text"}, {"name": "name", "kind": "text"}, {"name": "floors", "kind": "number"}, {"name": "created_at", "kind": "date"}], "states": [], "links": ["Floor", "ComplianceCertificate"]}, {"name": "Floor", "words": "floors", "attributes": [{"name": "id", "kind": "text"}, {"name": "name", "kind": "text"}, {"name": "building_id", "kind": "text"}, {"name": "area_m2", "kind": "number"}], "states": [], "links": ["Building", "ComplianceCertificate"]}, {"name": "ComplianceCertificate", "words": "compliance certificates", "attributes": [{"name": "id", "kind": "text"}, {"name": "cert_type", "kind": "text"}, {"name": "building_id", "kind": "text"}, {"name": "expiry_date", "kind": "date"}, {"name": "next_due_date", "kind": "date"}, {"name": "status", "kind": "text"}, {"name": "cost", "kind": "number"}], "states": [{"id": "lapsed", "description": "lapsed / expired"}, {"id": "expiring_soon", "description": "status = Expiring soon"}], "links": ["Building", "Floor"]}, {"name": "Vendor", "words": "vendors", "attributes": [{"name": "id", "kind": "text"}, {"name": "vendor_name", "kind": "text"}], "states": [], "links": []}], "ops": [{"id": "eq", "words": "is"}, {"id": "ne", "words": "is not"}, {"id": "in", "words": "is one of"}, {"id": "not_in", "words": "is not one of"}, {"id": "lt", "words": "is before", "number_words": "is less than"}, {"id": "lte", "words": "is on or before", "number_words": "is at most"}, {"id": "gt", "words": "is after", "number_words": "is more than"}, {"id": "gte", "words": "is on or after", "number_words": "is at least"}, {"id": "between", "words": "is between"}, {"id": "within", "words": "is within"}, {"id": "contains", "words": "contains"}, {"id": "is_null", "words": "is empty"}], "periods": ["today", "yesterday", "this_week", "last_week", "this_month", "last_month", "next_month", "this_quarter", "last_quarter", "this_year", "last_year", "last_7_days", "last_30_days", "last_90_days", "year_to_date"]};
+
+test('the map as the service sends it reads as plain sentences', () => {
+  assert.equal(Q.describePlan(R62, SERVICE_MAP), 'Hoistra looked for a count of floors, limited to buildings matching “ABC”.');
+  const certs = { question_type: 'list', aggregate: null, include: [],
+    focus: { concept: 'ComplianceCertificate', match: null, states: ['lapsed'], via: [], filters: [
+      { attribute: 'expiry_date', op: 'within', value: 'next_60_days' }, { attribute: 'cost', op: 'lt', value: 5 },
+      { attribute: 'next_due_date', op: 'lte', value: '2026-12-01' }] },
+    constraints: [{ concept: 'Building', match: 'Bishopsgate', via: [], states: [], filters: [] }] };
+  assert.equal(Q.describePlan(certs, SERVICE_MAP), 'Hoistra looked for a list of compliance certificates that are lapsed where the expiry date is '
+    + 'within the next 60 days and the cost is less than 5 and the next due date is on or before 2026-12-01, limited to buildings matching “Bishopsgate”.');
+  assert.equal(Q.conceptWords(SERVICE_MAP, 'ComplianceCertificate'), 'compliance certificates');
+  assert.equal(Q.opsFor(SERVICE_MAP, 'date').find((o) => o.id === 'within').words, 'is within');
+  assert.equal(Q.opsFor(SERVICE_MAP, 'number').find((o) => o.id === 'gte').words, 'is at least');
+  assert.equal(Q.opsFor(SERVICE_MAP, 'date').find((o) => o.id === 'gte').words, 'is on or after');
+});
+
+test('a comparison on a number column reads the number words the map gives', () => {
+  const map = { ops: [{ id: 'lt', words: 'is before', number_words: 'is under' }] };
+  assert.equal(Q.opWords(map, 'lt', 'number'), 'is under');
+  assert.equal(Q.opWords(map, 'lt', 'date'), 'is before');
+  assert.equal(Q.opWords(null, 'lt', 'number'), 'is less than', 'without a map, ours');
+});

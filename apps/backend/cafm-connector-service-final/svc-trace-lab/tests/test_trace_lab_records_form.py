@@ -71,8 +71,24 @@ def _concept_of(m, name):
 def test_the_map_lists_every_concept_with_its_words():
     m = rf.query_map(_onto())
     assert [c["name"] for c in m["concepts"]] == ["Building", "Floor", "ComplianceCertificate", "Vendor"]
-    assert [c["words"] for c in m["concepts"]] == ["building", "floor", "compliance certificate", "vendor"]
+    assert [c["words"] for c in m["concepts"]] == ["buildings", "floors", "compliance certificates", "vendors"]
     json.dumps(m)
+
+
+def test_the_maps_words_are_the_ones_the_editor_reads():
+    """The editor (apps/frontend/src/lab/logic/queryForm.js) reads a concept's `words` as its plural noun ("a count of
+    floors") and an op's `words` inside a sentence ("the expiry date is within the next 60 days"), and `number_words`
+    for a column that holds a number ("the cost is less than 5"). These are the exact words its tests feed it
+    (queryForm.test.mjs SERVICE_MAP, a copy of this map): change both together."""
+    m = rf.query_map(_onto())
+    assert [c["words"] for c in m["concepts"]] == ["buildings", "floors", "compliance certificates", "vendors"]
+    words = {o["id"]: o["words"] for o in m["ops"]}
+    assert {k: words[k] for k in rf.OP_WORDS} == {
+        "eq": "is", "ne": "is not", "in": "is one of", "not_in": "is not one of", "lt": "is before", "lte": "is on or before",
+        "gt": "is after", "gte": "is on or after", "between": "is between", "within": "is within", "contains": "contains",
+        "is_null": "is empty"}
+    assert {o["id"]: o["number_words"] for o in m["ops"] if "number_words" in o} == {
+        "lt": "is less than", "lte": "is at most", "gt": "is more than", "gte": "is at least"}
 
 
 def test_attributes_have_the_kind_the_maps_column_types_say():
@@ -117,7 +133,7 @@ def test_the_conditions_and_periods_are_hoistras_own():
     m = rf.query_map(_onto())
     assert {o["id"] for o in m["ops"]} == set(oq.OPS)
     assert all(o["words"] for o in m["ops"]) and next(o for o in m["ops"] if o["id"] == "is_null")["words"] == "is empty"
-    assert next(o for o in m["ops"] if o["id"] == "within")["words"] == "within a period"
+    assert next(o for o in m["ops"] if o["id"] == "within")["words"] == "is within"
     assert m["periods"] == list(oq.PERIODS)
 
 
