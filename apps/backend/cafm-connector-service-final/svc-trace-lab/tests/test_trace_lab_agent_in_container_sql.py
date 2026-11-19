@@ -23,7 +23,7 @@ NOW = datetime.now(timezone.utc).replace(microsecond=0)
 BEARER = "Bearer person-token"
 
 
-async def _turn(main, tid, *, uid, question, answer):
+async def _turn(main, tid, *, uid, question, answer, days_ago=0):
     async with main.begin() as conn:
         await conn.execute(text("""
             INSERT INTO plenum_cafm.agent_trace_turns
@@ -31,7 +31,8 @@ async def _turn(main, tid, *, uid, question, answer):
                  latency_ms, llm_calls, tool_calls, input_tokens, output_tokens, models, tools, ok)
             VALUES (:tid, 's-1', CAST(:org AS uuid), CAST(:uid AS uuid), 'ann@a.test', :q, :a, 'single:compliance',
                     :at, :at, 1000, 1, 0, 10, 10, CAST('["m"]' AS jsonb), CAST('[]' AS jsonb), true)"""),
-            {"tid": tid, "org": ORG, "uid": uid, "q": question, "a": answer, "at": NOW - timedelta(hours=1)})
+            {"tid": tid, "org": ORG, "uid": uid, "q": question, "a": answer,
+             "at": NOW - timedelta(hours=1, days=days_ago)})
 
 
 class FakeStore:
@@ -205,7 +206,9 @@ async def test_the_agent_reads_only_the_notes_of_the_run_a_person_chose(main_scr
     """5 Nov 2026: asked about a new question, the agent also read older notes on other runs and proposed a mode from
     one of them. It now reads the run the person has open, and says which."""
     await _turn(main_scratch, "turn-a", uid=str(uuid.uuid4()), question="Which certificates expire soon?", answer="Six.")
-    await _turn(main_scratch, "turn-b", uid=str(uuid.uuid4()), question="When is the next LOLER due?", answer="None.")
+    # Another day, so another run: one live run per company per day (19 Nov 2026).
+    await _turn(main_scratch, "turn-b", uid=str(uuid.uuid4()), question="When is the next LOLER due?", answer="None.",
+                days_ago=2)
     await runs.sync_live(None)
     boss = await labelling.access(principal(None, "superadmin", email="boss@plenum.test"), None, all_companies_ok=True)
     codes = {r["code"]: r for r in (await runs.list_runs(boss))["runs"]}

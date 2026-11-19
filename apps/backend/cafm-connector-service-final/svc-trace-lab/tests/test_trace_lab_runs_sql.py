@@ -1,5 +1,6 @@
-"""Runs on a throwaway Postgres (22 Oct 2026): live answers become one run per person per company per day with serial
-codes; a company sees only its own runs and the platform team and a consultant see every company's; a question shows its
+"""Runs on a throwaway Postgres (22 Oct 2026): live answers become one run per company per day (19 Nov 2026; before it,
+per person) with serial codes, shown as one run per day to the platform team (tests/test_trace_lab_day_runs_sql.py);
+a company sees only its own runs and the platform team and a consultant see every company's; a question shows its
 answer, its expected answer (versions) and free-text notes with no Right / Wrong tag; an import adds expected answers by
 question code or a new synthetic run; failure modes are the labels view's columns and two people's different cells both
 show; progress counts it all. Skips without TRACE_LAB_TEST_DB_URL."""
@@ -50,7 +51,7 @@ async def _users(main, *people):
 async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_scratch):  # noqa: F811
     u1, u2, u3 = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
     await _turn(main_scratch, "turn-a1", org=ORG_A, uid=u1, email="ann@a.test", at=DAY1, question="Which vendors are blocked?")
-    await _turn(main_scratch, "turn-b1", org=ORG_A, uid=u2, email="bob@a.test", at=DAY1 + timedelta(minutes=30),
+    await _turn(main_scratch, "turn-b1", org=ORG_A, uid=u2, email="bob@a.test", at=DAY1 + timedelta(hours=3),
                 question="How many work orders?")
     await _turn(main_scratch, "turn-c1", org=ORG_B, uid=u3, email="cat@b.test", at=DAY1 + timedelta(hours=1),
                 question="What EPC rating?")
@@ -67,26 +68,31 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
         await labelling.access(boss_p, None)                     # older routes still need a company named
 
     first = await runs.sync_production(boss)
-    assert (first["new_runs"], first["new_questions"]) == (4, 5), first
+    assert (first["new_runs"], first["new_questions"]) == (3, 5), first     # one run per company per day
     assert (await runs.sync_production(boss))["new_questions"] == 0, "a second sync numbers nothing twice"
 
     every = await runs.list_runs(boss)
-    assert every["total"] == 4
+    assert every["total"] == 2, "the platform team sees one run for a day, whatever the company"
     by_code = {r["code"]: r for r in every["runs"]}
-    assert by_code["R1"]["owner_email"] == "ann@a.test" and by_code["R1"]["n_questions"] == 2
-    assert by_code["R1"]["kind"] == "production" and by_code["R4"]["run_day"] == DAY2.date().isoformat()
-    assert by_code["R3"]["organization_id"] == ORG_B
+    assert set(by_code) == {"R1", "R3"}
+    assert (by_code["R1"]["codes"], by_code["R1"]["n_questions"], by_code["R1"]["people"]) == (
+        ["R1", "R2"], 4, ["ann@a.test", "bob@a.test", "cat@b.test"])
+    assert by_code["R1"]["kind"] == "production" and by_code["R3"]["run_day"] == DAY2.date().isoformat()
+    assert by_code["R1"]["title"] == f"Live questions · {DAY1.date()}" and by_code["R1"]["owner_email"] is None
     qs = await runs.list_questions(boss, "R1")
-    # A day of live questions lists its newest first (3 Nov 2026); the codes keep the order they were asked in.
+    # A day of live questions lists its newest first (3 Nov 2026); the codes keep the order they were asked in, each
+    # naming the run (the company's day) it is filed in.
     assert [(q["code"], q["question"], q["turn_ids"]) for q in qs["questions"]] == [
-        ("R1-2", "And which are lapsed?", ["turn-a2"]), ("R1-1", "Which vendors are blocked?", ["turn-a1"])]
+        ("R1-3", "How many work orders?", ["turn-b1"]), ("R1-2", "And which are lapsed?", ["turn-a2"]),
+        ("R2-1", "What EPC rating?", ["turn-c1"]), ("R1-1", "Which vendors are blocked?", ["turn-a1"])]
 
     admin = await labelling.access(principal(ORG_A, "admin", email="adm@a.test"), None, all_companies_ok=True)
-    assert {r["code"] for r in (await runs.list_runs(admin))["runs"]} == {"R1", "R2", "R4"}
+    assert {r["code"] for r in (await runs.list_runs(admin))["runs"]} == {"R1", "R3"}
+    assert [q["code"] for q in (await runs.list_questions(admin, "R1"))["questions"]] == ["R1-3", "R1-2", "R1-1"]
     with pytest.raises(NotFound):
-        await runs.get_run(admin, "R3")                          # another company's run stays unseen
+        await runs.get_run(admin, "R2")                          # another company's run stays unseen
     with pytest.raises(NotFound):
-        await runs.get_question(admin, "R3-1")
+        await runs.get_question(admin, "R2-1")
 
     page = await runs.get_question(boss, "R1-2")
     assert page["question"]["code"] == "R1-2" and page["active"]["turn_id"] == "turn-a2"
@@ -116,31 +122,31 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
     made = await runs.import_file(boss, "support batch.csv",
                                   b"Question,Role,Intent,Expected answer,Follow-ups\n"
                                   b"What is the status of my order 3722?,shopper,order status,Report placed,Double-check\n")
-    assert (made["run"], made["questions_added"], made["expected_added"]) == ("R5", 1, 1)
-    r5 = await runs.list_questions(boss, "R5")
-    assert r5["run"]["kind"] == "synthetic" and r5["run"]["title"] == "support batch"
-    assert r5["questions"][0]["followups"] == ["Double-check"] and r5["questions"][0]["has_expected"]
-    assert "R5" not in {r["code"] for r in (await runs.list_runs(admin))["runs"]}, "a platform-wide batch is not a company's"
+    assert (made["run"], made["questions_added"], made["expected_added"]) == ("R4", 1, 1)
+    r4 = await runs.list_questions(boss, "R4")
+    assert r4["run"]["kind"] == "synthetic" and r4["run"]["title"] == "support batch"
+    assert r4["questions"][0]["followups"] == ["Double-check"] and r4["questions"][0]["has_expected"]
+    assert "R4" not in {r["code"] for r in (await runs.list_runs(admin))["runs"]}, "a platform-wide batch is not a company's"
     tester = labelling.Member(admin.principal, ORG_A, admin.user_id, None, "tester", "active", False)
     with pytest.raises(Forbidden):
         await runs.import_file(tester, "x.csv", b"Question\nHi\n")
-    picks = await runs.answer_candidates(boss, "R5-1")             # a platform-wide question: every company, newest first
+    picks = await runs.answer_candidates(boss, "R4-1")             # a platform-wide question: every company, newest first
     assert {c["turn_id"] for c in picks["candidates"]} == {"turn-a1", "turn-b1", "turn-c1", "turn-a2", "turn-a3"}, "golden left out"
-    assert [c["turn_id"] for c in (await runs.answer_candidates(boss, "R5-1", q="epc"))["candidates"]] == ["turn-c1"]
-    assert [c["turn_id"] for c in (await runs.answer_candidates(boss, "R5-1", q="turn-a2"))["candidates"]] == ["turn-a2"]
-    assert (await runs.answer_candidates(boss, "R5-1", q="100%_"))["candidates"] == [], "% and _ are literal"
+    assert [c["turn_id"] for c in (await runs.answer_candidates(boss, "R4-1", q="epc"))["candidates"]] == ["turn-c1"]
+    assert [c["turn_id"] for c in (await runs.answer_candidates(boss, "R4-1", q="turn-a2"))["candidates"]] == ["turn-a2"]
+    assert (await runs.answer_candidates(boss, "R4-1", q="100%_"))["candidates"] == [], "% and _ are literal"
     own = (await runs.answer_candidates(admin, "R1-2"))["candidates"]
     assert own and all(c["organization_id"] == ORG_A for c in own), "a company admin sees only the company's answers"
     assert "turn-a2" not in {c["turn_id"] for c in own}, "the answer R1-2 already has is left out"
     await _turn(main_scratch, "turn-same", org=ORG_B, uid=u3, email="cat@b.test", at=DAY1 - timedelta(hours=5),
                 question="what is the status of my order 3722? ")
-    first = (await runs.answer_candidates(boss, "R5-1"))["candidates"][0]
+    first = (await runs.answer_candidates(boss, "R4-1"))["candidates"][0]
     assert (first["turn_id"], first["same"]) == ("turn-same", True), "the same question, word for word, comes first"
     with pytest.raises(Forbidden):
         await runs.answer_candidates(tester, "R1-1")
-    linked = await runs.link_trace(boss, "R5-1", "turn-c1")
+    linked = await runs.link_trace(boss, "R4-1", "turn-c1")
     assert linked["active"]["turn_id"] == "turn-c1" and linked["active"]["organization_id"] == ORG_B
-    assert "turn-c1" not in {c["turn_id"] for c in (await runs.answer_candidates(boss, "R5-1"))["candidates"]}
+    assert "turn-c1" not in {c["turn_id"] for c in (await runs.answer_candidates(boss, "R4-1"))["candidates"]}
 
     consultant_p = principal(ORG_A, "user", email="consult@plenum.test")
     await _users(main_scratch, (consultant_p, ORG_A))
@@ -148,7 +154,7 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
     assert (given["role"], given["status"], given["email"]) == ("consultant", "active", "consult@plenum.test")
     consultant = await labelling.access(consultant_p, None, all_companies_ok=True)
     assert (consultant.role, consultant.all_companies, consultant.manages) == ("consultant", True, False)
-    assert (await runs.list_runs(consultant))["total"] == 5
+    assert (await runs.list_runs(consultant))["total"] == 3     # the two days and the batch
     with pytest.raises(HTTPException):
         await labelling.list_members(consultant)                 # sees everything, manages nobody
 
@@ -168,7 +174,7 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
     await runs.set_cell(boss, "R1-1", mode=mode["lineage_id"], value="positive")
     await runs.set_cell(admin, "R1-1", mode=mode["lineage_id"], value="negative")
     with pytest.raises(NotFound):
-        await runs.set_cell(admin, "R3-1", mode=mode["lineage_id"], value="negative")
+        await runs.set_cell(admin, "R2-1", mode=mode["lineage_id"], value="negative")
     with pytest.raises(Invalid):
         await runs.set_cell(admin, "R1-1", mode=mode["lineage_id"], value="maybe")
     grid = await runs.matrix(admin, "R1")
@@ -181,8 +187,8 @@ async def test_runs_from_live_answers_to_labels_and_progress(main_scratch, lab_s
     assert [c["value"] for c in grid["cells"][next(q["id"] for q in grid["questions"] if q["code"] == "R1-1")][mode["lineage_id"]]] == ["negative"]
 
     prog = await runs.progress(boss, "R1")
-    assert prog["tiles"] == {"questions": 2, "reviewed": 2, "traced": 2, "modes": 1, "cells_filled": 1, "cells_total": 2,
-                             "notes": 2}
+    assert prog["tiles"] == {"questions": 4, "reviewed": 2, "traced": 4, "modes": 1, "cells_filled": 1, "cells_total": 4,
+                             "notes": 2}, "the day across companies"
     card = prog["modes"][0]
     assert (card["positives"], card["negatives"]) == (0, 1) and card["trend"][-1] == {"run": "R1", "positives": 0}
 

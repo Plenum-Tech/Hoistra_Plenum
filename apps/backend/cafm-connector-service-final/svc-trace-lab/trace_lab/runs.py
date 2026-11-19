@@ -1,7 +1,8 @@
 """Runs above questions (22 Oct 2026, migration 0011): the review loop the domain experts work in.
 
 * A run is one synthetic batch (written by the consultant's coding agent straight into the database, imported from Excel,
-  or typed on the page) or one person's live questions on one day ("Sync now" builds those from the chat's records).
+  or typed on the page) or one company's live questions on one day, whoever asked (19 Nov 2026; before it, one person's;
+  "Sync now" builds those from the chat's records) - shown as one run per day, see the day groups below.
   Runs have serial codes R1, R2 ... and their questions R1-1, R1-2 ...; the coding agent maps expected answers and labels
   back by those codes (tracelab.question_id('R3-12') in SQL).
 * A question shows its expected answer (the newest version), the recorded answers that belong to it (live: the one it was
@@ -64,6 +65,10 @@ CURRENT_EXPECTED_WHERE = ("(e.source <> 'coding_agent' OR EXISTS (SELECT 1 FROM 
 USERS = labelling.USERS
 SOURCES = ("coding_agent", "excel", "manual")
 NONE_ORG = "00000000-0000-0000-0000-000000000000"
+#: The owner of a company's live day run (19 Nov 2026, Hussain): the run holds what everyone of the company asked that
+#: day, so no person owns it. A production run must have an owner (ck_tl_lab_runs_production) and the table is
+#: append-only, so the nil uuid stands for "the company": the unique index (owner, company, day) then keeps it one run.
+COMPANY_OWNER = "00000000-0000-0000-0000-000000000000"
 #: The run tag the chat's own conversations are filed under (eval_store.CHAT_TAG): never a run of batches.
 CHAT_TAG = "chat"
 log = structlog.get_logger(__name__)
@@ -136,7 +141,7 @@ def require_taxonomist(m: labelling.Member) -> None:
 # ── runs ───────────────────────────────────────────────────────────────────────────────────────
 
 _RUN_COLS = ("r.id::text AS id, r.run_no, r.kind, r.title, r.organization_id::text AS organization_id, r.owner_email, "
-             "r.run_day, r.source, r.created_by_email, r.created_at")
+             "r.owner_user_id::text AS owner_user_id, r.run_day, r.source, r.created_by_email, r.created_at")
 
 #: A question that is a turn of a scenario session (session id scn__<tag>__<scenario>__<n>, asked by the Codex agent).
 #: Scenario turns asked before 13 Nov 2026 were made questions of the asker's live day, and a turn is a synced question
@@ -153,28 +158,142 @@ _SESSIONS_PREFIX = "Sessions · "
 IS_SESSIONS_RUN = (f"(r.kind = 'synthetic' AND r.source = 'sync' AND left(r.title, {len(_SESSIONS_PREFIX)}) = "
                    f"'{_SESSIONS_PREFIX}')")
 
-_RUN_STATS = """
-    (SELECT count(*) FROM tracelab.lab_questions q WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS n_questions,
+
+def _stats_sql(runs: str = "= r.id") -> str:
+    """The counts a run's card shows, over the questions of the runs `runs` names (a condition on q.run_id): the run
+    itself, or every run of its live day (_group_ids)."""
+    return ("""
+    (SELECT count(*) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS n_questions,
     (SELECT count(DISTINCT t.question_id) FROM tracelab.lab_question_traces t
-       JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS n_traced,
+       JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS n_traced,
     (SELECT count(DISTINCT e.question_id) FROM tracelab.lab_expected_answers e
-       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id = r.id AND """ + KEPT_Q + """ AND """ + CURRENT_EXPECTED_WHERE + """) AS n_expected,
+       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id {runs} AND """ + KEPT_Q + """ AND """ + CURRENT_EXPECTED_WHERE + """) AS n_expected,
     (SELECT count(*) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
-      WHERE q.run_id = r.id AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
+      WHERE q.run_id {runs} AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
     (SELECT count(DISTINCT q.id) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
-      WHERE q.run_id = r.id AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_reviewed,
-    (SELECT min(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS first_at,
-    (SELECT max(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id = r.id AND """ + KEPT_Q + """) AS last_at"""
+      WHERE q.run_id {runs} AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_reviewed,
+    (SELECT min(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS first_at,
+    (SELECT max(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS last_at""").replace("{runs}", runs)
+
+
+_RUN_STATS = _stats_sql()
 
 #: The order of every run list (14 Nov 2026, Hussain): the latest question asked, newest first, whatever the kind - a
 #: sessions run's batch by its sessions' last asked time (bl, from _batches), any other run by its last question's
 #: asked_at; when it was made only when nothing was asked in it. The top-bar picker and the Runs page share it.
-RUN_ORDER = ("coalesce(bl.last_at, (SELECT max(q.asked_at) FROM tracelab.lab_questions q"
-             f" WHERE q.run_id = r.id AND {KEPT_Q}), r.created_at)")
+def _run_order(runs: str = "= r.id") -> str:
+    return ("coalesce(bl.last_at, (SELECT max(q.asked_at) FROM tracelab.lab_questions q"
+            f" WHERE q.run_id {runs} AND {KEPT_Q}), r.created_at)")
+
+
+RUN_ORDER = _run_order()
 _BATCH_JOIN = ("LEFT JOIN unnest(CAST(:b_ids AS uuid[]), CAST(:b_last AS timestamptz[])) AS bl(id, last_at)"
                " ON bl.id = r.id")
+
+
+# ── a live day is one run (19 Nov 2026) ─────────────────────────────────────────────────────────
+#
+# Hussain: "on 17 nov i asked question through two accounts it should be stored in the same run", then "it should stay
+# as one run only". sync_live now files a company's day in one run; the per-person runs made before stay (the tables are
+# append-only) and are SHOWN merged. A "day group" is every production run of one UTC day among the runs the caller may
+# see: a company member's are their own company's (their scope is one company), the platform team's are every company's
+# (or one company's when the list is narrowed to it). The group is listed and opened as ONE run, its representative:
+# for one company's runs the company's day run if it has one, else the lowest run number; for every company's, the
+# lowest run number of the day. The groups are never stored; a company's runs never include another company's for a
+# company member, because the scope the group is read in is the caller's.
+
+def _narrow(m: labelling.Member, company: str | None = None) -> bool:
+    """Whether what the caller sees is one company's runs: a company member, or the platform team narrowed to one."""
+    return not m.all_companies or bool(_uuid_or_none(company))
+
+
+def _day_scope(m: labelling.Member, company: str | None, inner: str) -> tuple[str, dict[str, Any]]:
+    """A condition on run `inner`: it is a production run of the day of run `r`, among the runs the caller may see."""
+    scope, p = _scope(m, inner, company)
+    return f"{inner}.kind = 'production' AND {inner}.run_day = r.run_day AND {scope}", p
+
+
+def _group_ids(m: labelling.Member, company: str | None = None) -> tuple[str, dict[str, Any]]:
+    """A sub-select of the ids of the runs run `r` is shown as: itself, and for a production run every run of its day."""
+    day, p = _day_scope(m, company, "gm")
+    return f"SELECT gm.id FROM tracelab.lab_runs gm WHERE gm.id = r.id OR (r.kind = 'production' AND {day})", p
+
+
+def _is_rep(m: labelling.Member, company: str | None = None) -> tuple[str, dict[str, Any]]:
+    """A condition: run `r` is what its day is listed as (any run that is no production run is its own)."""
+    day, p = _day_scope(m, company, "g")
+    co = "CAST(:co AS uuid)"
+    if _narrow(m, company):
+        before = (f"(g.owner_user_id = {co} AND r.owner_user_id <> {co}) OR "
+                  f"((g.owner_user_id = {co}) = (r.owner_user_id = {co}) AND g.run_no < r.run_no)")
+    else:
+        before = "g.run_no < r.run_no"
+    return (f"(r.kind <> 'production' OR NOT EXISTS (SELECT 1 FROM tracelab.lab_runs g WHERE {day} AND g.id <> r.id "
+            f"AND ({before})))", {**p, "co": COMPANY_OWNER})
+
+
+async def with_group(conn: Any, m: labelling.Member, rows: Any, company: str | None = None) -> list[dict[str, Any]]:
+    """Runs as _RUN_COLS reads them (each a day's representative or a run on its own), each with what it stands for:
+    run_ids and codes (every run of its day the caller may see, lowest number first), people (who asked: the emails of
+    the questions' askers, else the owner of the run they are in), organization_ids and people_by_company (who asked
+    in each of them). Read only."""
+    out = [dict(r) for r in rows]
+    if not out:
+        return out
+    ids = [r["id"] for r in out]
+    day, p = _day_scope(m, company, "g")
+    members = (await conn.execute(text(
+        "SELECT r.id::text AS rep, g.id::text AS gid, g.run_no, g.organization_id::text AS org FROM tracelab.lab_runs r "
+        f"JOIN tracelab.lab_runs g ON (g.id = r.id OR (r.kind = 'production' AND {day})) "
+        "WHERE r.id = ANY(CAST(:ids AS uuid[])) ORDER BY r.id, g.run_no"), {**p, "ids": ids})).mappings().all()
+    asked = (await conn.execute(text(
+        "SELECT DISTINCT r.id::text AS rep, g.organization_id::text AS org, coalesce(q.created_by_email, "
+        "CASE WHEN g.owner_user_id <> CAST(:co AS uuid) THEN g.owner_email END) AS email "
+        "FROM tracelab.lab_runs r JOIN tracelab.lab_runs g ON "
+        f"{day} JOIN tracelab.lab_questions q ON q.run_id = g.id WHERE r.id = ANY(CAST(:ids AS uuid[])) "
+        f"AND r.kind = 'production' AND NOT {SCENARIO_Q}"), {**p, "ids": ids, "co": COMPANY_OWNER})).mappings().all()
+    by: dict[str, dict[str, Any]] = {}
+    for x in members:
+        got = by.setdefault(x["rep"], {"run_ids": [], "codes": [], "organization_ids": []})
+        got["run_ids"].append(x["gid"])
+        got["codes"].append(run_code(x["run_no"]))
+        if x["org"] and x["org"] not in got["organization_ids"]:
+            got["organization_ids"].append(x["org"])
+    people: dict[str, set[str]] = {}
+    by_org: dict[str, dict[str, set[str]]] = {}
+    for x in asked:
+        if x["email"]:
+            people.setdefault(x["rep"], set()).add(x["email"])
+            if x["org"]:
+                by_org.setdefault(x["rep"], {}).setdefault(x["org"], set()).add(x["email"])
+
+    def ordered(emails: Any) -> list[str]:
+        return sorted(emails, key=lambda e: (e.lower(), e))
+
+    for r in out:
+        got = by.get(r["id"]) or {"run_ids": [r["id"]], "codes": [run_code(r["run_no"])],
+                                  "organization_ids": [r["organization_id"]] if r.get("organization_id") else []}
+        r.update(got, people=ordered(people.get(r["id"], ())),
+                 people_by_company={o: ordered(es) for o, es in by_org.get(r["id"], {}).items()})
+    return out
+
+
+async def group_row(conn: Any, m: labelling.Member, code: str) -> dict[str, Any]:
+    """The run a code opens, as its day shows it: any code of a live day gives the day's representative with the
+    counts, people and codes of every run of the day the caller may see (with_group). A run that is no live day is
+    itself. A question code is no run code: it still opens its own question (_question_row)."""
+    run = await _run_row(conn, m, code)
+    if run["kind"] != "production" or run.get("run_day") is None:
+        return (await with_group(conn, m, [run]))[0]
+    where, p = _scope(m, "r")
+    ids, ip = _group_ids(m)
+    rep, rp = _is_rep(m)
+    row = (await conn.execute(text(
+        f"SELECT {_RUN_COLS}, {_stats_sql(f'IN ({ids})')} FROM tracelab.lab_runs r WHERE r.kind = 'production' "
+        f"AND r.run_day = :day AND {where} AND {rep}"), {**p, **ip, **rp, "day": run["run_day"]})).mappings().first()
+    return (await with_group(conn, m, [row or run]))[0]
 
 
 def run_out(r: Any, batch: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -188,6 +307,12 @@ def run_out(r: Any, batch: dict[str, Any] | None = None) -> dict[str, Any]:
     for k in ("first_at", "last_at"):
         if k in r:
             out[k] = _iso(r[k])
+    # A live day (19 Nov 2026): the runs it is made of, who asked in it and which companies (with_group).
+    for k in ("run_ids", "codes", "people", "organization_ids"):
+        if k in r:
+            out[k] = list(r[k])
+    if "people_by_company" in r:
+        out["people_by_company"] = {o: list(es) for o, es in r["people_by_company"].items()}
     # A sessions run (a batch of a run tag) is counted from its batch's sessions, and was asked when they were.
     out["run_tag"] = batch["run_tag"] if batch else None
     if batch:
@@ -199,12 +324,22 @@ def run_out(r: Any, batch: dict[str, Any] | None = None) -> dict[str, Any]:
 async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | None = None, company: str | None = None,
                     limit: int = 100, offset: int = 0, for_page: bool = False) -> dict[str, Any]:
     """The runs the caller may see, newest activity first. `for_page` is the Runs page's list (14 Nov 2026): it leaves
-    out a live day that holds only scenario questions. Without it every run is listed (the top-bar picker, Labels)."""
+    out a live day that holds only scenario questions. Without it every run is listed (the top-bar picker, Labels).
+
+    A live day is ONE entry (19 Nov 2026, Hussain): the representative of every production run of that day the caller
+    may see, with the questions, answers and notes of all of them counted, `codes` (their run codes), `run_ids` and
+    `people` (who asked). See the day groups above; a company member's are their own company's runs only."""
     labelling.require_active(m)
     where, p = _scope(m, "r", company)
+    ids, ip = _group_ids(m, company)
+    rep, rp = _is_rep(m, company)
+    p.update(ip)
+    p.update(rp)
+    runs_in = f"IN ({ids})"
+    where += f" AND {rep}"
     if for_page:
         where += (" AND (r.kind <> 'production' OR EXISTS (SELECT 1 FROM tracelab.lab_questions q"
-                  f" WHERE q.run_id = r.id AND {KEPT_Q}))")
+                  f" WHERE q.run_id {runs_in} AND {KEPT_Q}))")
     if kind == SESSIONS_KIND:
         # The runs made from a run tag's sessions (sync_sessions): the only synthetic runs the sync itself makes.
         where += " AND r.kind = 'synthetic' AND r.source = 'sync'"
@@ -214,7 +349,11 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
         where += " AND r.kind = :kind"
         p["kind"] = kind
     if q:
-        where += " AND (r.title ILIKE :q OR coalesce(r.owner_email, '') ILIKE :q OR ('R' || r.run_no) ILIKE :q)"
+        # A live day matches by any of its runs: their titles, owners and codes, and the people who asked in them.
+        words = "(x.title ILIKE :q OR coalesce(x.owner_email, '') ILIKE :q OR ('R' || x.run_no) ILIKE :q)"
+        where += (f" AND ({words.replace('x.', 'r.')} OR (r.kind = 'production' AND EXISTS (SELECT 1 FROM tracelab.lab_runs x"
+                  f" WHERE x.id {runs_in} AND ({words} OR EXISTS (SELECT 1 FROM tracelab.lab_questions qx"
+                  " WHERE qx.run_id = x.id AND qx.created_by_email ILIKE :q)))))")
         p["q"] = conversations._like(q.strip())
     limit, offset = max(1, min(int(limit), LIST_MAX)), max(0, int(offset))
     scope, sp = _scope(m, "r", company)
@@ -222,9 +361,10 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
         batches = await _batches(conn, scope, sp)
         total = (await conn.execute(text(f"SELECT count(*) FROM tracelab.lab_runs r WHERE {where}"), p)).scalar_one()
         rows = (await conn.execute(text(
-            f"SELECT {_RUN_COLS}, {_RUN_STATS} FROM tracelab.lab_runs r {_BATCH_JOIN} WHERE {where} "
-            f"ORDER BY {RUN_ORDER} DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
+            f"SELECT {_RUN_COLS}, {_stats_sql(runs_in)} FROM tracelab.lab_runs r {_BATCH_JOIN} WHERE {where} "
+            f"ORDER BY {_run_order(runs_in)} DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
             {**p, **_batch_order(batches), "lim": limit, "off": offset})).mappings().all()
+        rows = await with_group(conn, m, rows, company)
     return {"total": int(total), "runs": [run_out(r, batches.get(r["id"])) for r in rows]}
 
 
@@ -358,7 +498,7 @@ async def _run_row(conn: Any, m: labelling.Member, code: str) -> Any:
 async def get_run(m: labelling.Member, code: str) -> dict[str, Any]:
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
-        row = await _run_row(conn, m, code)
+        row = await group_row(conn, m, code)
         return run_out(row, await batch_of(conn, row))
 
 
@@ -391,7 +531,11 @@ async def _insert_run(conn: Any, m: labelling.Member | None, *, kind: str, title
 
 
 async def _insert_question(conn: Any, m: labelling.Member | None, *, run_id: str, seq: int, row: dict[str, Any],
-                           org: str | None, source: str, asked_at: datetime | None = None) -> str:
+                           org: str | None, source: str, asked_at: datetime | None = None,
+                           asker: tuple[str | None, str | None] | None = None) -> str:
+    """`asker` (user id, email) is who asked a question the sync makes of a live answer (19 Nov 2026): a company's day
+    holds every asker's questions, so the question itself says who asked, as the person who made it."""
+    by, by_email = (m.user_id, m.email) if m else (asker or (None, None))
     qid = (await conn.execute(text(
         "INSERT INTO tracelab.lab_questions (run_id, seq_no, question, followups, role, intent, scenario_ref, "
         "organization_id, asked_at, source, created_by, created_by_email) VALUES (CAST(:run AS uuid), :seq, :q, "
@@ -399,8 +543,7 @@ async def _insert_question(conn: Any, m: labelling.Member | None, *, run_id: str
         ":by_email) RETURNING id::text"),
         {"run": run_id, "seq": seq, "q": row["question"], "followups": json.dumps(row["followups"]) if row.get("followups")
          else None, "role": row.get("role"), "intent": row.get("intent"), "ref": row.get("scenario_ref"), "org": org,
-         "asked": asked_at, "source": source, "by": m.user_id if m else None,
-         "by_email": m.email if m else None})).scalar_one()
+         "asked": asked_at, "source": source, "by": by, "by_email": by_email})).scalar_one()
     if row.get("expected"):
         await _insert_expected(conn, m, question_id=qid, expected=row["expected"], expected_id=row.get("expected_id"),
                                evidence=row.get("evidence"), source="excel" if source == "excel" else "manual")
@@ -448,7 +591,7 @@ def _new_question(q: dict[str, Any], n: int) -> dict[str, Any]:
             "expected_id": _opt(q.get("expected_id"), 200, "expected_id"), "evidence": q.get("evidence")}
 
 
-# ── live traffic: one run per person per day ─────────────────────────────────────────────────────
+# ── live traffic: one run per company per day ────────────────────────────────────────────────────
 
 def _why(exc: BaseException) -> str:
     """A failure in a few words, for the one line Sync now says about it."""
@@ -473,7 +616,7 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
            chat conversations    the chat's conversations of the last week filed as sessions (run tag "chat")
         2. runs                  the run of every batch of every run tag, and the scenario sessions' turns as their
                                  questions
-        3. live questions        the chat's newer answers, one run per person per day (sync_live), then the
+        3. live questions        the chat's newer answers, one run per company per day (sync_live), then the
                                  conversations of live questions still waiting (eval_store.file_waiting_live: a
                                  report run's, an older chat's), then any other session turn no run holds yet (as
                                  the automatic sync always took them)
@@ -553,7 +696,8 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
 
 
 async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str, Any]:
-    """Make questions of the chat's newer live answers, grouped one run per person per company per day (UTC). Reads the
+    """Make questions of the chat's newer live answers, grouped one run per company per day (UTC), whoever asked (19 Nov
+    2026; before that one run per person per company per day), each question saying who asked. Reads the
     chat's records read-only, then writes Trace Lab's own rows under one lock, so two syncs never number twice. Also run
     by itself every few minutes (autosync.py), for every company (org None). An answer the browser showed an error for
     and the chat never recorded (lab_frontend_events, 3 Nov 2026) becomes a question too, its trace 'browser:<id>'.
@@ -610,23 +754,24 @@ async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str
         seen = {r[0] for r in (await conn.execute(text(
             "SELECT turn_id FROM tracelab.lab_question_traces WHERE source = 'sync' AND turn_id = ANY(:ids)"),
             {"ids": [t["turn_id"] for t in turns]})).all()}
-        runs: dict[tuple[str, str, date], tuple[str, int]] = {}
+        runs: dict[tuple[str, date], tuple[str, int]] = {}
         for t in turns:
             if t["turn_id"] in seen:
                 continue
             day = t["started_at"].astimezone(timezone.utc).date()
-            key = (t["uid"], t["org"] or NONE_ORG, day)
+            # One run per company per day, whoever asked (19 Nov 2026, Hussain): the company's day run, made here under
+            # the lock when the day has none. Per-person day runs made before stay as they are and are shown merged.
+            key = (t["org"] or NONE_ORG, day)
             if key not in runs:
                 row = (await conn.execute(text(
                     "SELECT id::text AS id, (SELECT coalesce(max(seq_no), 0) FROM tracelab.lab_questions q "
                     "WHERE q.run_id = r.id) AS top FROM tracelab.lab_runs r WHERE r.kind = 'production' "
-                    "AND r.owner_user_id = CAST(:uid AS uuid) AND coalesce(r.organization_id, CAST(:none AS uuid)) = "
+                    "AND r.owner_user_id = CAST(:owner AS uuid) AND coalesce(r.organization_id, CAST(:none AS uuid)) = "
                     "CAST(:org AS uuid) AND r.run_day = :day"),
-                    {"uid": t["uid"], "org": key[1], "none": NONE_ORG, "day": day})).mappings().first()
+                    {"owner": COMPANY_OWNER, "org": key[0], "none": NONE_ORG, "day": day})).mappings().first()
                 if row is None:
-                    made = await _insert_run(conn, None, kind="production", title=f"{t['email'] or 'Unknown person'} · {day}",
-                                             org=t["org"], source="sync", owner_user_id=t["uid"],
-                                             owner_email=t["email"], run_day=day)
+                    made = await _insert_run(conn, None, kind="production", title=f"Live questions · {day}",
+                                             org=t["org"], source="sync", owner_user_id=COMPANY_OWNER, run_day=day)
                     runs[key] = (made["id"], 0)
                     new_r += 1
                 else:
@@ -634,7 +779,8 @@ async def sync_live(org: str | None, *, now: datetime | None = None) -> dict[str
             run_id, top = runs[key]
             qtext = (t["q"] or "").strip() or "(no question recorded)"
             qid = await _insert_question(conn, None, run_id=run_id, seq=top + 1, row={"question": qtext[:QUESTION_MAX]},
-                                         org=t["org"], source="sync", asked_at=t["started_at"])
+                                         org=t["org"], source="sync", asked_at=t["started_at"],
+                                         asker=(t["uid"], t["email"]))
             await conn.execute(text(
                 "INSERT INTO tracelab.lab_question_traces (question_id, turn_id, organization_id, source) "
                 "VALUES (CAST(:qid AS uuid), :tid, CAST(:org AS uuid), 'sync')"),
@@ -907,12 +1053,16 @@ def question_out(r: Any, run_no: int) -> dict[str, Any]:
 
 
 async def list_questions(m: labelling.Member, code: str) -> dict[str, Any]:
+    """A run's questions. A live day is one run (19 Nov 2026): any code of it lists the questions of every run of the
+    day the caller may see, each coded by the run it is filed in; any other run lists its own."""
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
-        run = await _run_row(conn, m, code)
-        keep = "" if run["kind"] != "production" else f" AND NOT {SCENARIO_Q}"
+        run = await group_row(conn, m, code)
+        if run["kind"] == "production":
+            rows = (await label_questions(conn, run))[0]
+            return {"run": run_out(run), "questions": [question_out(r, r["q_run_no"]) for r in rows]}
         rows = (await conn.execute(text(f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q "
-                                        f"WHERE q.run_id = CAST(:rid AS uuid){keep} ORDER BY {_q_order(run)}"),
+                                        f"WHERE q.run_id = CAST(:rid AS uuid) ORDER BY {_q_order(run)}"),
                                    {"rid": run["id"]})).mappings().all()
         batch = await batch_of(conn, run)
     return {"run": run_out(run, batch), "questions": [question_out(r, run["run_no"]) for r in rows]}
@@ -1463,13 +1613,20 @@ async def label_questions(conn: Any, run: Any, *, limit: int | None = None,
             "tag": batch["run_tag"], "org": run["organization_id"], "since": batch["since"],
             "until": batch["until"]})).mappings().all()
     else:
-        keep = f" AND NOT {SCENARIO_Q}" if run["kind"] == "production" else ""
+        live = run["kind"] == "production"
+        keep = f" AND NOT {SCENARIO_Q}" if live else ""
+        # A live day (19 Nov 2026): the questions of every run the day is shown as (with_group), each named by its own
+        # run's code, newest first across them.
+        rids = [str(i) for i in (run.get("run_ids") or [])] if live else []
+        rids = rids or [run["id"]]
+        order = _q_order(run) if len(rids) == 1 else "q.asked_at DESC NULLS LAST, rr.run_no DESC, q.seq_no DESC"
         rows = (await conn.execute(text(
-            f"SELECT {_Q_COLS}, {_Q_STATS}, CAST(:no AS int) AS q_run_no, count(*) OVER () AS n_all,"
+            f"SELECT {_Q_COLS}, {_Q_STATS}, rr.run_no AS q_run_no, count(*) OVER () AS n_all,"
             " NULL::text AS session_id, NULL::text AS turn_id, NULL::text AS scenario_id, NULL::int AS turn_no,"
             " NULL::int AS session_turns"
-            f" FROM tracelab.lab_questions q WHERE q.run_id = CAST(:rid AS uuid){keep} ORDER BY {_q_order(run)}{lim}"),
-            {"rid": run["id"], "no": run["run_no"]})).mappings().all()
+            " FROM tracelab.lab_questions q JOIN tracelab.lab_runs rr ON rr.id = q.run_id"
+            f" WHERE q.run_id = ANY(CAST(:rids AS uuid[])){keep} ORDER BY {order}{lim}"),
+            {"rids": rids})).mappings().all()
     return list(rows), int(rows[0]["n_all"]) if rows else 0
 
 
@@ -1503,7 +1660,7 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
     """A run's labels view: its questions as rows, the failure modes as columns, and each person's newest value per cell."""
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
-        run = await _run_row(conn, m, code)
+        run = await group_row(conn, m, code)
         questions, total = await label_questions(conn, run, limit=MATRIX_MAX)
         modes = await _live_modes(conn)
         by, last = await _grid_cells(conn, m, [q["id"] for q in questions])
@@ -1565,13 +1722,16 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
     labelling.require_active(m)
     where, p = _scope(m, "r")
     async with db.lab_engine().connect() as conn:
+        # A live day is one run (19 Nov 2026): the code of any of its runs reads the day, the newest day when none is named.
+        rep, rp = _is_rep(m)
         if code:
-            run = await _run_row(conn, m, code)
+            run = await group_row(conn, m, code)
         else:
-            run = (await conn.execute(text(f"SELECT {_RUN_COLS}, {_RUN_STATS} FROM tracelab.lab_runs r WHERE {where} "
-                                           "ORDER BY r.run_no DESC LIMIT 1"), p)).mappings().first()
-            if run is None:
+            newest = (await conn.execute(text(f"SELECT {_RUN_COLS} FROM tracelab.lab_runs r WHERE {where} AND {rep} "
+                                              "ORDER BY r.run_no DESC LIMIT 1"), {**p, **rp})).mappings().first()
+            if newest is None:
                 return {"run": None, "tiles": None, "modes": [], "runs": []}
+            run = await group_row(conn, m, run_code(newest["run_no"]))
         modes = await _live_modes(conn)
         # The same questions as the run's Labels (label_questions, 14 Nov 2026): a Codex batch counts its sessions' turns.
         questions, n_q = await label_questions(conn, run)
@@ -1579,9 +1739,9 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
         # People's values only: a coding agent's label is a suggestion until a person sets it (3 Nov 2026).
         cells = [c for c in (await conn.execute(text(_CELLS_SQL), {"qids": qids})).mappings().all()
                  if c["value"] and c["source"] == "manual"] if qids else []
-        recent = [dict(r) for r in (await conn.execute(text(
-            f"SELECT {_RUN_COLS} FROM tracelab.lab_runs r WHERE {where} AND r.run_no <= :top "
-            "ORDER BY r.run_no DESC LIMIT :n"), {**p, "top": run["run_no"], "n": TREND_RUNS})).mappings().all()]
+        recent = await with_group(conn, m, (await conn.execute(text(
+            f"SELECT {_RUN_COLS} FROM tracelab.lab_runs r WHERE {where} AND {rep} AND r.run_no <= :top "
+            "ORDER BY r.run_no DESC LIMIT :n"), {**p, **rp, "top": run["run_no"], "n": TREND_RUNS})).mappings().all())
         trend: dict[tuple[str, str], int] = {}
         for r in recent:
             ids = qids if r["id"] == run["id"] else [q["id"] for q in (await label_questions(conn, r))[0]]

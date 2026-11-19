@@ -4,7 +4,7 @@ progress, under /api/trace-lab (trace_lab.app ROUTERS):
     GET    /lab/runs                          runs the caller may see, newest first (platform team and consultant: all);
                                               ?for_page=true: the Runs page's list (no live day of scenario questions only)
     POST   /lab/runs                          a synthetic run typed on the page                (curators)
-    POST   /lab/runs/sync                     make questions of newer live answers, a run per person per day
+    POST   /lab/runs/sync                     make questions of newer live answers, a run per company per day
     POST   /lab/runs/import                   Excel / CSV: new questions, or expected answers by question code (curators)
     GET    /lab/runs/{code}                   one run (R3)
     GET    /lab/runs/{code}/questions         its questions (R3-1, R3-2 ...)

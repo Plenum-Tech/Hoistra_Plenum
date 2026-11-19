@@ -705,8 +705,8 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
         mode       "sessions" for a run made from a run tag's sessions: the sessions of its batch (runs._batches: the
                    tag's sessions of the run's company that started within the batch's window, 14 Nov 2026),
                    latest attempt only unless all_attempts, as the Sessions list showed them;
-                   "live" for a person's day: the sessions (chat conversations, run tag "chat") its questions' turns
-                   are traces of; a conversation that spans two days is a row of both, naming only that day's turns;
+                   "live" for a day of live questions: the sessions (chat conversations, run tag "chat") its questions'
+                   turns are traces of; a conversation that spans two days is a row of both, naming only that day's turns;
                    "questions" for a run typed on the page or imported: no rows, it keeps its questions view.
         sessions   rows shaped as GET /eval/sessions rows, each with the run's own "codes" and "turn_ids" in it
         waiting    the run's questions whose conversation is not filed yet: code, question, asked_at, turn_id
@@ -717,27 +717,39 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
                    before batches, its questions whose conversation is in a later batch (or not on this page).
         next       the cursor for older rows, as list_sessions
 
-    Read only, and only the run's own company: the run is found within the caller's scope (another company's is not
-    found), and every session and trace read is narrowed to the run's company."""
+    A live day is ONE run (19 Nov 2026, Hussain: "it should stay as one run only"): any code of a day opens the day
+    (runs.group_row), whose sessions and waiting rows are those of every run of the day the caller may see (a company's
+    day run, and the per-person runs made before it; for the platform team, every company's), each row saying who asked
+    it (`asked_by`, the email; a session's `askers` lists them all) and, for a day across companies, which company
+    (`organization_id`, named in `companies`, which is empty for a day of one company). `run` says its `people`.
+
+    Read only, and only what the caller may see: the run is found within the caller's scope (another company's is not
+    found), a company member's day holds only their own company's runs, and every session and trace read is narrowed to
+    the company of the run its question is in."""
     labelling.require_active(m)
     async with conversations._lab_read() as conn:
-        run = await runs._run_row(conn, m, code)
+        run = await runs.group_row(conn, m, code)
         batch = await runs.batch_of(conn, run)
         out_run = runs.run_out(run, batch)
         tag = batch["run_tag"] if batch else None
         mode = "live" if run["kind"] == "production" else "sessions" if tag else "questions"
         if mode == "questions":
-            return {"run": out_run, "mode": mode, "sessions": [], "waiting": [], "elsewhere": [], "next": None}
+            return {"run": out_run, "mode": mode, "sessions": [], "waiting": [], "elsewhere": [], "companies": [],
+                    "next": None}
+        rids = [str(i) for i in (run.get("run_ids") or [])] if mode == "live" else []
         qs = (await conn.execute(text(
-            "SELECT q.seq_no, q.question, q.asked_at, l.turn_id FROM tracelab.lab_questions q"
-            " JOIN tracelab.lab_question_traces l ON l.question_id = q.id"
-            " WHERE q.run_id = CAST(:rid AS uuid) ORDER BY q.seq_no, l.created_at, l.turn_id"),
-            {"rid": run["id"]})).mappings().all()
+            "SELECT q.seq_no, q.question, q.asked_at, l.turn_id, r.run_no, r.organization_id::text AS org,"
+            " q.created_by_email, r.owner_user_id::text AS owner, r.owner_email FROM tracelab.lab_questions q"
+            " JOIN tracelab.lab_question_traces l ON l.question_id = q.id JOIN tracelab.lab_runs r ON r.id = q.run_id"
+            " WHERE q.run_id = ANY(CAST(:rids AS uuid[])) ORDER BY r.run_no, q.seq_no, l.created_at, l.turn_id"),
+            {"rids": rids or [run["id"]]})).mappings().all()
         org = run["organization_id"]
-        filed = {r[0]: r[1] for r in (await conn.execute(text(
-            "SELECT t.id, t.session_id FROM tracelab.traces t WHERE t.id = ANY(CAST(:ids AS text[]))"
-            " AND t.organization_id IS NOT DISTINCT FROM CAST(:org AS uuid)"),
-            {"ids": [q["turn_id"] for q in qs], "org": org})).all()} if qs else {}
+        in_org = {r[0]: (r[1], r[2]) for r in (await conn.execute(text(
+            "SELECT t.id, t.session_id, t.organization_id::text FROM tracelab.traces t WHERE t.id = ANY(CAST(:ids AS text[]))"),
+            {"ids": [q["turn_id"] for q in qs]})).all()} if qs else {}
+        # A turn is filed for a question only under the company of the run the question is in.
+        filed = {q["turn_id"]: in_org[q["turn_id"]][0] for q in qs
+                 if q["turn_id"] in in_org and in_org[q["turn_id"]][1] == q["org"]}
     scenario_turns: set[str] = set()
     if mode == "live":
         scenario_turns = {t for t, sid in filed.items() if str(sid).startswith(PREFIX + SEP)}
@@ -748,41 +760,77 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
                     f"SELECT tt.turn_id FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
                     " AND tt.session_id LIKE 'scn\\_\\_%'"), {"ids": unfiled})).all()}
     mine: dict[str, dict[str, list[str]]] = {}
+    session_org: dict[str, str | None] = {}
     waiting: list[dict[str, Any]] = []
     elsewhere: list[dict[str, Any]] = []
     for q in qs:
-        qcode = runs.question_code(run["run_no"], q["seq_no"])
+        qcode = runs.question_code(q["run_no"], q["seq_no"])
         sid = filed.get(q["turn_id"])
+        # Who asked: the question says (a company's day run), else the person whose run it is (a per-person run).
+        asker = q["created_by_email"] or (q["owner_email"] if q["owner"] != runs.COMPANY_OWNER else None)
         if q["turn_id"] in scenario_turns:
             if sid is not None:
                 elsewhere.append({"code": qcode, "session_id": sid, "turn_id": q["turn_id"]})
             continue
         if sid is None:
             waiting.append({"code": qcode, "question": q["question"], "asked_at": runs._iso(q["asked_at"]),
-                            "turn_id": q["turn_id"]})
+                            "turn_id": q["turn_id"], "asked_by": asker, "organization_id": q["org"]})
             continue
-        got = mine.setdefault(sid, {"codes": [], "turn_ids": []})
+        got = mine.setdefault(sid, {"codes": [], "turn_ids": [], "askers": []})
+        session_org[sid] = q["org"]
         if qcode not in got["codes"]:
             got["codes"].append(qcode)
         got["turn_ids"].append(q["turn_id"])
-    if org is None:
-        listed: dict[str, Any] = {"sessions": [], "next": None}
-    elif mode == "sessions":
-        listed = await list_sessions(m, run_tag=tag, all_attempts=all_attempts, before=before, limit=LIST_MAX,
-                                     company=org, since=batch["since"], until=batch["until"])
+        if asker and asker not in got["askers"]:
+            got["askers"].append(asker)
+    sessions: list[dict[str, Any]]
+    if mode == "sessions":
+        listed: dict[str, Any] = {"sessions": [], "next": None} if org is None else await list_sessions(
+            m, run_tag=tag, all_attempts=all_attempts, before=before, limit=LIST_MAX, company=org,
+            since=batch["since"], until=batch["until"])
+        sessions = [s for s in listed["sessions"] if s.get("organization_id") == org]
     else:
-        listed = await list_sessions(m, ids=sorted(mine), all_attempts=True, before=before, limit=LIST_MAX,
-                                     company=org) if mine else {"sessions": [], "next": None}
-    sessions = [s for s in listed["sessions"] if s.get("organization_id") == org]
+        # A day's conversations, each read under the company of the run its questions are in; a day across companies
+        # (the platform team's) is the companies' rows merged, newest first.
+        sessions = []
+        lists = []
+        for o in sorted({o for o in session_org.values() if o}):
+            part = await list_sessions(m, ids=sorted(sid for sid, so in session_org.items() if so == o), all_attempts=True,
+                                       before=before, limit=LIST_MAX, company=o)
+            lists.append(part)
+            sessions += [s for s in part["sessions"] if s.get("organization_id") == o]
+        sessions.sort(key=lambda s: (s.get("started_at") or "", s["id"]), reverse=True)
+        more = len(sessions) >= LIST_MAX or any(part["next"] for part in lists)
+        sessions = sessions[:LIST_MAX]
+        listed = {"sessions": sessions, "next": sessions[-1]["started_at"] if more and sessions else None}
     for s in sessions:
-        s.update(mine.get(s["id"]) or {"codes": [], "turn_ids": []})
+        got = mine.get(s["id"]) or {"codes": [], "turn_ids": [], "askers": []}
+        s.update(codes=got["codes"], turn_ids=got["turn_ids"], askers=got["askers"],
+                 asked_by=got["askers"][0] if got["askers"] else None)
         s["channel"] = session_channel(s.get("id"))
     if mode == "sessions":
         shown = {s["id"] for s in sessions}
         elsewhere += [{"code": c, "session_id": sid, "turn_id": t} for sid, got in mine.items() if sid not in shown
                       for c, t in zip(got["codes"], got["turn_ids"])]
     return {"run": out_run, "mode": mode, "sessions": sessions, "waiting": waiting, "elsewhere": elsewhere,
-            "next": listed["next"]}
+            "companies": await _company_names(out_run) if mode == "live" else [], "next": listed["next"]}
+
+
+async def _company_names(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The companies a live day across companies is made of, named: [{id, name}], empty for a day of one company.
+    Names are read from Hoistra's organisations, read only; a name that cannot be read is the id's first part."""
+    orgs = [str(o) for o in run.get("organization_ids") or []]
+    if len(orgs) < 2:
+        return []
+    names: dict[str, str] = {}
+    try:
+        async with conversations._read() as conn:
+            names = {r[0]: r[1] for r in (await conn.execute(text(
+                "SELECT id::text, name FROM plenum_cafm.organizations WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                {"ids": orgs})).all() if r[1]}
+    except Exception as exc:  # noqa: BLE001 - a name is a convenience: the page falls back to the id
+        log.warning("trace_lab.eval_store.company_names_failed", error=str(exc)[:200])
+    return [{"id": o, "name": names.get(o) or o[:8]} for o in orgs]
 
 
 #: Where a live conversation that is not a chat came from, by its session id (provenance.INFERRED_CHANNEL_SQL's
