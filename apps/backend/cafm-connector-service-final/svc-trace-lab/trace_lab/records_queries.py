@@ -27,8 +27,62 @@ from . import records_run
 
 #: Hoistra's records tool (svc-deepagents ontology_qa.answer_from_records).
 RECORDS_TOOL = "answer_from_records"
-#: Tool nodes that are not a data tool: the records tool itself, the sub-agent hand-off and the final answer.
-NOT_DATA_TOOLS = frozenset({RECORDS_TOOL, "task", "final_answer"})
+#: A data tool READS the company's records or an engine's computed data (compliance, vendor scores and scorecards,
+#: contract performance, energy, maintenance and decisions, inspections, documents / RAG lookups, work-order reads). Only
+#: a turn that called one can be about records, so only such a turn may get a proposed query. Everything below is NOT a
+#: data tool: a tool is listed by name, with why. A tool Hoistra adds later counts as a data tool until it is listed here;
+#: test_every_tool_hoistra_registers_is_classified fails when one appears, so someone decides.
+NOT_DATA_TOOLS = frozenset({
+    # The records tool itself, the sub-agent hand-off and the final answer (final_answer is a stage, not a tool, today).
+    RECORDS_TOOL, "task", "final_answer",
+    # Meta: the orchestrator's own planning, skill choice, session memory, scratch files and context housekeeping.
+    "write_todos", "select_skill", "memory_set", "memory_get", "write_file", "read_file", "compact_context",
+    # Work orders, writes and actions: create, change, close, approve, trigger, email, and the drafting that precedes a
+    # create (the AI assessment and the approval-chain preview change or prepare a change; none reads data for an answer).
+    "create_work_order", "update_work_order", "transition_work_order", "approve_work_order", "close_work_order",
+    "create_intelligent_work_order", "confirm_intelligent_work_order_creation", "prepare_intelligent_work_order",
+    "trigger_ppm_work_order", "process_email_work_order", "suggest_approval_chain", "request_approval_chain",
+    "customize_approval_chain", "respond_to_approval_step", "send_approval_request_email",
+    # UDR writes: create, update and delete a record.
+    "udr_create_record", "udr_update_record", "udr_delete_record",
+    # UDR / index catalogues: they describe the database's structure and the row index; no record is read.
+    "get_schema", "udr_list_tables", "udr_describe_table", "find_tables", "table_card", "list_row_index_tables",
+    "list_doc_rag_db_tables",
+    # Documents: index, remove or batch-index a document; read raw text from an upload; match a document to rows for the
+    # schema-mapping tab. They act on a document, they do not look up what the company's documents say.
+    "index_document", "index_documents_batch", "delete_document", "extract_text", "match_document_to_rows",
+    "manage_vector_membership",
+    # Compliance writes and actions: record a filing, upsert a certificate, set a remedial status, seed the country pack,
+    # draft a renewal email, flag a building change, decide a queue item, share a vendor passport, point to an evidence
+    # pack download; run_document_forensics checks an uploaded certificate (a check, like verify_*, reads no record).
+    "record_regulatory_filing", "upsert_compliance_certificate", "set_remedial_status", "seed_uk_country_pack",
+    "draft_certificate_renewal", "flag_building_change", "decide_compliance_approval", "share_vendor_passport",
+    "generate_compliance_evidence_pack", "run_document_forensics",
+    # Contract performance writes and actions: ingest, extract-and-draft, update or confirm contract parameters; propose
+    # or approve asset criticality; change the score weights; decide an invoice line or a queue item;
+    # extract_and_verify_invoice verifies an invoice (a check, like verify_vendor_invoice).
+    "ingest_contract_parameters", "extract_contract_from_document", "update_contract_parameters",
+    "confirm_contract_parameters", "propose_asset_criticality", "propose_asset_criticality_from_udr",
+    "approve_asset_criticality", "update_score_weights", "extract_and_verify_invoice", "decide_invoice_line",
+    "decide_contract_approval",
+    # Energy writes and actions: register a meter, pull / ingest readings, degree days, BMS trends and chiller samples,
+    # retry gaps, set a building's profile, log occupancy, record a chiller design, act on an anomaly, decide a queue item;
+    # the condition deduced and written from inspection vectors and the remediation-queue cross-reference store a result.
+    "upsert_energy_meter", "pull_smart_meter_readings", "ingest_meter_readings", "process_meter_gap_retries",
+    "upsert_building_energy_profile", "log_site_occupancy_change", "record_chiller_design", "ingest_chiller_readings",
+    "ingest_degree_days", "ingest_bms_trends", "act_on_energy_anomaly", "decide_energy_approval",
+    "deduce_condition_from_inspection_vectors", "cross_ref_condition_consumption",
+    # Platform operations, not the company's records: data migration (start, run, the gates, status, mappings, list),
+    # the Fiix connection and sync (credentials, tests, schema, mapping, ingestion and their status), bulk ingest batches,
+    # source connectors and the workspace ingestion summary.
+    "start_migration", "start_migration_multi", "run_migration", "submit_pre_semantic", "submit_field_mapping",
+    "submit_hierarchy", "submit_classification_approval", "submit_column_mapping_approval", "submit_final_gate",
+    "submit_pk_approval", "submit_unique_table_approval", "get_migration_status", "get_migration_mappings",
+    "list_migrations", "get_fiix_setup_status", "configure_fiix_credentials", "test_fiix_connection", "fetch_fiix_schema",
+    "start_fiix_schema_mapping", "get_schema_mapping_status", "continue_schema_mapping_gate", "start_fiix_ingestion",
+    "get_fiix_ingestion_status", "list_fiix_ingestion_jobs", "get_ingest_batch_status", "list_session_ingest_batches",
+    "list_available_source_connectors", "test_source_connector_connection", "retrieve_workspace_corpus_summary",
+})
 #: ...and the checks (verify_vendor_invoice, verify_accreditation_now): they test a record, they do not read data.
 NOT_DATA_PREFIX = "verify"
 
@@ -134,8 +188,9 @@ def extract_queries(nodes: list | None) -> list[dict]:
 
 
 def data_tools(nodes: list | None) -> list[str]:
-    """The data tools this turn called, each name once in call order: every tool node but the records tool, `task`,
-    `final_answer` and the checks (names starting with "verify")."""
+    """The data tools this turn called, each name once in call order: the tool nodes that READ the company's records or
+    an engine's computed data. Not the records tool, `task`, `final_answer`, the checks (names starting with "verify"),
+    and none of NOT_DATA_TOOLS (meta tools and write / action tools)."""
     out: list[str] = []
     for n in _nodes(nodes):
         name = n.get("name")

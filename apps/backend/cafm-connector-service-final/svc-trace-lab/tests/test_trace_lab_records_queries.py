@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import json
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -237,12 +238,17 @@ def test_an_output_that_is_a_dict_is_read_like_its_json():
 # ── the data tools a turn called ───────────────────────────────────────────────────────────────────────────────────
 
 def _registered_tool_names():
-    """Every tool name Hoistra's orchestrator maps to a domain (orchestrator.py _TOOL_DOMAIN), read from its source."""
-    src = (Path(oq.__file__).parent / "orchestrator.py").read_text(encoding="utf-8")
-    for n in ast.walk(ast.parse(src)):
-        if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "_TOOL_DOMAIN":
-            return [k.value for k in n.value.keys]
-    raise AssertionError("orchestrator._TOOL_DOMAIN is not where it was: update this test")
+    """Every tool Hoistra defines: the functions decorated with @tool in svc-deepagents/src (the model calls a tool by its
+    function name), read from the source - the orchestrator's _TOOL_DOMAIN lists only some of them."""
+    names = set()
+    for path in sorted(Path(oq.__file__).parent.parent.rglob("*.py")):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)       # a docstring in Hoistra's source has a bad escape
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        names.update(n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and any(ast.unparse(d).split("(")[0] == "tool" for d in n.decorator_list))
+    assert len(names) > 150, "no tools found where Hoistra keeps them: update this test"
+    return sorted(names)
 
 
 DATA_TOOLS_SEEN = ["list_building_certificates", "score_vendor_work_orders", "compute_site_eui", "get_maintenance_overview",
@@ -272,15 +278,58 @@ def test_a_tool_node_may_say_it_is_a_tool_by_kind_or_by_type_alone():
         == ["compute_site_eui", "get_ratings_position"]
 
 
-def test_the_tools_hoistra_registers_are_the_names_the_rule_knows():
+#: Every tool Hoistra defines that READS the company's records or an engine's computed data, as reviewed on 19 Nov 2026
+#: (controller ruling). A tool Hoistra adds appears in neither this list nor NOT_DATA_TOOLS until someone decides.
+REVIEWED_DATA_TOOLS = [
+    'answer_with_graph_context', 'check_requirements', 'check_vendor_registration_compliance',
+    'compute_building_rating', 'compute_site_eui', 'consumption_by_asset',
+    'count_compliance_certificates', 'deduce_asset_condition', 'find_asset',
+    'find_location', 'find_ppm_schedules', 'generate_compliance_report',
+    'generate_monthly_energy_report', 'generate_vendor_scorecard', 'get_anomaly_rollup',
+    'get_approval_chain', 'get_asset_condition_rules', 'get_asset_condition_summary',
+    'get_asset_details', 'get_asset_documents', 'get_asset_intelligence',
+    'get_building_cost_drivers', 'get_compliance_coverage', 'get_compliance_saved_space_summary',
+    'get_cost_savings', 'get_dashboard_stats', 'get_document_metadata',
+    'get_energy_saved_space_summary', 'get_energy_tariffs', 'get_hoist_score',
+    'get_inspection_intelligence', 'get_maintenance_overview', 'get_market_profiles',
+    'get_mees_summary', 'get_operating_hours', 'get_pack_facts',
+    'get_ppm_contracts', 'get_ratings_position', 'get_score_weights',
+    'get_statutory_duties', 'get_vendor_passport', 'get_work_order',
+    'get_work_order_history', 'get_work_order_status_track', 'investigate_asset',
+    'list_asset_conditions', 'list_blocked_vendors', 'list_building_certificates',
+    'list_building_documents', 'list_building_meter_readings', 'list_compliance_approvals',
+    'list_contract_approvals', 'list_contract_parameters', 'list_country_pack',
+    'list_energy_anomalies', 'list_energy_approvals', 'list_energy_buildings',
+    'list_invoices', 'list_maintenance_decisions', 'list_regulatory_filings',
+    'list_tm46_benchmarks', 'list_unscored_assets', 'list_vendor_accreditations',
+    'list_vendor_scorecards', 'list_vendors_by_certificate_count', 'list_verification_registers',
+    'list_work_orders', 'lookup_user', 'query_docs',
+    'query_table', 'replacement_candidates', 'resolve_cross_source_links',
+    'retrieve_vector_evidence', 'run_compliance_scan', 'scan_chiller_efficiency',
+    'scan_energy_anomalies', 'score_vendor_work_orders', 'score_work_orders_from_udr',
+    'search_assets', 'search_documents', 'search_locations',
+    'semantic_search', 'summarise_anomalies', 'udr_agent_query',
+    'udr_execute_select', 'udr_get_record', 'udr_read_records',
+    'udr_search_records', 'vendor_work_orders_at_building', 'work_order_blockers',
+]
+
+
+def test_every_tool_hoistra_registers_is_classified():
     names = _registered_tool_names()
-    assert "task" in names and any(n.startswith("verify") for n in names), "the names the rule leaves out still exist"
-    assert set(DATA_TOOLS_SEEN) <= set(names), "the data tool names these tests use are Hoistra's"
-    assert oq.answer_from_records.name == rq.RECORDS_TOOL == "answer_from_records", "the records tool is still named so"
-    # Every other registered tool is a data tool by the rule; the housekeeping ones (write_todos, select_skill, memory_*,
-    # read_file, write_file) and the actions are counted too - the rule is the controller's amendment, not a judgement.
     got = rq.data_tools([tool(f"t{i}", n) for i, n in enumerate(names)])
-    assert got == [n for n in names if n != "task" and not n.startswith("verify")]
+    assert got == REVIEWED_DATA_TOOLS, (
+        "Hoistra's tools changed. New: %s. Gone: %s. Decide for each new tool whether it READS the company's records or an "
+        "engine's data (add it to REVIEWED_DATA_TOOLS) or is a meta / write / action tool (add it to NOT_DATA_TOOLS)."
+        % (sorted(set(got) - set(REVIEWED_DATA_TOOLS)), sorted(set(REVIEWED_DATA_TOOLS) - set(got))))
+
+
+def test_the_tools_listed_as_not_data_are_tools_hoistra_has():
+    names = set(_registered_tool_names())
+    assert "task" in names and any(n.startswith("verify") for n in names), "the names the rule leaves out still exist"
+    gone = rq.NOT_DATA_TOOLS - names - {"final_answer"}       # final_answer is a stage in Hoistra's code, not a tool
+    assert not gone, "listed in NOT_DATA_TOOLS but not a tool of Hoistra's any more: " + ", ".join(sorted(gone))
+    assert oq.answer_from_records.name == rq.RECORDS_TOOL == "answer_from_records", "the records tool is still named so"
+    assert set(REVIEWED_DATA_TOOLS).isdisjoint(rq.NOT_DATA_TOOLS) and set(REVIEWED_DATA_TOOLS) <= names
 
 
 # ── where a turn's queries come from ───────────────────────────────────────────────────────────────────────────────
@@ -378,6 +427,47 @@ async def test_no_data_tool_means_no_proposal_and_the_planner_is_not_asked(monke
                   [tool("t2", "task"), tool("t3", "verify_vendor_invoice"), tool("t4", "final_answer")]):
         assert await rq.queries_for(nodes, "hello", propose=True) == {"queries": [], "none": "not_about_records"}
     assert calls == []
+
+
+# Meta tools and write/action tools never read the company's records or an engine's data, so they never make a turn
+# eligible for a proposed query (controller ruling, 19 Nov 2026).
+META_AND_WRITE_TOOLS = ["write_todos", "select_skill", "memory_get", "memory_set", "read_file", "write_file", "compact_context",
+                        "create_work_order", "update_work_order", "close_work_order", "create_intelligent_work_order",
+                        "prepare_intelligent_work_order", "send_approval_request_email", "request_approval_chain",
+                        "respond_to_approval_step", "udr_create_record", "udr_update_record", "udr_delete_record",
+                        "upsert_compliance_certificate", "set_remedial_status", "decide_compliance_approval",
+                        "draft_certificate_renewal", "decide_contract_approval", "approve_asset_criticality",
+                        "update_score_weights", "upsert_energy_meter", "ingest_meter_readings", "act_on_energy_anomaly",
+                        "decide_energy_approval", "index_document", "delete_document", "start_migration", "run_migration",
+                        "submit_field_mapping", "configure_fiix_credentials", "share_vendor_passport"]
+
+
+@pytest.mark.parametrize("name", META_AND_WRITE_TOOLS)
+def test_a_meta_or_write_tool_is_not_a_data_tool(name):
+    assert rq.data_tools([tool("t1", name)]) == []
+
+
+async def test_a_turn_whose_only_tools_are_meta_or_write_tools_gets_no_proposal(monkeypatch):
+    calls = []
+    _planner(monkeypatch, plan=PLAN_A, calls=calls)
+    nodes = [tool("t1", "write_todos"), tool("t2", "select_skill"), tool("t3", "memory_set"), tool("t4", "task"),
+             tool("t5", "create_work_order", {"title": "Leak"}), tool("t6", "send_approval_request_email"),
+             tool("t7", "answer_from_records", {"question": "hello"}, out=OUT_NOT_FOUND)]
+    assert await rq.queries_for(nodes, "please raise a work order for the leak", propose=True) == \
+        {"queries": [], "none": "not_about_records"}
+    assert calls == [], "the planner is not asked"
+
+
+async def test_a_read_tool_beside_meta_tools_still_gets_a_proposal(monkeypatch):
+    calls = []
+    _planner(monkeypatch, plan=PLAN_C, calls=calls)
+    nodes = [tool("t1", "write_todos"), tool("t2", "select_skill"), tool("t3", "list_building_certificates"),
+             tool("t4", "memory_set")]
+    assert rq.data_tools(nodes) == ["list_building_certificates"]
+    got = await rq.queries_for(nodes, "which certificates are about to lapse", propose=True)
+    assert got == {"queries": [{"source": "proposed", "plan": PLAN_C, "question": "which certificates are about to lapse"}],
+                   "none": None}
+    assert calls == [("the-map", "which certificates are about to lapse")]
 
 
 async def test_a_records_call_without_a_plan_still_falls_through_to_the_key_and_the_proposal(monkeypatch):
