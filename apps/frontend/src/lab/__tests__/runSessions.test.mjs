@@ -293,3 +293,28 @@ test('a live conversation that is not a chat says where it came from in the Type
   assert.equal(sessionRow({ id: 'x', channel: null }).type, '—', 'a chat keeps the dash');
   assert.equal(sessionRow({ id: 'x', type: 'multi_turn', channel: 'report' }).type, 'Multi-turn', 'a scenario type wins');
 });
+
+// ── Never "Reading in…" for ever (19 Nov 2026, Hussain: "the question should never be stuck on reading mode", "this
+//    should not break again"). The service says why each question waits (`state`); the row says it in words. ─────────
+const WS = await import('../logic/sessions.js');
+
+test('every state a waiting question can be in has its own words, and only "reading" says Reading in…', () => {
+  const states = ['reading', 'retrying', 'late', 'browser', 'no_record', 'no_company', 'other_company'];
+  for (const s of states) {
+    const w = WS.waitingWords({ state: s, waiting_since: '2026-11-19T09:00:00+00:00', retry_at: '2026-11-19T09:15:00+00:00' });
+    assert.ok(w.chip && w.line, s);
+    assert.equal(w.chip === 'Reading in…', s === 'reading', s);
+  }
+  assert.equal(WS.waitingWords({}).chip, 'Reading in…', 'a row from an older service still reads in');
+  assert.equal(WS.waitingWords({ state: 'something new' }).chip, 'Reading in…');
+  ['browser', 'no_record', 'no_company', 'other_company'].forEach((s) => assert.equal(WS.waitingWords({ state: s }).chip, 'No trace', s));
+  assert.match(WS.waitingWords({ state: 'retrying', retry_at: '2026-11-19T09:15:00+00:00' }).line, /tried again at \d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}/);
+  assert.match(WS.waitingWords({ state: 'late', waiting_since: '2026-11-19T09:00:00+00:00' }).line, /since \d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}.*Sync now/);
+});
+
+test('a waiting row with no trace to read says so instead of Reading in…', () => {
+  const gone = Object.assign({}, WAITING, { state: 'no_record' });
+  const out = html(R.RunConversationsList, { run: LIVE_RUN, mode: 'live', sessions: [ROW], waiting: [gone], onOpen() {}, onBack() {} });
+  assert.ok(!out.includes('Reading in…'));
+  assert.ok(out.includes('No trace') && out.includes(WS.waitingWords(gone).line));
+});

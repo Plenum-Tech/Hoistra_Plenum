@@ -192,3 +192,4 @@
   .lab-main-split > .lab-runs-home { padding: 16px; }
   .lab-tb-head { position: static; }
 }
+.lab-chip.lab-chip-muted { color: var(--color-neutral-500); border-style: dashed; }

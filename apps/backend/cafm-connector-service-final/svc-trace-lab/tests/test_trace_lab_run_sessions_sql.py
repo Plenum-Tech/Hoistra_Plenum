@@ -613,3 +613,101 @@ async def test_sync_now_files_the_waiting_conversations_too(lab_scratch, main_sc
     out = await runs.sync_production(member(org=ORG, all_companies=False, role="admin"), now=T0 + timedelta(hours=2))
     assert out["waiting_sessions"] == 1 and "waiting" not in out["failed"]
     assert (await eval_store.run_sessions(member(), code))["waiting"] == []
+
+
+# ── Never "Reading in…" for ever (19 Nov 2026, Hussain: "the question should never be stuck on reading mode", "this
+#    should not break again"). Every waiting row says why it waits: `state` is "reading" (the next round files it),
+#    "retrying" (reading it failed; `retry_at`), "late" (Trace Lab has known it for longer than WAITING_LATE_S and it is
+#    still not filed), or, when there is no trace to read at all, "browser" (an answer the browser reported and the chat
+#    never recorded), "no_record" (the chat has no record of the turn), "no_company" or "other_company". The filing round
+#    passes over what it can never file and what is held, so those never keep an older question waiting. ──
+
+async def _states(code):
+    return {w["turn_id"]: w["state"] for w in (await eval_store.run_sessions(member(), code))["waiting"]}
+
+
+async def test_a_question_the_next_round_files_is_reading(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    w = (await eval_store.run_sessions(member(), code))["waiting"][0]
+    assert w["state"] == "reading" and w["waiting_since"] and w.get("retry_at") is None
+
+
+async def test_a_turn_the_chat_has_no_record_of_says_so_and_is_not_reading_in(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    async with main_scratch.begin() as c:
+        await c.execute(text("DELETE FROM plenum_cafm.agent_trace_turns WHERE turn_id = 'turn-r1'"))
+    assert await _states(code) == {"turn-r1": "no_record"}
+
+
+async def test_a_turn_of_no_company_or_of_another_company_says_so(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    async with main_scratch.begin() as c:
+        await c.execute(text("UPDATE plenum_cafm.agent_trace_turns SET organization_id = NULL WHERE turn_id = 'turn-r1'"))
+    assert await _states(code) == {"turn-r1": "no_company"}
+    async with main_scratch.begin() as c:
+        await c.execute(text("UPDATE plenum_cafm.agent_trace_turns SET organization_id = CAST(:o AS uuid)"
+                             " WHERE turn_id = 'turn-r1'"), {"o": OTHER_ORG})
+    assert await _states(code) == {"turn-r1": "other_company"}
+
+
+async def test_a_conversation_filed_under_another_company_says_so(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    await seed_session(lab_scratch, REPORT, tag="chat", turn_ids=("turn-x",), org=OTHER_ORG)
+    assert await _states(code) == {"turn-r1": "other_company"}
+
+
+async def test_a_conversation_that_failed_says_when_it_is_read_again(lab_scratch, main_scratch, monkeypatch):
+    code = await _report_run(main_scratch)
+    monkeypatch.setitem(eval_store._HELD, REPORT, eval_store._clock() + 600)
+    w = (await eval_store.run_sessions(member(), code))["waiting"][0]
+    assert w["state"] == "retrying" and w["retry_at"]
+
+
+async def test_a_question_waiting_longer_than_it_should_is_late_not_reading(lab_scratch, main_scratch):
+    code = await _report_run(main_scratch)
+    async with lab_scratch.begin() as c:
+        await c.execute(text("ALTER TABLE tracelab.lab_questions DISABLE TRIGGER USER"))
+        await c.execute(text("UPDATE tracelab.lab_questions SET created_at = now() - interval '2 hours'"))
+        await c.execute(text("ALTER TABLE tracelab.lab_questions ENABLE TRIGGER USER"))
+    assert await _states(code) == {"turn-r1": "late"}
+
+
+async def test_a_browser_report_has_no_trace_and_says_so(lab_scratch, main_scratch):
+    import uuid
+    from types import SimpleNamespace
+
+    from trace_lab import loop
+    from trace_lab_m2_fixtures import principal
+
+    who = principal(ORG, "admin", email="ann@a.test")
+    who = SimpleNamespace(**{**who.__dict__, "user_id": uuid.uuid4()})
+    kept = await loop.record_frontend_event(who, {"kind": "error", "question": "Which vendors are blocked?",
+                                                  "error": "The connection closed", "view": "home", "instance": "assets"})
+    assert kept["kept"] is True
+    await runs.sync_live(None)
+    code = (await runs.list_runs(member(), kind="production"))["runs"][0]["code"]
+    states = await _states(code)
+    assert list(states.values()) == ["browser"] and list(states)[0].startswith("browser:")
+
+
+async def test_turns_that_can_never_be_filed_do_not_keep_an_older_question_waiting(lab_scratch, main_scratch):
+    """Newest first, a page of turns the chat has no record of, or of a conversation held after a failure, used to fill
+    the round's window, so an older question that could be filed waited for ever."""
+    code = await _report_run(main_scratch, at=T0 - timedelta(days=2))
+    for i in range(6):
+        await _main(main_scratch, f"turn-gone{i}", f"report-gone-{i}", at=T0 + timedelta(minutes=i), question=f"gone {i}")
+    await runs.sync_live(None, now=NOW)
+    async with main_scratch.begin() as c:
+        await c.execute(text("DELETE FROM plenum_cafm.agent_trace_turns WHERE turn_id LIKE 'turn-gone%'"))
+    out = await eval_store.file_waiting_live(limit=1)
+    assert out["sessions"] == 1, "the older question that can be filed is filed"
+    assert "turn-r1" not in await _states(code)
+
+
+async def test_a_held_conversation_does_not_take_the_rounds_place(lab_scratch, main_scratch, monkeypatch):
+    code = await _report_run(main_scratch, at=T0 - timedelta(days=2))
+    await _main(main_scratch, "turn-h1", "report-held-1", at=T0, question="held")
+    await runs.sync_live(None, now=NOW)
+    monkeypatch.setitem(eval_store._HELD, "report-held-1", eval_store._clock() + 600)
+    assert (await eval_store.file_waiting_live(limit=1))["sessions"] == 1
+    assert "turn-r1" not in await _states(code)

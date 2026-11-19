@@ -9,6 +9,35 @@ export const LEVEL_TEXT = Object.freeze({ logic: 'Logic', ux: 'User experience',
 export const TYPE_TEXT = Object.freeze({ single_domain: 'Single domain', multi_domain: 'Multi-domain', multi_turn: 'Multi-turn', failure: 'Failure' });
 // Where a live conversation that is not a chat came from (eval_store.session_channel, 18 Nov 2026), in the Type column.
 export const CHANNEL_TEXT = Object.freeze({ report: 'Report run', rerun: 'Rerun', upload: 'Upload', skill_lab: 'Skill lab' });
+
+// Why a live question's conversation is not filed yet, in words (19 Nov 2026, Hussain: "the question should never be stuck
+// on reading mode"). The service says `state` (eval_store._why_waiting); only "reading" says Reading in…. A row from an
+// older service, or a state this page does not know, reads in as before.
+const whenWaiting = (iso) => {
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime())
+    ? d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+};
+export function waitingWords(w) {
+  const x = w || {};
+  const none = (line) => ({ chip: 'No trace', line });
+  switch (x.state) {
+    case 'retrying':
+      return { chip: 'Trying again', line: 'Reading its conversation failed. It is tried again at ' + (whenWaiting(x.retry_at) || 'the next sync') + '.' };
+    case 'late':
+      return { chip: 'Not read in yet', line: 'Waiting since ' + (whenWaiting(x.waiting_since) || 'a while') + '. Press Sync now to read it at once.' };
+    case 'browser':
+      return none('The browser reported this answer and the chat never recorded it, so there is no trace to read.');
+    case 'no_record':
+      return none('The chat has no record of this turn (it may have been deleted), so there is no trace to read.');
+    case 'no_company':
+      return none('The chat recorded this turn under no company, so it is not filed.');
+    case 'other_company':
+      return none('Its conversation is another company’s, so it is not filed here.');
+    default:
+      return { chip: 'Reading in…', line: 'Its conversation is filed by the next sync.' };
+  }
+}
 export const TYPE_OPTIONS = [['', 'All types']].concat(Object.keys(TYPE_TEXT).map((k) => [k, TYPE_TEXT[k]]));
 export const STATUS_TEXT = Object.freeze({ ok: 'OK', failed: 'Failed' });
 export const STATUS_OPTIONS = [['', 'Any status'], ['ok', 'OK'], ['failed', 'Failed']];

@@ -34,7 +34,7 @@ import socket
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -697,6 +697,43 @@ async def list_sessions(m: labelling.Member, *, run_tag: str | None = None, type
     return {"sessions": sessions, "next": sessions[-1]["started_at"] if more else None}
 
 
+#: A question Trace Lab has known for longer than this whose conversation is still not filed is "late": a round files one
+#: within a minute or two, so a late one says so instead of "Reading in..." (19 Nov 2026, Hussain: "the question should
+#: never be stuck on reading mode").
+WAITING_LATE_S = 30 * 60
+
+
+def _why_waiting(turn_id: str, org: str | None, known_since: datetime | None,
+                 chat_of: Mapping[str, tuple[str | None, str | None]], claimed: Mapping[str, str | None],
+                 now: datetime) -> dict[str, Any]:
+    """Why a live question's conversation is not filed: `state` and when Trace Lab first knew the question
+    (`waiting_since`), and for "retrying" when it is read again (`retry_at`). With no trace to read at all:
+        browser        an answer the browser reported and the chat never recorded (turn "browser:<id>")
+        no_record      the chat has no record of the turn, or of its conversation
+        no_company     the chat's record of the turn names no company
+        other_company  the turn, or the conversation it is in, is another company's
+    Still to be read:
+        retrying       reading it failed a short while ago; read again at retry_at (HOLD_S)
+        late           known for longer than WAITING_LATE_S and still not filed
+        reading        the next round files it"""
+    out: dict[str, Any] = {"state": "reading", "waiting_since": runs._iso(known_since), "retry_at": None}
+    if str(turn_id).startswith("browser:"):
+        return {**out, "state": "browser"}
+    sid, owner = chat_of.get(turn_id) or (None, None)
+    if turn_id not in chat_of or not sid:
+        return {**out, "state": "no_record"}
+    if owner is None:
+        return {**out, "state": "no_company"}
+    if owner != org or (sid in claimed and claimed[sid] != org):
+        return {**out, "state": "other_company"}
+    left = _HELD.get(sid, 0) - _clock()
+    if left > 0:
+        return {**out, "state": "retrying", "retry_at": runs._iso(now + timedelta(seconds=left))}
+    if known_since is not None and (now - known_since).total_seconds() > WAITING_LATE_S:
+        return {**out, "state": "late"}
+    return out
+
+
 #: The title prefix of a run the sync makes from a run tag's sessions (runs.sync_sessions).
 async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = False,
                        before: datetime | None = None) -> dict[str, Any]:
@@ -709,7 +746,8 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
                    turns are traces of; a conversation that spans two days is a row of both, naming only that day's turns;
                    "questions" for a run typed on the page or imported: no rows, it keeps its questions view.
         sessions   rows shaped as GET /eval/sessions rows, each with the run's own "codes" and "turn_ids" in it
-        waiting    the run's questions whose conversation is not filed yet: code, question, asked_at, turn_id
+        waiting    the run's questions whose conversation is not filed yet: code, question, asked_at, turn_id, and why
+                   it waits (_why_waiting: `state`, `waiting_since`, `retry_at`), so none says "Reading in..." for ever
         elsewhere  a live day's scenario questions (asked by the Codex agent before 13 Nov 2026 and synced into the
                    day): not rows of the day, which keeps only what people asked by hand, but where each is filed
                    (code, session_id, turn_id), so a link to one still opens its conversation. A turn not filed yet
@@ -738,8 +776,8 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
                     "next": None}
         rids = [str(i) for i in (run.get("run_ids") or [])] if mode == "live" else []
         qs = (await conn.execute(text(
-            "SELECT q.seq_no, q.question, q.asked_at, l.turn_id, r.run_no, r.organization_id::text AS org,"
-            " q.created_by_email, r.owner_user_id::text AS owner, r.owner_email FROM tracelab.lab_questions q"
+            "SELECT q.seq_no, q.question, q.asked_at, q.created_at AS known_since, l.turn_id, r.run_no,"
+            " r.organization_id::text AS org, q.created_by_email, r.owner_user_id::text AS owner, r.owner_email FROM tracelab.lab_questions q"
             " JOIN tracelab.lab_question_traces l ON l.question_id = q.id JOIN tracelab.lab_runs r ON r.id = q.run_id"
             " WHERE q.run_id = ANY(CAST(:rids AS uuid[])) ORDER BY r.run_no, q.seq_no, l.created_at, l.turn_id"),
             {"rids": rids or [run["id"]]})).mappings().all()
@@ -753,12 +791,25 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
     scenario_turns: set[str] = set()
     if mode == "live":
         scenario_turns = {t for t, sid in filed.items() if str(sid).startswith(PREFIX + SEP)}
-        unfiled = [q["turn_id"] for q in qs if q["turn_id"] not in filed and not str(q["turn_id"]).startswith("browser:")]
-        if unfiled:
-            async with conversations._read() as conn:
-                scenario_turns |= {r[0] for r in (await conn.execute(text(
-                    f"SELECT tt.turn_id FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
-                    " AND tt.session_id LIKE 'scn\\_\\_%'"), {"ids": unfiled})).all()}
+    # What the chat's own record says of each turn not filed yet (its session id and company), and under which company
+    # those sessions are already filed: why each waits (_why_waiting).
+    unfiled = [q["turn_id"] for q in qs if q["turn_id"] not in filed and not str(q["turn_id"]).startswith("browser:")]
+    chat_of: dict[str, tuple[str | None, str | None]] = {}
+    claimed: dict[str, str | None] = {}
+    if unfiled:
+        async with conversations._read() as conn:
+            chat_of = {r[0]: (r[1], r[2]) for r in (await conn.execute(text(
+                f"SELECT tt.turn_id, tt.session_id, tt.organization_id::text FROM {TURNS} tt"
+                " WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"), {"ids": unfiled})).all()}
+        if mode == "live":
+            scenario_turns |= {t for t, (sid, _o) in chat_of.items() if str(sid or "").startswith(PREFIX + SEP)}
+        sids = sorted({sid for sid, _o in chat_of.values() if sid})
+        if sids:
+            async with conversations._lab_read() as conn:
+                claimed = {r[0]: r[1] for r in (await conn.execute(text(
+                    "SELECT s.id, s.organization_id::text FROM tracelab.sessions s WHERE s.id = ANY(CAST(:ids AS text[]))"),
+                    {"ids": sids})).all()}
+    now = datetime.now(timezone.utc)
     mine: dict[str, dict[str, list[str]]] = {}
     session_org: dict[str, str | None] = {}
     waiting: list[dict[str, Any]] = []
@@ -774,7 +825,8 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
             continue
         if sid is None:
             waiting.append({"code": qcode, "question": q["question"], "asked_at": runs._iso(q["asked_at"]),
-                            "turn_id": q["turn_id"], "asked_by": asker, "organization_id": q["org"]})
+                            "turn_id": q["turn_id"], "asked_by": asker, "organization_id": q["org"],
+                            **_why_waiting(q["turn_id"], q["org"], q["known_since"], chat_of, claimed, now)})
             continue
         got = mine.setdefault(sid, {"codes": [], "turn_ids": [], "askers": []})
         session_org[sid] = q["org"]
@@ -846,6 +898,8 @@ def session_channel(session_id: Any) -> str | None:
 
 #: At most this many conversations of waiting live questions are filed a round.
 WAITING_PER_ROUND = 50
+#: How many waiting turns a round looks at, newest first, to find WAITING_PER_ROUND conversations it can file.
+WAITING_SCAN = 5000
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
@@ -866,15 +920,27 @@ async def file_waiting_live(*, org: str | None = None, limit: int = WAITING_PER_
             " WHERE r.kind = 'production' AND l.turn_id NOT LIKE 'browser:%'"
             f" AND NOT EXISTS (SELECT 1 FROM tracelab.traces t WHERE t.id = l.turn_id){mine}"
             " GROUP BY l.turn_id ORDER BY max(q.asked_at) DESC, l.turn_id LIMIT :lim"),
-            {"lim": max(1, int(limit)) * 4, **({"org": org} if org else {})})).all()]
+            {"lim": WAITING_SCAN, **({"org": org} if org else {})})).all()]
     if not turns:
         return {"sessions": 0, "traces": 0, "failed": 0}
+    # Only conversations a round can file take its places (19 Nov 2026): a turn the chat has no record of, of no
+    # company or of another company than the round's, a conversation another company has filed, and one held after a
+    # failure (HOLD_S) are passed over, so they never keep an older question waiting.
     async with conversations._read() as conn:
-        found = [r[0] for r in (await conn.execute(text(
-            f"SELECT tt.session_id FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
-            " AND tt.session_id IS NOT NULL AND tt.session_id NOT LIKE 'scn\\_\\_%'"
-            " GROUP BY tt.session_id ORDER BY max(tt.started_at) DESC"), {"ids": turns})).all()]
-    sids = [s for s in found if 1 <= len(s) <= SESSION_ID_MAX][:max(1, int(limit))]
+        found = [(r[0], r[1]) for r in (await conn.execute(text(
+            f"SELECT tt.session_id, tt.organization_id::text FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
+            " AND tt.session_id IS NOT NULL AND tt.organization_id IS NOT NULL AND tt.session_id NOT LIKE 'scn\\_\\_%'"
+            " GROUP BY tt.session_id, tt.organization_id ORDER BY max(tt.started_at) DESC, tt.session_id"),
+            {"ids": turns})).all()]
+    found = [(s, o) for s, o in found if 1 <= len(s) <= SESSION_ID_MAX and (org is None or o == org)
+             and _HELD.get(s, 0) <= _clock()]
+    if found:
+        async with conversations._lab_read() as conn:
+            other = {r[0] for r in (await conn.execute(text(
+                "SELECT s.id, s.organization_id::text FROM tracelab.sessions s WHERE s.id = ANY(CAST(:ids AS text[]))"),
+                {"ids": [s for s, _o in found]})).all() if r[1] != dict(found).get(r[0])}
+        found = [(s, o) for s, o in found if s not in other]
+    sids = list(dict.fromkeys(s for s, _o in found))[:max(1, int(limit))]
     if not sids:
         return {"sessions": 0, "traces": 0, "failed": 0}
     return await ingest_from_main(since=_EPOCH, run_tag=CHAT_TAG, sessions={s: None for s in sids}, org=org,

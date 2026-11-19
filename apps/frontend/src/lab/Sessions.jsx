@@ -19,7 +19,7 @@ import SessionPage from './SessionPage.jsx';
 import Compare from './Compare.jsx';
 import Scenarios from './Scenarios.jsx';
 import { LEVELS, LEVEL_TEXT, STATUS_OPTIONS, TYPE_OPTIONS, askersOf, evaluateLevels, evaluateStep, evaluateText, ingestText, sessionQuery,
-  sessionRow } from './logic/sessions.js';
+  sessionRow, waitingWords } from './logic/sessions.js';
 import './runs.css';
 import './sessions.css';
 
@@ -162,7 +162,8 @@ function AskedBy({ emails, orgId, companies }) {
 }
 
 // The sessions as a table. `rows` null while reading. `waiting` (a run's questions whose conversation is not filed yet,
-// 14 Nov 2026) are rows that cannot be opened until a sync files them: the question, its code and "Reading in…".
+// 14 Nov 2026) are rows that cannot be opened until a sync files them: the question, its code and why it waits (waitingWords:
+// "Reading in…" only while the next sync files it; 19 Nov 2026).
 // `asker` (a live day, 19 Nov 2026) adds the "Asked by" column: the person who asked each row, and its company.
 export function SessionsTable({ rows, runTag, onOpen, waiting, readingText, asker, companies }) {
   if (rows == null) return <p className="lab-small" role="status">{readingText || 'Reading the sessions…'}</p>;
@@ -190,13 +191,13 @@ export function SessionsTable({ rows, runTag, onOpen, waiting, readingText, aske
               <td>
                 <strong>{w.question || '—'}</strong>
                 <div className="lab-small lab-mono">{w.code}</div>
-                <div className="lab-small">{'Its conversation is filed by the next sync.'}</div>
+                <div className="lab-small">{waitingWords(w).line}</div>
               </td>
               {asker ? <AskedBy emails={askersOf(w)} orgId={w.organization_id} companies={companies} /> : null}
               <td>{'—'}</td>
               <td>{'—'}</td>
               <td>{'—'}</td>
-              <td><span className="lab-chip">{'Reading in…'}</span></td>
+              <td><span className={'lab-chip' + (waitingWords(w).chip === 'No trace' ? ' lab-chip-muted' : '')}>{waitingWords(w).chip}</span></td>
               {SHOW_SCORES ? <><td>{'—'}</td><td>{'—'}</td><td>{'—'}</td></> : null}
               <td>{fmtWhen(w.asked_at) || '—'}</td>
             </tr>
