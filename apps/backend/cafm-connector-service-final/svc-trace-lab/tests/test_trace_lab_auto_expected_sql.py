@@ -23,6 +23,7 @@ from trace_lab.review_errors import NotFound
 pytestmark = requires_scratch
 
 _REAL_QUERIES_FOR = records_queries.queries_for
+_REAL_ASKER_SCOPE = auto_expected.asker_scope
 
 RULES = [{"code": "S-1", "title": "overdue_reported_as_none",
           "text": "When the register holds overdue items, list each one with its days overdue; never report none."},
@@ -32,6 +33,17 @@ RULES = [{"code": "S-1", "title": "overdue_reported_as_none",
 @pytest.fixture(autouse=True)
 def _no_rests(monkeypatch):
     monkeypatch.setattr(auto_expected, "_resting", {})
+    monkeypatch.setattr(auto_expected, "_settled", {})
+    monkeypatch.setattr(auto_expected, "_looks", {})
+
+
+@pytest.fixture(autouse=True)
+def _company_asker(monkeypatch):
+    """By default the asker's access is not the point of a test: the read is for the whole company. The tests about the
+    asker's access set one (_asker) or call _REAL_ASKER_SCOPE."""
+    async def company(org, user_id):
+        return {"scope": "company", "building_ids": None, "email": None}
+    monkeypatch.setattr(auto_expected, "asker_scope", company)
 
 
 @pytest.fixture(autouse=True)
@@ -80,7 +92,8 @@ async def test_a_new_live_question_gets_a_draft_from_the_spec(lab_scratch, main_
     assert len(rows) == 3 and {r["source"] for r in rows} == {"coding_agent"}
     assert {r["author_email"] for r in rows} == {agent.AGENT_EMAIL}
     assert rows[0]["evidence"] == {"drafted_from": "SPEC.md", "spec_version": version, "rules": ["S-1", "S-4"],
-                                    "draft": auto_expected.DRAFT_VERSION, "no_query": "no_trace"}
+                                    "draft": auto_expected.DRAFT_VERSION, "no_query": "no_trace", "tries": 0,
+                                    "last_tried": NOW.isoformat()}
     prompt = asked[0]["prompt"]
     assert "S-1" in prompt and "never report none" in prompt, "the approved rules are in the prompt"
     assert "Which vendors are blocked?" in " ".join(a["prompt"] for a in asked), "each question is in its own prompt"
@@ -617,6 +630,10 @@ async def _newest(lab):
         )).mappings().all()}
 
 
+async def _newest_rows(lab):
+    return list((await _newest(lab)).values())
+
+
 async def test_the_model_is_told_to_always_write_what_a_correct_answer_contains(lab_scratch, main_scratch, monkeypatch):
     await _live_run(main_scratch)
     await _spec()
@@ -833,8 +850,10 @@ async def test_a_question_with_a_query_gets_values_as_its_draft(lab_scratch, mai
 
 
 async def test_the_asker_is_not_known_here_so_the_whole_company_is_read_and_it_says_so(lab_scratch, main_scratch, monkeypatch):
-    """No accounts table in this database: the asker's access cannot be rebuilt, so the read is for the whole company."""
+    """The accounts do not know the person on the turn (deterministic): the read is for the whole company."""
     await _live_run(main_scratch)
+    await _accounts(main_scratch)
+    monkeypatch.setattr(auto_expected, "asker_scope", _REAL_ASKER_SCOPE)
     _queries(monkeypatch)
     reads = _records(monkeypatch)
     await auto_expected.draft_for_live(None, now=NOW)
@@ -1105,10 +1124,13 @@ async def test_an_older_values_draft_with_no_query_now_is_left_as_it_is_and_cost
                                         evidence={"drafted_from": "answer_key", "key": "vendors_blocked", "params": {}})
     asked = _model(monkeypatch)
     out = await auto_expected.draft_for_live(None, now=NOW)
-    assert out["redrafted"] == 0 and asked == [] and len(await _drafts(lab_scratch)) == 3, "values are not turned into prose"
+    assert out["redrafted"] == 0 and asked == [], "values are not turned into prose"
+    rows = await _drafts(lab_scratch)
+    assert len(rows) == 6 and {r["expected"] for r in rows} == {"2 vendors are blocked."}, "only the try is written down"
+    assert {r["evidence"].get("tries") for r in await _newest_rows(lab_scratch)} == {1}
 
 
-async def test_an_older_values_draft_that_cannot_be_read_again_rests_instead_of_being_tried_every_round(lab_scratch, main_scratch, monkeypatch):
+async def test_an_older_values_draft_that_cannot_be_read_again_backs_off_instead_of_being_tried_every_round(lab_scratch, main_scratch, monkeypatch):
     code = await _live_run(main_scratch)
     await _file_traces(lab_scratch, monkeypatch)
     qs = (await runs.list_questions(member(), code))["questions"]
@@ -1123,16 +1145,19 @@ async def test_an_older_values_draft_that_cannot_be_read_again_rests_instead_of_
     await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=1))
     assert len(tried) == 3, "not read again a minute later: the round runs every minute"
     await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=1))
-    assert len(tried) == 6, "tried again after the rest"
+    assert len(tried) == 3, "the second try waits longer than the first: two hours"
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(hours=2, minutes=1))
+    assert len(tried) == 6, "tried again after the longer rest"
     # ...and the values replace the draft the first time a query can be made for the question.
     _queries(monkeypatch)
     _records(monkeypatch)
-    out = await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST * 3)
+    out = await auto_expected.draft_for_live(None, now=NOW + timedelta(hours=11))
     assert out["redrafted"] == 3 and out["keyed"] == 3
 
 
-async def test_a_spec_draft_whose_trace_was_not_filed_is_read_again_once_and_then_rests(lab_scratch, main_scratch, monkeypatch):
-    """"no_trace" is a passing reason, but a question that is still about nothing after the retry rests again."""
+async def test_a_spec_draft_whose_trace_was_not_filed_is_read_again_and_its_reason_updated_when_it_is_terminal(lab_scratch, main_scratch, monkeypatch):
+    """"no_trace" is a passing reason. When the traces are filed and the turns are about nothing, that is the new reason
+    (a new version of the draft, the words unchanged) and the question is not read again."""
     await _live_run(main_scratch)
     await _spec()
     _model(monkeypatch)
@@ -1142,9 +1167,12 @@ async def test_a_spec_draft_whose_trace_was_not_filed_is_read_again_once_and_the
     tried = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "not_about_records"})
     await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=1))
     assert len(tried) == 3
-    await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=2))
-    assert len(tried) == 3, "rests again"
-    assert len(await _drafts(lab_scratch)) == 3, "nothing new was written"
+    newest = await _newest_rows(lab_scratch)
+    assert {r["evidence"]["no_query"] for r in newest} == {"not_about_records"}, "the stored reason is no longer wrong"
+    assert {r["evidence"]["drafted_from"] for r in newest} == {"SPEC.md"} and len(await _drafts(lab_scratch)) == 6
+    for later in (timedelta(minutes=45), timedelta(hours=3), timedelta(days=3)):
+        await auto_expected.draft_for_live(None, now=NOW + later)
+    assert len(tried) == 3 and len(await _drafts(lab_scratch)) == 6, "a terminal reason is not read again"
 
 
 async def test_an_older_spec_draft_with_no_query_is_drafted_again_from_the_spec(lab_scratch, main_scratch, monkeypatch):
@@ -1211,18 +1239,33 @@ async def test_a_planner_that_was_down_is_asked_again_after_the_rest_and_the_val
     assert {r["evidence"]["queries"][0]["source"] for r in (await _newest(lab_scratch)).values()} == {"proposed"}
 
 
-async def test_a_read_that_fails_keeps_the_spec_draft_and_rests_that_question(lab_scratch, main_scratch, monkeypatch):
+async def test_a_read_that_fails_keeps_the_spec_draft_and_says_the_read_failed(lab_scratch, main_scratch, monkeypatch):
     code = await _live_run(main_scratch)
     await _spec()
     _model(monkeypatch)
     _queries(monkeypatch)
-    reads = _records(monkeypatch, raise_for="blocked", raise_=ValueError("the plan does not fit this database"))
+    _records(monkeypatch, raise_for="blocked", raise_=RuntimeError("the connection was closed"))
     out = await auto_expected.draft_for_live(None, now=NOW)
     assert out["drafted"] == 3 and out["keyed"] == 2
     new = await _newest(lab_scratch)
     by_text = {q["question"]: new[q["id"]] for q in (await runs.list_questions(member(), code))["questions"]}
     assert by_text["Which vendors are blocked?"]["evidence"]["no_query"] == "read_failed"
     assert all(r["evidence"]["drafted_from"] == "records" for t, r in by_text.items() if "blocked" not in t)
+
+
+async def test_a_plan_that_does_not_fit_the_database_is_a_terminal_reason_never_read_again(lab_scratch, main_scratch, monkeypatch):
+    """Review I1: a ValueError from the re-run ("the plan does not fit this database") is the same on every try."""
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    _queries(monkeypatch)
+    reads = _records(monkeypatch, raise_=ValueError("the plan does not fit this database: no such column"))
+    await auto_expected.draft_for_live(None, now=NOW)
+    assert {r["evidence"]["no_query"] for r in await _drafts(lab_scratch)} == {"plan_does_not_fit"}
+    tried = len(reads)
+    for later in (timedelta(minutes=45), timedelta(hours=3), timedelta(days=3)):
+        await auto_expected.draft_for_live(None, now=NOW + later)
+    assert len(reads) == tried and len(await _drafts(lab_scratch)) == 3
 
 
 async def test_one_failed_read_of_several_stores_no_half_an_answer(lab_scratch, main_scratch, monkeypatch):
@@ -1298,31 +1341,33 @@ COMPANY = {"scope": "company", "building_ids": None, "email": None}
 
 async def test_a_plain_user_is_rebuilt_with_the_buildings_allocated_to_them(lab_scratch, main_scratch, monkeypatch):
     await _accounts(main_scratch)
-    got = await auto_expected.asker_scope(ORG, USER)
+    got = await _REAL_ASKER_SCOPE(ORG, USER)
     assert got["scope"] == "asker" and got["email"] == "pat@example.com" and sorted(got["building_ids"]) == [B1, B2]
 
 
 async def test_an_administrator_is_not_bounded_by_allocation(lab_scratch, main_scratch, monkeypatch):
     await _accounts(main_scratch)
-    assert await auto_expected.asker_scope(ORG, BOSS) == {"scope": "asker", "building_ids": None, "email": "boss@example.com"}
+    assert await _REAL_ASKER_SCOPE(ORG, BOSS) == {"scope": "asker", "building_ids": None, "email": "boss@example.com"}
 
 
 async def test_a_user_allocated_to_nothing_is_rebuilt_as_allocated_to_nothing(lab_scratch, main_scratch, monkeypatch):
     await _accounts(main_scratch)
-    got = await auto_expected.asker_scope(ORG, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5")
+    got = await _REAL_ASKER_SCOPE(ORG, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5")
     assert got == {"scope": "asker", "building_ids": [], "email": "none@example.com"}
 
 
 async def test_an_asker_that_cannot_be_rebuilt_is_the_whole_company(lab_scratch, main_scratch, monkeypatch):
     await _accounts(main_scratch)
-    assert await auto_expected.asker_scope(ORG, None) == COMPANY, "no user id on the turn"
-    assert await auto_expected.asker_scope(ORG, GHOST) == COMPANY, "no such account"
-    assert await auto_expected.asker_scope(ORG, STRANGER) == COMPANY, "a person of another company did not ask here"
-    assert await auto_expected.asker_scope(ORG, "not-a-uuid") == COMPANY, "an id that is not an id"
+    assert await _REAL_ASKER_SCOPE(ORG, None) == COMPANY, "no user id on the turn"
+    assert await _REAL_ASKER_SCOPE(ORG, GHOST) == COMPANY, "no such account"
+    assert await _REAL_ASKER_SCOPE(ORG, STRANGER) == COMPANY, "a person of another company did not ask here"
+    assert await _REAL_ASKER_SCOPE(ORG, "not-a-uuid") == COMPANY, "an id that is not an id"
 
 
-async def test_without_the_accounts_tables_the_asker_is_the_whole_company(lab_scratch, main_scratch, monkeypatch):
-    assert await auto_expected.asker_scope(ORG, USER) == COMPANY
+async def test_without_the_accounts_tables_the_asker_cannot_be_read_and_is_not_guessed_as_the_company(lab_scratch, main_scratch, monkeypatch):
+    """Review I3: a read that fails is not "this person has no restriction": it is a failed read, to be tried again."""
+    with pytest.raises(auto_expected.AskerUnreadable):
+        await _REAL_ASKER_SCOPE(ORG, USER)
 
 
 async def test_the_caller_is_built_by_hoistras_own_principal_code(lab_scratch, main_scratch, monkeypatch):
@@ -1332,8 +1377,183 @@ async def test_the_caller_is_built_by_hoistras_own_principal_code(lab_scratch, m
     await _accounts(main_scratch)
     real, bodies = hoistra._from_me, []
     monkeypatch.setattr(hoistra, "_from_me", lambda body: bodies.append(body) or real(body))
-    got = await auto_expected.asker_scope(ORG, USER)
+    got = await _REAL_ASKER_SCOPE(ORG, USER)
     assert len(bodies) == 1 and bodies[0]["user"]["id"] == USER and bodies[0]["user"]["role"] == "user"
     assert sorted(bodies[0]["user"]["building_ids"]) == [B1, B2] and got["scope"] == "asker"
     monkeypatch.setattr(hoistra, "_from_me", lambda body: (_ for _ in ()).throw(ValueError("an id that is not a uuid")))
-    assert await auto_expected.asker_scope(ORG, USER) == COMPANY, "a caller Hoistra's code cannot build is the whole company"
+    with pytest.raises(auto_expected.AskerUnreadable):
+        await _REAL_ASKER_SCOPE(ORG, USER)
+
+
+# ── Review fix round 1 (19 Nov 2026) ───────────────────────────────────────────────────────────────────────────────────
+# I1  a draft that could not be read is read again with a backoff (30 minutes, 2 hours, 8 hours) and a cap of three tries,
+#     written on the draft itself so a restart does not forget; a terminal reason replaces a stale one; a plan that does not
+#     fit the database is terminal.
+# I2  a question that ends with no draft stored (no approved spec, the SPEC.md call failing) does not ask the planner again
+#     every round.
+# I3  an asker that cannot be read is a failed read to try again, not a quiet whole-company read.
+
+def _forget(monkeypatch):
+    """What a restart does: the process remembers nothing; the drafts alone say when to try again."""
+    monkeypatch.setattr(auto_expected, "_resting", {})
+    monkeypatch.setattr(auto_expected, "_settled", {})
+    monkeypatch.setattr(auto_expected, "_looks", {})
+
+
+async def test_a_retry_that_still_fails_backs_off_and_stops_after_three_tries(lab_scratch, main_scratch, monkeypatch):
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    down = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "planner_unavailable"})
+    await auto_expected.draft_for_live(None, now=NOW)
+    assert len(down) == 3 and {r["evidence"]["tries"] for r in await _drafts(lab_scratch)} == {0}
+
+    async def at(later):
+        _forget(monkeypatch)
+        await auto_expected.draft_for_live(None, now=NOW + later)
+        return len(down)
+    assert await at(timedelta(minutes=29)) == 3, "the first retry waits 30 minutes"
+    assert await at(timedelta(minutes=31)) == 6
+    assert await at(timedelta(hours=2)) == 6, "the second waits two hours after the first"
+    assert await at(timedelta(minutes=152)) == 9
+    assert await at(timedelta(hours=9)) == 9, "the third waits eight hours after the second"
+    assert await at(timedelta(hours=11)) == 12
+    assert await at(timedelta(days=30)) == 12, "three tries, then it stops: no planner call every 30 minutes for ever"
+    newest = await _newest_rows(lab_scratch)
+    assert {r["evidence"]["tries"] for r in newest} == {3} and {r["evidence"]["no_query"] for r in newest} == {"planner_unavailable"}
+    assert {r["evidence"]["last_tried"] for r in newest} == {(NOW + timedelta(hours=11)).isoformat()}
+    assert len(await _drafts(lab_scratch)) == 3 + 9, "each try is a new version of the draft, the words unchanged"
+    assert {r["expected"] for r in await _drafts(lab_scratch)} == {"Lists each overdue certificate with its days overdue, as a list."}
+
+
+async def test_the_reason_stored_with_a_draft_follows_the_latest_verdict(lab_scratch, main_scratch, monkeypatch):
+    """planner_unavailable at first; later the planner says the question is not about records: that is what is stored."""
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "planner_unavailable"})
+    await auto_expected.draft_for_live(None, now=NOW)
+    await _file_traces(lab_scratch, monkeypatch)
+    _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "not_about_records"})
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=31))
+    assert {r["evidence"]["no_query"] for r in await _newest_rows(lab_scratch)} == {"not_about_records"}
+
+
+async def test_a_read_that_fails_for_a_passing_reason_backs_off_the_same_way(lab_scratch, main_scratch, monkeypatch):
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    _queries(monkeypatch)
+    reads = _records(monkeypatch, raise_=RuntimeError("the connection was closed"))
+    await auto_expected.draft_for_live(None, now=NOW)
+    assert {r["evidence"]["no_query"] for r in await _drafts(lab_scratch)} == {"read_failed"}
+    n = len(reads)
+    _forget(monkeypatch)
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=31))
+    m = len(reads)
+    assert m > n
+    _forget(monkeypatch)
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=62))
+    assert len(reads) == m, "the second retry is two hours after the first"
+
+
+async def test_without_an_approved_spec_a_question_that_needs_the_planner_asks_it_once(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)
+    calls = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "not_about_records"})
+    for later in (0, 0, 1):
+        await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=later))
+    assert len(calls) == 3, "once per question, not every round (up to ten model calls a minute with no spec)"
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=31))
+    assert len(calls) == 6, "asked again after the rest"
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=32))
+    assert len(calls) == 6
+    # The spec is approved: the question is drafted with the reason already known, with no new planner call.
+    await _spec()
+    asked = _model(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=33))
+    assert out["drafted"] == 3 and len(asked) == 3 and len(calls) == 6
+    assert {r["evidence"]["no_query"] for r in await _drafts(lab_scratch)} == {"not_about_records"}
+
+
+async def test_a_spec_call_that_keeps_failing_does_not_ask_the_planner_each_round(lab_scratch, main_scratch, monkeypatch):
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch, fail=True)
+    calls = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "planner_unavailable"})
+    first = await auto_expected.draft_for_live(None, now=NOW)
+    second = await auto_expected.draft_for_live(None, now=NOW)
+    assert first["failed"] == 3 and second["failed"] == 3, "the SPEC.md call is still tried every round"
+    assert len(calls) == 3, "but the planner is not"
+    _model(monkeypatch)
+    assert (await auto_expected.draft_for_live(None, now=NOW))["drafted"] == 3 and len(calls) == 3
+    assert {r["evidence"]["no_query"] for r in await _drafts(lab_scratch)} == {"planner_unavailable"}
+
+
+async def test_an_asker_that_cannot_be_read_is_a_failed_read_not_the_whole_company(lab_scratch, main_scratch, monkeypatch):
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    _queries(monkeypatch)
+    reads = _records(monkeypatch)
+
+    async def unreadable(org, user_id):
+        raise auto_expected.AskerUnreadable("permission denied for table user_buildings")
+    monkeypatch.setattr(auto_expected, "asker_scope", unreadable)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert reads == [] and out["keyed"] == 0 and out["drafted"] == 3, "nothing is read with a guessed access"
+    assert {r["evidence"]["no_query"] for r in await _drafts(lab_scratch)} == {"read_failed"}
+    # Once the accounts can be read again, the values replace the draft (the retry rules of the other reasons apply).
+    _asker(monkeypatch)
+    _forget(monkeypatch)
+    later = await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=31))
+    assert later["replaced"] == 3 and len(reads) == 3
+    assert {r["evidence"]["queries"][0]["scope"] for r in await _newest_rows(lab_scratch)} == {"asker"}
+
+
+async def test_a_turn_record_that_cannot_be_read_is_a_failed_read_not_the_whole_company(lab_scratch, main_scratch, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from trace_lab import conversations
+
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    _queries(monkeypatch)
+    reads = _records(monkeypatch)
+
+    @asynccontextmanager
+    async def broken():
+        raise RuntimeError("could not connect to the application database")
+        yield
+    monkeypatch.setattr(conversations, "_read", broken)
+    await auto_expected.draft_for_live(None, now=NOW)
+    assert reads == [] and {r["evidence"]["no_query"] for r in await _drafts(lab_scratch)} == {"read_failed"}
+
+
+async def test_an_asker_that_cannot_be_read_is_logged_as_a_warning(lab_scratch, main_scratch, monkeypatch):
+    seen = []
+
+    class Log:
+        def __getattr__(self, level):
+            return lambda event, **kw: seen.append((level, event))
+    monkeypatch.setattr(auto_expected, "log", Log())
+    with pytest.raises(auto_expected.AskerUnreadable):
+        await _REAL_ASKER_SCOPE(ORG, USER)              # no accounts tables in this database
+    assert [lvl for lvl, _ in seen] == ["warning"]
+    assert await _REAL_ASKER_SCOPE(ORG, None) == COMPANY, "no user id on the turn: deterministic, quietly the company"
+    assert [lvl for lvl, _ in seen] == ["warning"]
+
+
+async def test_a_verdict_the_process_still_remembers_is_not_counted_as_a_try(lab_scratch, main_scratch, monkeypatch):
+    """A draft that is due but whose question's verdict is still remembered is not read: no try is written on it."""
+    await _live_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    down = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "planner_unavailable"})
+    await auto_expected.draft_for_live(None, now=NOW)
+    for qid in list(auto_expected._settled):
+        auto_expected._settled[qid] = (NOW + timedelta(hours=5), "planner_unavailable")
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=31))
+    assert len(down) == 3 and len(await _drafts(lab_scratch)) == 3
+    assert {r["evidence"]["tries"] for r in await _newest_rows(lab_scratch)} == {0}
