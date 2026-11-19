@@ -280,6 +280,10 @@ def sentence(key: Key, params: dict, facts: list) -> str:
 # ── reading it ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def jsonable(v: Any) -> Any:
+    """A value safe to store as JSON: dates as ISO text, numbers as numbers, and anything JSON does not know (an object of
+    the records engine, say) as its text, never an error when a draft is stored."""
+    if v is None or isinstance(v, (str, bool, int, float)):
+        return v
     if isinstance(v, datetime):
         return v.isoformat()
     if isinstance(v, date):
@@ -294,7 +298,7 @@ def jsonable(v: Any) -> Any:
         return sorted(jsonable(x) for x in v)
     if isinstance(v, (list, tuple)):
         return [jsonable(x) for x in v]
-    return v
+    return str(v)
 
 
 def _literal(v: Any) -> str:

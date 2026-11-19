@@ -35,6 +35,7 @@ def _no_rests(monkeypatch):
     monkeypatch.setattr(auto_expected, "_resting", {})
     monkeypatch.setattr(auto_expected, "_settled", {})
     monkeypatch.setattr(auto_expected, "_looks", {})
+    monkeypatch.setattr(auto_expected, "_held", {}, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -348,6 +349,7 @@ async def _mixed_run(main) -> str:
 
 async def test_a_question_the_key_knows_gets_values_from_the_records(lab_scratch, main_scratch, monkeypatch):
     code = await _mixed_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     await _spec()
     asked = _model(monkeypatch)
     seen = _key_reads(monkeypatch)
@@ -380,6 +382,7 @@ async def test_when_the_key_cannot_read_the_spec_draft_is_used(lab_scratch, main
 async def test_a_name_the_records_do_not_hold_is_a_value_not_a_fallback(lab_scratch, main_scratch, monkeypatch):
     """19 Nov 2026: "Not on record: Nowhere House" is the exact answer (never a zero), so it is the draft."""
     await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     await _spec()
     asked = _model(monkeypatch)
     _key_reads(monkeypatch, found=False)
@@ -394,6 +397,7 @@ async def test_a_name_the_records_do_not_hold_is_a_value_not_a_fallback(lab_scra
 
 async def test_the_key_works_without_an_approved_spec(lab_scratch, main_scratch, monkeypatch):
     await _mixed_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     asked = _model(monkeypatch)
     _key_reads(monkeypatch)
     out = await auto_expected.draft_for_live(None, now=NOW)
@@ -590,6 +594,7 @@ async def test_an_untouched_spec_draft_is_replaced_by_the_keys_values_once_the_k
     from trace_lab import answer_key
 
     code = await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     await _spec()
     _model(monkeypatch)
     _key_reads(monkeypatch, raise_=answer_key.NotReady("no map yet"))
@@ -612,6 +617,7 @@ async def test_a_persons_answer_is_never_replaced_by_the_key(lab_scratch, main_s
     from trace_lab import answer_key
 
     code = await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     await _spec()
     _model(monkeypatch)
     _key_reads(monkeypatch, raise_=answer_key.NotReady("no map yet"))
@@ -661,6 +667,7 @@ async def test_a_key_that_cannot_read_rests_before_it_is_tried_again(lab_scratch
     from trace_lab import answer_key
 
     await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     seen = _key_reads(monkeypatch, raise_=answer_key.NotReady("no map yet"))
     await auto_expected.draft_for_live(None, now=NOW)
     tried = len(seen)
@@ -673,6 +680,7 @@ async def test_a_key_that_cannot_read_rests_before_it_is_tried_again(lab_scratch
 
 async def test_values_read_from_the_records_wait_on_the_session_page_too(lab_scratch, main_scratch, monkeypatch):
     await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     _key_reads(monkeypatch)
     out = await auto_expected.draft_for_live(None, now=NOW)
     assert out["keyed"] == 3
@@ -887,13 +895,16 @@ def _asker(monkeypatch, scope=None):
     return calls
 
 
-async def _file_traces(lab, monkeypatch, nodes=None):
-    """File the traces of _live_run's three turns, with `nodes` as their tree (no data tool by default): a turn whose
-    trace is filed is known to be about nothing, rather than not known yet."""
+async def _file_traces(lab, monkeypatch, nodes=None, *, questions=None):
+    """File the traces of _live_run's three turns (or of _questions' n turns), with `nodes` as their tree (no data tool by
+    default): a turn whose trace is filed is known to be about nothing, rather than not known yet."""
     from trace_lab import eval_store
 
-    await seed_session(lab, CHAT_A, tag="chat", turn_ids=("turn-a1", "turn-a2"))
-    await seed_session(lab, CHAT_B, tag="chat", turn_ids=("turn-b1",), at=T0 + timedelta(minutes=5))
+    if questions is not None:
+        await seed_session(lab, CHAT_A, tag="chat", turn_ids=tuple(f"turn-q{i}" for i in range(questions)))
+    else:
+        await seed_session(lab, CHAT_A, tag="chat", turn_ids=("turn-a1", "turn-a2"))
+        await seed_session(lab, CHAT_B, tag="chat", turn_ids=("turn-b1",), at=T0 + timedelta(minutes=5))
 
     async def nodes_of(conn, trace_id):
         return nodes if nodes is not None else [tool("t1", "write_todos")]
@@ -1045,6 +1056,7 @@ async def test_what_changed_since_hoistra_read_is_stored_beside_the_values(lab_s
 
 async def test_a_proposed_or_fixed_query_has_nothing_to_compare_with(lab_scratch, main_scratch, monkeypatch):
     await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     prop = {"source": "proposed", "plan": PLAN_LIST_WOS, "question": "How many work orders are open?"}
     _queries(monkeypatch, lambda nodes, q, propose: {"queries": [prop], "none": None})
     _records(monkeypatch)
@@ -1136,6 +1148,8 @@ async def test_a_blank_question_never_gets_a_proposal(lab_scratch, main_scratch,
 
 async def test_at_most_ten_proposals_a_round(lab_scratch, main_scratch, monkeypatch):
     await _questions(main_scratch, 12)
+    # a proposal needs the turn's trace, with a data tool other than the records tool (final review 9)
+    await _file_traces(lab_scratch, monkeypatch, nodes=[tool("t1", "get_compliance_status")], questions=12)
     _model(monkeypatch)
     _records(monkeypatch)
     proposals = []
@@ -1311,6 +1325,7 @@ async def test_the_records_map_is_not_built_yet_so_the_spec_draft_is_kept_and_th
 
 async def test_a_planner_that_was_down_is_asked_again_after_the_rest_and_the_values_replace_the_draft(lab_scratch, main_scratch, monkeypatch):
     await _live_run(main_scratch)
+    await _file_traces(lab_scratch, monkeypatch)       # Hoistra's own query is known first (final review 9)
     await _spec()
     _model(monkeypatch)
     down = _queries(monkeypatch, lambda nodes, q, propose: {"queries": [], "none": "planner_unavailable"})
@@ -1484,6 +1499,7 @@ def _forget(monkeypatch):
     monkeypatch.setattr(auto_expected, "_resting", {})
     monkeypatch.setattr(auto_expected, "_settled", {})
     monkeypatch.setattr(auto_expected, "_looks", {})
+    monkeypatch.setattr(auto_expected, "_held", {}, raising=False)
 
 
 async def test_a_retry_that_still_fails_backs_off_and_stops_after_three_tries(lab_scratch, main_scratch, monkeypatch):
@@ -1643,3 +1659,122 @@ async def test_a_verdict_the_process_still_remembers_is_not_counted_as_a_try(lab
     await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=31))
     assert len(down) == 3 and len(await _drafts(lab_scratch)) == 3
     assert {r["evidence"]["tries"] for r in await _newest_rows(lab_scratch)} == {0}
+
+
+# ── Final review (19 Nov 2026) ──
+# 1   (live) a plan carrying the records engine's own objects stopped every round; one question's failure stops no round.
+# 8   the chat's own record of a turn guards the company, as the trace does.
+# 9   a turn whose trace is not filed yet is not drafted from the answer key: Hoistra's own query comes first.
+# 10  a question that can be decided for no company rests instead of taking a slot every round.
+
+def _log(monkeypatch):
+    seen = []
+
+    class Log:
+        def __getattr__(self, level):
+            return lambda event, **kw: seen.append((level, event, kw))
+    monkeypatch.setattr(auto_expected, "log", Log())
+    return seen
+
+
+async def _qid(code, text_):
+    return next(q["id"] for q in (await runs.list_questions(member(), code))["questions"] if q["question"] == text_)
+
+
+async def test_a_plan_carrying_the_records_engines_own_objects_is_still_stored(lab_scratch, main_scratch, monkeypatch):
+    """Live, 19 Nov 2026: a certificate question naming a building carries Hoistra's Relation objects in its plan as run
+    (an include's "_scope"); 'Object of type Relation is not JSON serializable' stopped every round after the first."""
+    from src.agents import ontology_qa as oq
+
+    rel = oq.Relation("cert_in_building", {"from": "ComplianceCertificate", "to": "Building", "join": ["from.building_id = to.id"]})
+    plan = dict(PLAN_LIST_WOS, include=[{"name": "certificates", "concept": "ComplianceCertificate", "via": ["CERTIFICATE_BUILDING"],
+                                         "states": [], "filters": [], "_scope": [({"concept": "Building"}, [(rel, True)])]}])
+    await _live_run(main_scratch)
+    _queries(monkeypatch, lambda nodes, q, propose: {"queries": [_hoistra(q, plan=plan)], "none": None})
+    _records(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["drafted"] == 3 and out["keyed"] == 3
+    assert all(r["evidence"]["drafted_from"] == "records" for r in await _drafts(lab_scratch))
+
+
+async def test_one_question_that_fails_unexpectedly_does_not_stop_the_round_and_rests(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    calls = _queries(monkeypatch)
+    _records(monkeypatch)
+    seen = _log(monkeypatch)
+    bad = await _qid(code, "Which vendors are blocked?")
+    real = runs._insert_expected
+
+    async def insert(conn, m, *, question_id, **kw):
+        if question_id == bad:
+            raise TypeError("Object of type Relation is not JSON serializable")
+        return await real(conn, m, question_id=question_id, **kw)
+    monkeypatch.setattr(runs, "_insert_expected", insert)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["drafted"] == 2 and out["keyed"] == 2, "the other questions are still drafted"
+    assert bad not in await _newest(lab_scratch)
+    assert any(lvl == "warning" and kw.get("question_id") == bad for lvl, _e, kw in seen), "said as a warning"
+    tried = len(calls)
+    await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=1))
+    assert len(calls) == tried, "it rests: not tried again a minute later"
+    monkeypatch.setattr(runs, "_insert_expected", real)
+    again = await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=1))
+    assert again["drafted"] == 1 and bad in await _newest(lab_scratch), "tried again after the rest"
+
+
+async def test_a_chat_turn_of_another_company_is_not_read_for_this_question(lab_scratch, main_scratch, monkeypatch):
+    """The trace is not filed yet, so the chat's own record of the turn is the only guard on its company."""
+    code = await _live_run(main_scratch)
+    async with main_scratch.begin() as c:
+        await c.execute(text("UPDATE plenum_cafm.agent_trace_turns SET organization_id = CAST(:o AS uuid) WHERE turn_id = 'turn-b1'"),
+                        {"o": OTHER_ORG})
+    calls = _queries(monkeypatch)
+    reads = _records(monkeypatch)
+    who = _asker(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    other = await _qid(code, "Which vendors are blocked?")
+    assert out["drafted"] == 2 and other not in await _newest(lab_scratch)
+    assert "Which vendors are blocked?" not in [c["question"] for c in calls] + [r["question"] for r in reads]
+    assert len(who) == 2, "nobody of another company is rebuilt as the asker"
+
+
+async def test_a_turn_whose_trace_is_not_filed_is_not_drafted_from_the_key_and_hoistras_query_comes_first(lab_scratch, main_scratch, monkeypatch):
+    """Source order Hoistra -> fixed -> proposed: before the trace is filed nothing is known of Hoistra's own query, so the
+    answer key does not draft (a key draft is never put over by Hoistra's query later)."""
+    code = await _mixed_run(main_scratch)
+    await _spec()
+    _model(monkeypatch)
+    seen = _key_reads(monkeypatch)
+    first = await auto_expected.draft_for_live(None, now=NOW)
+    keyed = await _qid(code, "Which vendors are blocked?")
+    row = (await _newest(lab_scratch))[keyed]
+    assert first["keyed"] == 0 and seen == [], "nothing read from the key before the trace is filed"
+    assert row["evidence"]["drafted_from"] == "SPEC.md" and row["evidence"]["no_query"] == "no_trace"
+    plan = {"question_type": "list", "focus": {"concept": "Vendor", "match": None, "states": ["blocked"], "filters": []},
+            "constraints": [], "include": [], "aggregate": None}
+    await _file_traces(lab_scratch, monkeypatch, nodes=[
+        tool("t1", "answer_from_records", {"question": "Which vendors are blocked?"}, seq=1), llm("p1", parent="t1", plan=plan, seq=2)])
+    await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=1))
+    block = (await _newest(lab_scratch))[keyed]["evidence"]["queries"][0]
+    assert block["source"] == "hoistra", "Hoistra's own query, read from its trace"
+
+
+async def test_a_question_of_another_companys_turn_rests_and_takes_no_slot_of_the_round(lab_scratch, main_scratch, monkeypatch):
+    code = await _live_run(main_scratch)
+    await seed_session(lab_scratch, CHAT_B, tag="chat", turn_ids=("turn-b1",), org=OTHER_ORG, at=T0 + timedelta(minutes=5))
+    _queries(monkeypatch)
+    _records(monkeypatch)
+    looked = []
+    real = auto_expected._turn_context
+
+    async def context(q):
+        looked.append(q["id"])
+        return await real(q)
+    monkeypatch.setattr(auto_expected, "_turn_context", context)
+    stuck = await _qid(code, "Which vendors are blocked?")
+    first = await auto_expected.draft_for_live(None, now=NOW, limit=1)
+    assert first["drafted"] == 0 and looked == [stuck], "the newest question is another company's turn"
+    second = await auto_expected.draft_for_live(None, now=NOW + timedelta(minutes=1), limit=1)
+    assert second["drafted"] == 1 and looked.count(stuck) == 1, "it rests and the slot goes to the next question"
+    await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=2), limit=1)
+    assert looked.count(stuck) == 2, "looked at again after the rest"

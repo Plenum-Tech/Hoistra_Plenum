@@ -71,6 +71,17 @@ async def load_map(oq_module: Any = None) -> Any:
     return await o.get_ontology()
 
 
+def public(plan: Any) -> Any:
+    """The plan without what Hoistra's engine adds to it for itself while it runs: every key with a leading "_" (as
+    scope_through_rules' inc["_scope"], which holds its Relation objects), at any depth. The plan as run is stored with a
+    draft, so it must be plain JSON; nothing a re-run needs is lost, because every run normalises the plan again first."""
+    if isinstance(plan, dict):
+        return {k: public(v) for k, v in plan.items() if not str(k).startswith("_")}
+    if isinstance(plan, (list, tuple)):
+        return [public(v) for v in plan]
+    return plan
+
+
 class ReceiptReader(oq.ScopedReader):
     """Hoistra's scoped reader, keeping every query it runs as a receipt: the SQL, its parameters, how many rows came
     back, the first ROWS_KEPT of them, and the same query as psql text for the company it ran for."""
@@ -100,7 +111,7 @@ async def run_query(plan: dict, *, question: str, org: str, mode: str = "hoistra
     mode "hoistra" runs every step of STEPS, then reads what is still pending (work orders), as answer_question does;
     mode "as_written" runs only AS_WRITTEN. scope is {"building_ids": list | None, "email": str | None}: None (or no
     building_ids) is the whole company. Returns found, unresolved (names the records do not hold, when found is false),
-    plan (as run, after the steps), notes (what the steps said, in Hoistra's order), receipts, read_at, result (what
+    plan (as run, after the steps, without the engine's own keys: see public), notes (what the steps said, in Hoistra's order), receipts, read_at, result (what
     execute_plan returned) and pending (hoistra mode only). A plan the records cannot run is a ValueError."""
     if mode not in MODES:
         raise ValueError("mode must be one of " + ", ".join(MODES))
@@ -128,7 +139,7 @@ async def run_query(plan: dict, *, question: str, org: str, mode: str = "hoistra
         plan, notes, unresolved = await oq.resolve_plan(r, onto, plan, question=question if hoistra else None)
         read_at = datetime.now(timezone.utc).isoformat()
         if unresolved:
-            return {"found": False, "unresolved": list(unresolved), "plan": ak.jsonable(plan), "notes": list(notes),
+            return {"found": False, "unresolved": list(unresolved), "plan": ak.jsonable(public(plan)), "notes": list(notes),
                     "receipts": r.receipts, "read_at": read_at, "result": None, "pending": None}
         notes = list(notes) + grouped
         notes.extend(await oq.stated_count_notes(r, onto, plan))
@@ -144,5 +155,5 @@ async def run_query(plan: dict, *, question: str, org: str, mode: str = "hoistra
             raise ValueError("the plan does not fit this database: " + "; ".join(errors))
         result = await oq.execute_plan(r, onto, plan)
         pending = await oq.pending_context(r, onto, plan) if hoistra else None
-        return {"found": True, "unresolved": [], "plan": ak.jsonable(plan), "notes": notes, "receipts": r.receipts,
+        return {"found": True, "unresolved": [], "plan": ak.jsonable(public(plan)), "notes": notes, "receipts": r.receipts,
                 "read_at": read_at, "result": result, "pending": pending}

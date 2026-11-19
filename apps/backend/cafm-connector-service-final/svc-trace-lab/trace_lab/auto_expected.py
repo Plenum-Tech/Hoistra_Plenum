@@ -24,8 +24,11 @@ unchanged: `tries`, `last_tried`, and `no_query` when the reason changed), so a 
 Candidates are questions of live day runs asked by hand (not Codex scenario turns), however old. At most PER_ROUND a
 round, newest first, of which at most PROPOSALS_PER_ROUND may need a planner call; a question that needs one and finds
 the budget used waits for the next round. Nothing is drafted from SPEC.md until a version of it is approved; values need
-no SPEC.md. A failed model call stores nothing and the question is tried next round. TRACE_LAB_AUTO_EXPECTED=false turns
-it off.
+no SPEC.md. A failed model call stores nothing and the question is tried next round. A question whose turn is another
+company's, or whose drafting failed in a way nothing above foresaw, is held out of the round for BACKOFF (it takes no
+slot), and one question's failure never stops a round. A turn whose trace is not filed yet is not drafted from the answer
+key ("no_trace", read again later): Hoistra's own query comes first, then the fixed one, then a proposal.
+TRACE_LAB_AUTO_EXPECTED=false turns it off.
 
 A draft nobody touched is drafted again (a new version; the old one stays as history) when it was written by an older
 prompt or reading (DRAFT_VERSION) or, for a SPEC.md draft, from an older SPEC.md; a draft that holds values is never
@@ -147,13 +150,14 @@ async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
         spec = await loop.approved_spec(conn)
         if spec is not None and not spec.get("rules"):
             spec = None
+        # A page well past the budget: drafts still backing off, and questions held out of the round, do not hide the ones
+        # that are due.
+        page = dict(p, lim=max(p["lim"] * 5, 100), cap=len(BACKOFF))
         todo = (await conn.execute(text(
             "SELECT q.id::text AS id, q.question, q.organization_id::text AS org, q.asked_at"
             " FROM tracelab.lab_questions q"
             f" JOIN tracelab.lab_runs r ON r.id = q.run_id WHERE {' AND '.join(new_only)}"
-            " ORDER BY q.asked_at DESC, q.id LIMIT :lim"), p)).mappings().all()
-        # A page well past the budget: drafts still backing off do not hide the ones that are due.
-        page = dict(p, lim=max(p["lim"] * 5, 100), cap=len(BACKOFF))
+            " ORDER BY q.asked_at DESC, q.id LIMIT :lim"), {k: v for k, v in page.items() if k != "cap"})).mappings().all()
         outdated = (await conn.execute(text(_UNTOUCHED.format(
             where=where, draft=_OUTDATED_BY_SPEC if spec is not None else _OUTDATED_BY_VERSION)),
             dict(page, dv=str(DRAFT_VERSION), **({"sv": str(spec.get("version"))} if spec is not None else {})))
@@ -166,12 +170,17 @@ async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
     cands: dict[str, tuple[Any, str]] = {q["id"]: (q, "retry") for q in again}
     cands.update({q["id"]: (q, "redraft") for q in outdated})
     cands.update({q["id"]: (q, "new") for q in todo})
-    work = sorted((w for w in cands.values() if not (_only_values(*w) and not _due(w[0], now))),
+    # A question held out of the round (_held) takes no slot of it.
+    work = sorted((w for w in cands.values() if not (_only_values(*w) and not _due(w[0], now)) and not _is_held(w[0]["id"], now)),
                   key=lambda w: (w[0]["asked_at"], w[0]["id"]), reverse=True)[:p["lim"]]
     rnd: dict[str, Any] = {"proposals": PROPOSALS_PER_ROUND, "onto": None}
     for q, kind in work:
-        if await _draft_one(q, kind, spec, codes, now, tally, rnd):
-            tally[{"new": "drafted", "redraft": "redrafted", "retry": "replaced"}[kind]] += 1
+        try:
+            if await _draft_one(q, kind, spec, codes, now, tally, rnd):
+                tally[{"new": "drafted", "redraft": "redrafted", "retry": "replaced"}[kind]] += 1
+        except Exception as exc:  # noqa: BLE001 - one question can never stop a round: it is held out for a while
+            _hold(q["id"], now)
+            log.warning("trace_lab.auto_expected.question_failed", question_id=q["id"], error=str(exc)[:200])
     if tally["drafted"] or tally["redrafted"] or tally["replaced"]:
         log.info("trace_lab.auto_expected.drafted", drafted=tally["drafted"], redrafted=tally["redrafted"],
                  keyed=tally["keyed"], failed=tally["failed"], replaced=tally["replaced"])
@@ -321,6 +330,20 @@ async def _still_untouched(conn: Any, question_id: str, draft_id: str) -> bool:
 _resting: dict[str, datetime] = {}
 _settled: dict[str, tuple[datetime, str | None]] = {}
 _looks: dict[str, int] = {}
+#: Questions held out of the round for a while, each until BACKOFF[n] after its n-th hold in this process, so one that
+#: cannot be decided does not take a slot of every round: a question whose turn is another company's (nothing can be
+#: decided for it), and one whose drafting failed unexpectedly (an error no rule above foresaw).
+_held: dict[str, tuple[datetime, int]] = {}
+
+
+def _hold(qid: str, now: datetime) -> None:
+    n = (_held.get(qid) or (now, 0))[1] + 1
+    _held[qid] = (now + BACKOFF[min(n, len(BACKOFF)) - 1], n)
+
+
+def _is_held(qid: str, now: datetime) -> bool:
+    held = _held.get(qid)
+    return held is not None and held[0] > now
 
 
 def _none(reason: str | None, qid: str | None = None, now: datetime | None = None) -> dict[str, Any]:
@@ -416,7 +439,8 @@ async def _turn_context(q: Any) -> dict[str, Any] | None:
 async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, Any]:
     """The values of one question, read from the records: {"state": "values", "evidence", "expected"}, or {"state": "none",
     "reason"} when no query can be made or read (the reason is stored; see RETRY_REASONS), or {"state": "wait"} when
-    nothing is decided this round (another company's turn, the proposal budget used up, the lab database unreadable).
+    nothing is decided this round (another company's turn, held out for a while: _held; the proposal budget used up, tried
+    next round). A turn whose trace is not filed yet is not read from the answer key ("no_trace", read again later).
 
     The queries come from records_queries (Hoistra's own, Trace Lab's fixed one, a proposal); each is read with the
     asker's access (asker_scope) and becomes one block of the evidence, in order. One failed read fails them all: no half
@@ -434,6 +458,7 @@ async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, 
         ctx = await _turn_context(q)
         if ctx is None:
             log.warning("trace_lab.auto_expected.turn_of_another_company", question_id=qid)
+            _hold(qid, now)                     # nothing can be decided for it: it takes no slot for a while
             return {"state": "wait"}
         nodes = ctx["nodes"]
         propose = rnd["proposals"] > 0 and bool(question)           # never a proposal for a blank question
@@ -446,6 +471,10 @@ async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, 
                     or (got["none"] == "not_about_records" and records_queries.data_tools(nodes))):
         rnd["proposals"] -= 1
     queries = [x for x in got["queries"] if x["source"] != "answer_key" or answer_key.enabled()]
+    if queries and not ctx["filed"] and not any(x["source"] == "hoistra" for x in queries):
+        # Hoistra's own query comes first (then the fixed one, then a proposal), and nothing is known of it until the
+        # turn's trace is filed: a draft from the answer key now would never be put over by Hoistra's query later.
+        return _none("no_trace", qid, now)
     if not queries:
         reason = None if got["queries"] else got["none"]
         if reason is None and not got["queries"]:

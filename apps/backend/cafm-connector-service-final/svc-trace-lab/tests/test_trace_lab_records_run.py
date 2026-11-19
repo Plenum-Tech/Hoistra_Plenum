@@ -202,6 +202,55 @@ async def test_the_result_plan_is_the_plan_as_run_and_the_caller_keeps_theirs(mo
     assert "resolved" not in given and given["constraints"][0]["match"] == "ABC"
 
 
+@pytest.mark.parametrize("found", [True, False])
+async def test_the_plan_as_run_leaves_out_what_the_engine_adds_for_itself(monkeypatch, found):
+    """19 Nov 2026 (final review, live): a certificate question naming a building has certificate includes scoped through
+    the building (scope_through_rules adds inc["_scope"] = [(constraint, [(Relation, bool), ...])] while it executes).
+    Those are the engine's own objects: the plan as run is stored with the draft, so it must be plain JSON without them."""
+    import json
+
+    rel = oq.Relation("cert_in_building", {"from": "ComplianceCertificate", "to": "Building", "join": ["from.building_id = to.id"]})
+    fake = _fake_pipeline(monkeypatch, unresolved=None if found else ["ABC"])
+
+    def compliance(o, plan):
+        plan["include"].append({"concept": "ComplianceCertificate", "match": None, "states": [], "filters": [],
+                                "via": ["CERTIFICATE_BUILDING"], "name": "certificates", "sort": None, "limit": 20})
+        return ["ComplianceCertificate"]
+
+    async def resolve_plan(r, o, plan, question=None):
+        plan["constraints"][0]["keys"] = ["b-1"]
+        plan["constraints"][0]["_private"] = {"rel": rel}
+        if not found:
+            return plan, [], ["ABC"]
+        return plan, [], []
+
+    async def execute_plan(r, o, plan):
+        fake.calls.append("execute_plan")
+        for inc in plan["include"]:
+            inc.setdefault("_scope", []).append((plan["constraints"][0], [(rel, True)]))
+        return {"total": 1, "rows": []}
+    monkeypatch.setattr(oq, "ensure_compliance_includes", compliance)
+    monkeypatch.setattr(oq, "resolve_plan", resolve_plan)
+    monkeypatch.setattr(oq, "execute_plan", execute_plan)
+    out = await rr.run_query(PLAN_COUNT_FLOORS, question="Which certificates at ABC?", org=ORG)
+    json.dumps(out["plan"])                                     # plain JSON: no Relation survives
+    text = json.dumps(out["plan"])
+    assert "_scope" not in text and "_private" not in text
+    assert out["plan"]["constraints"][0]["keys"] == ["b-1"], "only the engine's own keys (a leading _) are left out"
+    if found:
+        assert out["plan"]["include"][-1]["via"] == ["CERTIFICATE_BUILDING"], "what Hoistra's steps added stays"
+
+
+def test_values_the_records_hold_that_json_does_not_know_are_kept_as_text():
+    """jsonable is the last step before a draft is stored: anything it does not know becomes its text, never an error."""
+    import json
+
+    rel = oq.Relation("r", {"from": "A", "to": "B", "join": ["from.b_id = to.id"]})
+    out = ak.jsonable({"x": rel, "y": [(rel, True)], "n": None, "b": False, "i": 3, "f": 1.5, "s": "t"})
+    assert out == {"x": str(rel), "y": [[str(rel), True]], "n": None, "b": False, "i": 3, "f": 1.5, "s": "t"}
+    json.dumps(out)
+
+
 async def test_hoistra_mode_reads_what_is_still_pending_after_the_values(monkeypatch):
     fake = _fake_pipeline(monkeypatch)
     out = await rr.run_query(PLAN_COUNT_FLOORS, question="q", org=ORG)
