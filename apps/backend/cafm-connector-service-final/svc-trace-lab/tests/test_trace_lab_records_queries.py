@@ -71,6 +71,11 @@ def group(id_, name="sub-agent", *, seq=None, copy_of=None, **kw):
             "filled": {"output_from": "its last step (model)"} if copy_of is not None else {}, "truncated": False, **kw}
 
 
+def _bare(items):
+    """Queries without the id of their records-tool call (for the tests that look at the plan and the question only)."""
+    return [{k: v for k, v in i.items() if k != "tool_id"} for i in items]
+
+
 # ── what a records tool call keeps: its last plan and its question ─────────────────────────────────────────────────
 
 def test_each_records_tool_call_keeps_its_last_plan_and_its_question():
@@ -78,7 +83,7 @@ def test_each_records_tool_call_keeps_its_last_plan_and_its_question():
              llm("p1", parent="t1", plan=PLAN_A_RETRY), llm("p2", parent="t1", plan=PLAN_A),
              tool("t2", "answer_from_records", {"question": "inspection reports to convert at Bishopsgate"}),
              llm("p3", parent="t2", plan=PLAN_B)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": "decisions owed at Bishopsgate"},
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": "decisions owed at Bishopsgate"},
                                          {"plan": PLAN_B, "question": "inspection reports to convert at Bishopsgate"}]
 
 
@@ -88,7 +93,7 @@ def test_the_tool_input_may_be_a_dict_a_json_string_or_cut():
              llm("p2", parent="t2", plan=PLAN_B),
              tool("t3", "answer_from_records", None), llm("p3", parent="t3", plan=PLAN_C),
              tool("t4", "answer_from_records", {"question": "   "}), llm("p4", parent="t4", plan=PLAN_A_RETRY)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}, {"plan": PLAN_B, "question": None},
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}, {"plan": PLAN_B, "question": None},
                                          {"plan": PLAN_C, "question": None}, {"plan": PLAN_A_RETRY, "question": None}]
 
 
@@ -96,7 +101,7 @@ def test_a_plan_is_any_descendant_of_the_tool_not_only_its_children():
     nodes = [tool("t1", "answer_from_records", {"question": Q_A}), group("g1", seq=2),
              llm("p1", parent="g1", plan=PLAN_A, seq=3)]
     nodes[1]["parent_id"] = "t1"
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 def test_only_tool_nodes_named_for_the_records_tool_count():
@@ -122,7 +127,7 @@ def test_planner_calls_under_the_sub_agent_group_go_to_the_call_before_them():
              llm("p1", parent="g1", plan=PLAN_A_RETRY, seq=3), llm("p2", parent="g1", plan=PLAN_A, seq=4),
              llm("p3", parent="g1", plan=PLAN_B, seq=6),
              tool("t2", "answer_from_records", {"question": Q_B}, parent="root", seq=5)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}, {"plan": PLAN_B, "question": Q_B}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}, {"plan": PLAN_B, "question": Q_B}]
 
 
 def test_the_groups_filled_copy_of_a_plan_is_not_a_plan_of_its_own():
@@ -130,7 +135,7 @@ def test_the_groups_filled_copy_of_a_plan_is_not_a_plan_of_its_own():
     nodes = [tool("t1", "answer_from_records", {"question": Q_A}, seq=1), group("g1", seq=2, copy_of=PLAN_B),
              llm("p1", parent="g1", plan=None, seq=3), llm("p2", parent="g1", plan=PLAN_B, seq=5),
              tool("t2", "answer_from_records", {"question": Q_B}, seq=4)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_B, "question": Q_B}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_B, "question": Q_B}]
 
 
 def test_without_seq_the_order_of_the_nodes_is_used():
@@ -142,13 +147,13 @@ def test_without_seq_the_order_of_the_nodes_is_used():
 def test_a_plan_under_the_tool_wins_over_one_that_is_only_nearby():
     nodes = [tool("t1", "answer_from_records", {"question": Q_A}, seq=1), llm("near", parent="g1", plan=PLAN_C, seq=2),
              llm("own", parent="t1", plan=PLAN_A, seq=3)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 def test_a_plan_below_another_records_call_is_not_borrowed_by_an_earlier_one():
     nodes = [tool("t1", "answer_from_records", {"question": Q_A}, seq=1),
              tool("t2", "answer_from_records", {"question": Q_B}, seq=2), llm("p2", parent="t2", plan=PLAN_B, seq=3)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_B, "question": Q_B}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_B, "question": Q_B}]
 
 
 def test_nodes_built_by_the_tree_view_from_hoistras_spans():
@@ -178,7 +183,7 @@ def test_nodes_built_by_the_tree_view_from_hoistras_spans():
     nodes = trace_tree.build_tree(turn, spans)["nodes"]
     group_node = next(n for n in nodes if n["name"] == "sub-agent")
     assert group_node["filled"].get("output_from"), "the tree fills the group's output from its last step"
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}, {"plan": PLAN_B, "question": Q_B}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}, {"plan": PLAN_B, "question": Q_B}]
     assert rq.data_tools(nodes) == []
 
 
@@ -189,7 +194,7 @@ def test_a_call_that_found_nothing_or_failed_is_dropped_when_a_later_call_follow
     nodes = [tool("t1", "answer_from_records", {"question": "decisions owed at Bishopsgat"}, out=first),
              llm("p1", parent="t1", plan=PLAN_A_RETRY),
              tool("t2", "answer_from_records", {"question": Q_A}), llm("p2", parent="t2", plan=PLAN_A)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 def test_the_last_call_is_kept_even_when_it_found_nothing():
@@ -202,21 +207,21 @@ def test_a_chain_of_failed_calls_keeps_only_the_one_that_ended_it():
     nodes = [tool("t1", "answer_from_records", {"question": "a"}, out=OUT_NOT_FOUND), llm("p1", parent="t1", plan=PLAN_A_RETRY),
              tool("t2", "answer_from_records", {"question": "b"}, out=OUT_ERROR), llm("p2", parent="t2", plan=PLAN_C),
              tool("t3", "answer_from_records", {"question": Q_A}), llm("p3", parent="t3", plan=PLAN_A)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 def test_a_call_the_tool_node_marks_as_failed_is_a_retry_too():
     failed = tool("t1", "answer_from_records", {"question": Q_A}, out=None, ok=False, error="timeout", level="ERROR")
     nodes = [failed, llm("p1", parent="t1", plan=PLAN_A_RETRY),
              tool("t2", "answer_from_records", {"question": Q_A}), llm("p2", parent="t2", plan=PLAN_A)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 def test_a_failed_call_stays_when_the_call_after_it_made_no_plan():
     # The planner could not build one the second time: the first call's query is the only one there is.
     nodes = [tool("t1", "answer_from_records", {"question": Q_A}, out=OUT_NOT_FOUND), llm("p1", parent="t1", plan=PLAN_A),
              tool("t2", "answer_from_records", {"question": Q_A}, out=OUT_ERROR)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 def test_an_output_that_cannot_be_read_does_not_make_a_call_a_retry():
@@ -232,7 +237,7 @@ def test_an_output_that_cannot_be_read_does_not_make_a_call_a_retry():
 def test_an_output_that_is_a_dict_is_read_like_its_json():
     nodes = [tool("t1", "answer_from_records", {"question": "a"}, out=json.loads(OUT_NOT_FOUND)), llm("p1", parent="t1", plan=PLAN_A_RETRY),
              tool("t2", "answer_from_records", {"question": Q_A}), llm("p2", parent="t2", plan=PLAN_A)]
-    assert rq.extract_queries(nodes) == [{"plan": PLAN_A, "question": Q_A}]
+    assert _bare(rq.extract_queries(nodes)) == [{"plan": PLAN_A, "question": Q_A}]
 
 
 # ── the data tools a turn called ───────────────────────────────────────────────────────────────────────────────────
@@ -332,6 +337,59 @@ def test_the_tools_listed_as_not_data_are_tools_hoistra_has():
     assert set(REVIEWED_DATA_TOOLS).isdisjoint(rq.NOT_DATA_TOOLS) and set(REVIEWED_DATA_TOOLS) <= names
 
 
+# ── the id of each records call, and the SQL Hoistra recorded under it (19 Nov 2026, Task 4) ──────────────────────
+
+def db_span(id_, parent, label, rows, *, sql="SELECT 1", seq=None, **kw):
+    """A SQL statement as trace.py on_sql records it: a child span whose input holds sql, params and label and whose
+    output holds row_count (and the first rows)."""
+    return {"id": id_, "parent_id": parent, "depth": 2, "seq": seq, "kind": "db", "type": "span", "name": label or "SELECT 1",
+            "agent": "tool:unknown", "ok": True, "error": None, "level": "DEFAULT",
+            "input": {"sql": sql, "params": {}, "label": label}, "output": {"row_count": rows}, "filled": {},
+            "truncated": False, **kw}
+
+
+def test_each_query_carries_the_id_of_the_records_call_that_made_it():
+    nodes = [tool("t1", "answer_from_records", {"question": Q_A}), llm("p1", parent="t1", plan=PLAN_A),
+             tool("t2", "answer_from_records", {"question": Q_B}), llm("p2", parent="g1", plan=PLAN_B)]
+    assert [(q["tool_id"], q["question"]) for q in rq.extract_queries(nodes)] == [("t1", Q_A), ("t2", Q_B)]
+
+
+def test_the_sql_recorded_under_a_call_is_its_own_descendant_spans_in_order():
+    nodes = [tool("t1", "answer_from_records", {"question": Q_A}, seq=1), llm("p1", parent="t1", plan=PLAN_A, seq=2),
+             db_span("d2", "t1", "count", 7, seq=4), db_span("d1", "t1", "resolve Decision (exact)", 1, seq=3),
+             group("g1", seq=5, parent_id="t1"), db_span("d3", "g1", "focus Decision", 7, seq=6),
+             tool("t2", "answer_from_records", {"question": Q_B}, seq=7), db_span("d4", "t2", "count", 2, seq=8)]
+    assert rq.recorded_sql(nodes, "t1") == [{"label": "resolve Decision (exact)", "row_count": 1},
+                                            {"label": "count", "row_count": 7},
+                                            {"label": "focus Decision", "row_count": 7}]
+    assert rq.recorded_sql(nodes, "t2") == [{"label": "count", "row_count": 2}]
+    assert rq.recorded_sql(nodes, "nope") == [] and rq.recorded_sql(None, "t1") == [] and rq.recorded_sql(nodes, None) == []
+
+
+def test_recorded_sql_reads_dict_or_json_inputs_and_skips_spans_that_are_not_statements():
+    stmt = db_span("d1", "t1", "count", 7)
+    as_text = {**db_span("d2", "t1", "focus Decision", 3), "input": json.dumps({"sql": "SELECT 1", "label": "focus Decision"}),
+               "output": json.dumps({"row_count": 3})}
+    plan_node = llm("p1", parent="t1", plan=PLAN_A)                      # no sql in its input
+    cut = {**db_span("d3", "t1", "include vendor", 1), "input": {"_truncated": "{\"sql\": \"SELECT"}}
+    unlabelled = {**db_span("d4", "t1", None, 4, sql="SELECT id FROM vendors WHERE a"), "name": "SELECT id FROM vendors"}
+    failed = {**db_span("d5", "t1", "pending", None), "output": {"row_count": None}, "ok": False, "error": "timeout"}
+    nodes = [tool("t1", "answer_from_records", {"question": Q_A}), stmt, as_text, plan_node, cut, unlabelled, failed]
+    got = rq.recorded_sql(nodes, "t1")
+    assert got[:2] == [{"label": "count", "row_count": 7}, {"label": "focus Decision", "row_count": 3}]
+    assert {"label": "SELECT id FROM vendors", "row_count": 4} in got, "a statement with no label is named as the span is"
+    assert all(g["label"] not in ("include vendor",) for g in got), "an input Hoist Traces cut has no readable statement"
+    assert {"label": "pending", "row_count": None} in got, "a failed statement has no row count: changed_since skips it"
+
+
+def test_recorded_sql_feeds_changed_since():
+    from trace_lab import records_values as rv
+
+    nodes = [tool("t1", "answer_from_records", {"question": Q_A}), db_span("d1", "t1", "count", 7)]
+    receipts = [{"id": "q1", "label": "count", "row_count": 9}]
+    assert rv.changed_since(receipts, rq.recorded_sql(nodes, "t1")) == [{"label": "count", "then": 7, "now": 9}]
+
+
 # ── where a turn's queries come from ───────────────────────────────────────────────────────────────────────────────
 
 NODES_WITH_PLAN = [tool("t1", "answer_from_records", {"question": Q_A}), llm("p1", parent="t1", plan=PLAN_A)]
@@ -360,7 +418,7 @@ async def test_order_of_sources(monkeypatch):
     # Hoistra's plans win; else the answer key; else a proposal; else none
     _planner(monkeypatch, raise_=AssertionError("the planner must not be called when a query is already known"))
     got = await rq.queries_for(NODES_WITH_PLAN, "x", propose=True)
-    assert got == {"queries": [{"source": "hoistra", "plan": PLAN_A, "question": Q_A}], "none": None}
+    assert got == {"queries": [{"source": "hoistra", "plan": PLAN_A, "question": Q_A, "tool_id": "t1"}], "none": None}
     got = await rq.queries_for(NODES_WITH_DATA_TOOL, "How many vendors are blocked right now?", propose=True)
     key, params = ak.match("How many vendors are blocked right now?")
     assert got == {"queries": [{"source": "answer_key", "plan": key.plan(params),
@@ -376,15 +434,15 @@ async def test_hoistras_query_takes_the_turns_question_when_the_call_kept_none(m
     _planner(monkeypatch, raise_=AssertionError("not called"))
     nodes = [tool("t1", "answer_from_records", None), llm("p1", parent="t1", plan=PLAN_A)]
     got = await rq.queries_for(nodes, "decisions owed", propose=False)
-    assert got["queries"] == [{"source": "hoistra", "plan": PLAN_A, "question": "decisions owed"}]
+    assert got["queries"] == [{"source": "hoistra", "plan": PLAN_A, "question": "decisions owed", "tool_id": "t1"}]
 
 
 async def test_several_calls_are_several_hoistra_queries(monkeypatch):
     nodes = [tool("t1", "answer_from_records", {"question": Q_A}), llm("p1", parent="t1", plan=PLAN_A),
              tool("t2", "answer_from_records", {"question": Q_B}), llm("p2", parent="t2", plan=PLAN_B)]
     got = await rq.queries_for(nodes, "both", propose=False)
-    assert got == {"queries": [{"source": "hoistra", "plan": PLAN_A, "question": Q_A},
-                               {"source": "hoistra", "plan": PLAN_B, "question": Q_B}], "none": None}
+    assert got == {"queries": [{"source": "hoistra", "plan": PLAN_A, "question": Q_A, "tool_id": "t1"},
+                               {"source": "hoistra", "plan": PLAN_B, "question": Q_B, "tool_id": "t2"}], "none": None}
 
 
 async def test_the_planner_is_asked_the_question_with_hoistras_map(monkeypatch):

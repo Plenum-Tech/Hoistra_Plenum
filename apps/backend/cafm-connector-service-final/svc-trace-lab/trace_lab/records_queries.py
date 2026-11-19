@@ -131,6 +131,29 @@ def _order(nodes: list[dict]):
     return lambda n: place[id(n)]
 
 
+def _kids(nodes: list[dict]) -> dict[Any, list[dict]]:
+    """The nodes grouped under the id of their parent."""
+    kids: dict[Any, list[dict]] = {}
+    for n in nodes:
+        if n.get("parent_id") is not None:
+            kids.setdefault(n["parent_id"], []).append(n)
+    return kids
+
+
+def _below(kids: dict[Any, list[dict]], root_id: Any, order) -> list[dict]:
+    """Every node under `root_id`, at any depth, in the order they happened."""
+    out, stack, seen = [], [root_id], set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        for c in kids.get(pid, []):
+            out.append(c)
+            stack.append(c.get("id"))
+    return sorted(out, key=order)
+
+
 def _last_plan(nodes: list[dict]) -> dict | None:
     """The plan the planner wrote last among these nodes. A node whose output the tree view filled in from a step
     below it (filled.output_from; an agent group shows its last model call's output) is a copy, not a plan."""
@@ -144,9 +167,10 @@ def _last_plan(nodes: list[dict]) -> dict | None:
 
 
 def extract_queries(nodes: list | None) -> list[dict]:
-    """The records queries Hoistra's records tool made in this turn, in call order: [{"plan", "question"}].
+    """The records queries Hoistra's records tool made in this turn, in call order: [{"plan", "question", "tool_id"}].
 
-    One per answer_from_records call: its last plan, and the question the model passed (None when the input was cut).
+    One per answer_from_records call: its last plan, the question the model passed (None when the input was cut) and the
+    id of the call's node (the SQL Hoistra recorded for it hangs under that node: recorded_sql).
     The plan is a model call of the planner; Hoistra's trace usually hangs it under a "sub-agent" group rather than
     under the tool (trace.py on_model_start), so a call with no plan below it takes the plans recorded after it and
     before the next call. A call with no plan gives no query. A call that found nothing or failed is dropped when a
@@ -154,24 +178,8 @@ def extract_queries(nodes: list | None) -> list[dict]:
     nodes = _nodes(nodes)
     order = _order(nodes)
     calls = sorted((n for n in nodes if _is_tool(n) and n.get("name") == RECORDS_TOOL), key=order)
-    kids: dict[Any, list[dict]] = {}
-    for n in nodes:
-        if n.get("parent_id") is not None:
-            kids.setdefault(n["parent_id"], []).append(n)
-
-    def below(call: dict) -> list[dict]:
-        out, stack, seen = [], [call.get("id")], set()
-        while stack:
-            pid = stack.pop()
-            if pid in seen:
-                continue
-            seen.add(pid)
-            for c in kids.get(pid, []):
-                out.append(c)
-                stack.append(c.get("id"))
-        return sorted(out, key=order)
-
-    own = {id(call): below(call) for call in calls}
+    kids = _kids(nodes)
+    own = {id(call): _below(kids, call.get("id"), order) for call in calls}
     taken = {id(c) for under in own.values() for c in under} | {id(c) for c in calls}
     nearby = [n for n in nodes if id(n) not in taken]
     made = []
@@ -183,7 +191,7 @@ def extract_queries(nodes: list | None) -> list[dict]:
             plan = _last_plan([n for n in nearby if lo < order(n) < hi])
         if plan is not None:
             made.append((call, plan))
-    return [{"plan": plan, "question": _question_of(call)}
+    return [{"plan": plan, "question": _question_of(call), "tool_id": call.get("id")}
             for i, (call, plan) in enumerate(made) if i == len(made) - 1 or not _failed(call)]
 
 
@@ -200,18 +208,41 @@ def data_tools(nodes: list | None) -> list[str]:
     return out
 
 
+def recorded_sql(nodes: list | None, tool_id: Any) -> list[dict]:
+    """The SQL statements Hoistra's trace recorded under one records-tool call, in the order they ran:
+    [{"label", "row_count"}], the shape records_values.changed_since reads as what Hoistra read then.
+
+    trace.py on_sql writes each statement as a span below the tool whose input holds `sql` and `label` and whose output
+    holds `row_count`; a statement with no label is named by the span. A statement that failed has no row count. An input
+    Hoist Traces cut ({"_truncated": ...}) holds no statement and is left out."""
+    nodes = _nodes(nodes)
+    if tool_id is None or not nodes:
+        return []
+    out = []
+    for n in _below(_kids(nodes), tool_id, _order(nodes)):
+        i = _object(n.get("input")) or {}
+        if not isinstance(i.get("sql"), str):
+            continue
+        label = i.get("label") or n.get("name")
+        count = (_object(n.get("output")) or {}).get("row_count")
+        if label:
+            out.append({"label": str(label), "row_count": count})
+    return out
+
+
 async def queries_for(nodes: list | None, question: str, *, propose: bool) -> dict:
     """The queries a live question's turn gets: {"queries": [{"source", "plan", "question"}], "none": reason}.
 
-    source is "hoistra", "answer_key" or "proposed" (SOURCE_WORDS says it in words). With no query, `none` says why:
+    source is "hoistra", "answer_key" or "proposed" (SOURCE_WORDS says it in words); a Hoistra query also carries the
+    "tool_id" of the records call it came from (recorded_sql finds that call's SQL). With no query, `none` says why:
     None when no proposal was asked for, "not_about_records" (the turn called no data tool, or the planner says there is
     no plan for it), "no_map" (Hoistra's map of the records is not built) or "planner_unavailable" (the planner or
     the map failed otherwise). The planner runs only for propose=True, only when the turn called a data tool, and
     never when Hoistra's own or the answer key's query is known."""
     got = extract_queries(nodes)
     if got:
-        return {"queries": [{"source": "hoistra", "plan": q["plan"], "question": q["question"] or question} for q in got],
-                "none": None}
+        return {"queries": [{"source": "hoistra", "plan": q["plan"], "question": q["question"] or question,
+                             "tool_id": q["tool_id"]} for q in got], "none": None}
     found = ak.match(question)
     if found:
         key, params = found

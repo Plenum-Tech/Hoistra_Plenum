@@ -225,8 +225,8 @@ async def file_waiting(now: datetime | None = None) -> int:
 
 
 async def draft_expected(now: datetime | None = None) -> int:
-    """The live questions' expected answers, drafted from SPEC.md (auto_expected, 14 Nov 2026): live only, never the
-    Codex flow. Its own try, as above."""
+    """The live questions' expected answers, drafted (auto_expected, 14 Nov 2026): the values a records query reads, else
+    from SPEC.md; live only, never the Codex flow. Its own try, as above."""
     from . import auto_expected
 
     try:

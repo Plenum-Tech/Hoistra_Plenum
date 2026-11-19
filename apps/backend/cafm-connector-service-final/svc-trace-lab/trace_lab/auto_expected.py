@@ -1,23 +1,32 @@
-"""Expected answers drafted from SPEC.md for live questions (14 Nov 2026, Hussain: "I want the system to add it
-automatically when I ask a question on the live Hoistra platform ... an expected answer in the trace based on the spec
-file"; "only for the live answers, don't change anything in the flow from Codex").
+"""Expected answers drafted for live questions (14 Nov 2026, Hussain: "I want the system to add it automatically when I ask
+a question on the live Hoistra platform ... an expected answer in the trace based on the spec file"; "only for the live
+answers, don't change anything in the flow from Codex"; 18 Nov 2026: "i need expected ans on each question" and "the
+expected ans should the exact values").
 
-    live question synced (sync_live) --(draft_for_live: one model call)--> expected answer, source coding_agent
+    live question synced (sync_live) --(draft_for_live)--> expected answer, source coding_agent
     --(a person: Accept on the session page, or Edit)--> counts (runs.CURRENT_EXPECTED_WHERE)
 
-What is drafted is what a correct answer must DO under the approved SPEC.md, citing the rules that apply. The model is
-given the rules and the question only: never Hoistra's own answer, and it does not know the company's records, so it
-writes no values. Candidates are questions of live day runs asked by hand (not Codex scenario turns), however old, with
-no expected answer of any source; at most PER_ROUND model calls a round. Nothing is drafted until a version of SPEC.md is
-approved. A failed call stores nothing and the question is tried next round. TRACE_LAB_AUTO_EXPECTED=false turns it off.
+A live question's draft is the exact values read from the company's records, each with the query that read it
+(drafted_from "records"; records_queries says which query a turn gets, records_run reads it the way Hoistra's records
+tool does, records_values turns the read into values and a sentence in fixed words, no model). The read is made with the
+asker's own access when Trace Lab can rebuild it from the turn's user id (asker_scope: Hoistra's own principal code,
+read-only), else for the whole company, and every query says which. A turn with no company is never read.
 
-Every question gets one (18 Nov 2026, Hussain: "i need expected ans on each question"). The first prompt let the model
-write "No rule of the specification applies to this question." as the whole expected answer, and that placeholder then
-counted as an answer, so the question was never drafted again. Now the model always writes what a correct answer to
-that question contains, citing rules only when some apply, and a draft nobody touched is drafted again (a new version;
-the old one stays as history) when it was written by an older prompt (DRAFT_VERSION) or from an older SPEC.md. New
-and old questions share a round, newest asked first. A person's answer, an accepted one or a reviewed one is
-never drafted over.
+When no query can be made (the turn is not about records, Hoistra's map of the records is not built, the planner cannot
+be reached, the read failed) the draft is what a correct answer must DO under the approved SPEC.md (one model call; the
+model is given the rules and the question only, never Hoistra's own answer, and writes no values), and the evidence says
+why in `no_query`. A draft that holds no values because of a passing reason (no map yet, planner or read failed, no trace
+filed yet) is read again after REST, without a model call, and the values replace it.
+
+Candidates are questions of live day runs asked by hand (not Codex scenario turns), however old. At most PER_ROUND a
+round, newest first, of which at most PROPOSALS_PER_ROUND may need a planner call; a question that needs one and finds
+the budget used waits for the next round. Nothing is drafted from SPEC.md until a version of it is approved; values need
+no SPEC.md. A failed model call stores nothing and the question is tried next round. TRACE_LAB_AUTO_EXPECTED=false turns
+it off.
+
+A draft nobody touched is drafted again (a new version; the old one stays as history) when it was written by an older
+prompt or reading (DRAFT_VERSION) or, for a SPEC.md draft, from an older SPEC.md; a draft that holds values is never
+drafted again because SPEC.md changed. A person's answer, an accepted one or a reviewed one is never drafted over.
 """
 from __future__ import annotations
 
@@ -28,16 +37,21 @@ from typing import Any
 
 import structlog
 from sqlalchemy import text
+from src.agents import ontology_qa as oq
 
-from . import agent, answer_key, db, loop, runs
+from . import (agent, answer_key, conversations, db, eval_store, labelling, loop, records_queries, records_run,
+               records_values, runs)
 from .annotations import _limits
 
 log = structlog.get_logger(__name__)
 
 PER_ROUND = 20
-#: The prompt a SPEC.md draft was written with, stored in its evidence ("draft"). An untouched draft written by an older
-#: prompt is drafted again. 1 (no "draft" key): the prompt that could answer "no rule of the specification applies".
-DRAFT_VERSION = 2
+#: Of the PER_ROUND questions, how many may ask Hoistra's planner for a query (a model call each).
+PROPOSALS_PER_ROUND = 10
+#: What a draft was written by, stored in its evidence ("draft"). An untouched draft written by an older one is drafted
+#: again. 1 (no "draft" key): the prompt that could answer "no rule of the specification applies"; 2: the SPEC.md prompt
+#: that always writes what a correct answer contains; 3: exact values read from the records (drafted_from "records").
+DRAFT_VERSION = 3
 MAX_TOKENS = 600
 ENV_SWITCH = "TRACE_LAB_AUTO_EXPECTED"
 #: Who a draft is written by: the coding agent, as its other suggestions are.
@@ -53,6 +67,10 @@ SYSTEM = ("You write the expected answer to one question put to a facilities-man
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["expected", "rules"],
           "properties": {"expected": {"type": "string"}, "rules": {"type": "array", "items": {"type": "string"}}}}
 
+#: Why a SPEC.md draft holds no values, when the reason passes and the values are read again after REST: Hoistra's map of
+#: the records is not built, the planner or the read failed, the turn's trace is not filed yet. Any other reason stays.
+RETRY_REASONS = ("no_map", "planner_unavailable", "read_failed", "no_trace")
+
 
 def enabled() -> bool:
     return (os.environ.get(ENV_SWITCH) or "true").strip().lower() not in ("false", "0", "no", "off")
@@ -64,12 +82,39 @@ def _prompt(spec: dict[str, Any], question: str) -> str:
     return f"SPEC.md, version {spec.get('version')}:\n\n{rules}\n\nThe question:\n{question.strip()}"
 
 
+# A question whose newest expected answer is still the coding agent's own, untouched: nobody accepted, edited or reviewed
+# it. {draft} says which of those drafts are wanted.
+_UNTOUCHED = (
+    "SELECT q.id::text AS id, q.question, q.organization_id::text AS org, q.asked_at, e.id::text AS draft_id,"
+    " e.evidence->>'drafted_from' AS drafted_from"
+    " FROM tracelab.lab_questions q JOIN tracelab.lab_runs r ON r.id = q.run_id"
+    " JOIN LATERAL (SELECT x.id, x.source, x.evidence FROM tracelab.lab_expected_answers x WHERE x.question_id = q.id"
+    "   ORDER BY x.created_at DESC, x.id DESC LIMIT 1) e ON true"
+    " WHERE {where} AND e.source = 'coding_agent' AND {draft}"
+    " AND NOT EXISTS (SELECT 1 FROM tracelab.lab_reviews v WHERE v.subject_kind = 'expected_answer' AND v.subject_id = e.id)"
+    " ORDER BY q.asked_at DESC, q.id LIMIT :lim")
+
+# An untouched draft that is out of date: written by an older prompt or reading (DRAFT_VERSION; none stored = 1) or, for a
+# SPEC.md draft, from another version of SPEC.md than the approved one. A draft that holds values never goes out of date
+# with SPEC.md. Without an approved spec the version of SPEC.md is not compared.
+_OUTDATED_BY_VERSION = ("e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key', 'records')"
+                        " AND COALESCE(e.evidence->>'draft', '1') <> :dv")
+_OUTDATED_BY_SPEC = ("e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key', 'records')"
+                     " AND (COALESCE(e.evidence->>'draft', '1') <> :dv OR (e.evidence->>'drafted_from' = 'SPEC.md'"
+                     " AND COALESCE(e.evidence->>'spec_version', '') <> :sv))")
+# An untouched, current SPEC.md draft that holds no values for a passing reason: its values are read again after REST.
+_RETRY_DRAFTS = ("e.evidence->>'drafted_from' = 'SPEC.md'"
+                 " AND e.evidence->>'no_query' IN ('" + "', '".join(RETRY_REASONS) + "')")
+assert _OUTDATED_BY_SPEC.count(":dv") == 1 and _OUTDATED_BY_VERSION.count(":dv") == 1
+
+
 async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
                          limit: int = PER_ROUND) -> dict[str, Any]:
     """Draft an expected answer for each live question that has none, then draft again the untouched drafts that are out
-    of date (see the module). Returns drafted (new questions), redrafted, failed (model calls that did not answer),
-    keyed (values from the answer key), replaced (SPEC.md drafts the key's values replaced) and skipped (why nothing
-    was tried, else None)."""
+    of date, then read again the values of the drafts that could not be read (see the module). Returns drafted (new
+    questions), redrafted (out-of-date drafts), failed (model calls that did not answer), keyed (drafts that hold values,
+    of any of those), replaced (SPEC.md drafts whose values could be read at last) and skipped (why nothing was tried,
+    else None)."""
     if not enabled():
         return {"drafted": 0, "failed": 0, "keyed": 0, "replaced": 0, "redrafted": 0,
                 "skipped": "Automatic expected answers are turned off."}
@@ -79,6 +124,7 @@ async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
     if org is not None:
         live.append("q.organization_id = CAST(:org AS uuid)")
         p["org"] = org
+    where = ' AND '.join(live)
     new_only = live + ["NOT EXISTS (SELECT 1 FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id)"]
     async with db.lab_engine().connect() as conn:
         spec = await loop.approved_spec(conn)
@@ -89,43 +135,60 @@ async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
             " FROM tracelab.lab_questions q"
             f" JOIN tracelab.lab_runs r ON r.id = q.run_id WHERE {' AND '.join(new_only)}"
             " ORDER BY q.asked_at DESC, q.id LIMIT :lim"), p)).mappings().all()
-        stale = (await conn.execute(text(_STALE_SPEC_DRAFTS.format(where=' AND '.join(live))), p)).mappings().all()
+        outdated = (await conn.execute(text(_UNTOUCHED.format(
+            where=where, draft=_OUTDATED_BY_SPEC if spec is not None else _OUTDATED_BY_VERSION)),
+            dict(p, dv=str(DRAFT_VERSION), **({"sv": str(spec.get("version"))} if spec is not None else {})))
+        ).mappings().all()
+        # A page of the retries well past the budget, so those still resting do not hide the ones that are due.
+        again = (await conn.execute(text(_UNTOUCHED.format(where=where, draft=_RETRY_DRAFTS)),
+                                    dict(p, lim=max(p["lim"] * 5, 100)))).mappings().all()
     codes = loop.rule_codes(spec) if spec else set()
-    tally = {"drafted": 0, "failed": 0, "keyed": 0, "redrafted": 0}
-    replaced = await _replace_spec_drafts(stale, now)
-    outdated: list[Any] = []
-    if spec is not None:
-        async with db.lab_engine().connect() as conn:
-            outdated = list((await conn.execute(text(_OUTDATED_SPEC_DRAFTS.format(where=' AND '.join(live))), dict(
-                p, dv=str(DRAFT_VERSION), sv=str(spec.get("version"))))).mappings().all())
-    # The newest questions first, new or a redraft (18 Nov 2026): a placeholder on what people just asked is not left
-    # behind a backlog of older questions that never had one.
-    work = sorted([(q, None) for q in todo] + [(q, q["draft_id"]) for q in outdated],
-                  key=lambda x: (x[0]["asked_at"], x[0]["id"]), reverse=True)[:p["lim"]]
-    for q, replaces in work:
-        if await _draft_one(q, spec, codes, now, tally, replaces=replaces):
-            tally["redrafted" if replaces else "drafted"] += 1
-    if tally["drafted"] or tally["redrafted"] or replaced:
+    tally = {"drafted": 0, "failed": 0, "keyed": 0, "redrafted": 0, "replaced": 0}
+    # The newest questions first, new, out of date or to be read again (18 Nov 2026): a draft on what people just asked is
+    # not left behind a backlog of older questions. A question in more than one list is worked once.
+    cands: dict[str, tuple[Any, str]] = {q["id"]: (q, "retry") for q in again}
+    cands.update({q["id"]: (q, "redraft") for q in outdated})
+    cands.update({q["id"]: (q, "new") for q in todo})
+    work = sorted((w for w in cands.values() if not (_only_values(*w) and _rests(w[0]["id"], now))),
+                  key=lambda w: (w[0]["asked_at"], w[0]["id"]), reverse=True)[:p["lim"]]
+    rnd: dict[str, Any] = {"proposals": PROPOSALS_PER_ROUND, "onto": None}
+    for q, kind in work:
+        if await _draft_one(q, kind, spec, codes, now, tally, rnd):
+            tally[{"new": "drafted", "redraft": "redrafted", "retry": "replaced"}[kind]] += 1
+    if tally["drafted"] or tally["redrafted"] or tally["replaced"]:
         log.info("trace_lab.auto_expected.drafted", drafted=tally["drafted"], redrafted=tally["redrafted"],
-                 keyed=tally["keyed"] + replaced, failed=tally["failed"], replaced=replaced)
-    return {"drafted": tally["drafted"], "failed": tally["failed"], "keyed": tally["keyed"] + replaced,
-            "replaced": replaced, "redrafted": tally["redrafted"],
-            "skipped": None if spec else "No version of SPEC.md is approved yet: only answer-key questions are drafted."}
+                 keyed=tally["keyed"], failed=tally["failed"], replaced=tally["replaced"])
+    return {"drafted": tally["drafted"], "failed": tally["failed"], "keyed": tally["keyed"],
+            "replaced": tally["replaced"], "redrafted": tally["redrafted"],
+            "skipped": None if spec else "No version of SPEC.md is approved yet: only questions with a records query "
+                                         "are drafted."}
 
 
-async def _draft_one(q: Any, spec: dict[str, Any] | None, codes: set[str], now: datetime, tally: dict[str, int], *,
-                     replaces: str | None) -> bool:
-    """One question's expected answer: the answer key's values when it knows the question, else a SPEC.md draft (one
-    model call). Stored as a new version over `replaces` (an untouched out-of-date draft), or as the question's first
-    answer when `replaces` is None. False when nothing was stored: no spec and no key, the model failed (tried next
-    round), or a person or another round got there first."""
-    # The answer key first (16 Nov 2026): values read from the records, each with its receipt.
-    evidence = await _from_key(q, now)
-    if evidence is not None:
-        expected = evidence.pop("sentence")
-        keyed = True
-    elif spec is None:
-        return False                            # no key for it, and nothing approved to draft it from yet
+def _only_values(q: Any, kind: str) -> bool:
+    """A draft that is only ever put over by values (never by a SPEC.md draft): one to be read again, or an older values
+    draft. When its values cannot be read it rests, so the round that runs every minute does not try it every minute."""
+    return kind == "retry" or (kind == "redraft" and q["drafted_from"] != "SPEC.md")
+
+
+async def _draft_one(q: Any, kind: str, spec: dict[str, Any] | None, codes: set[str], now: datetime,
+                     tally: dict[str, int], rnd: dict[str, Any]) -> bool:
+    """One question's expected answer: the values read from the records when a query can be made for it, else (a new
+    question or an out-of-date SPEC.md draft) a SPEC.md draft (one model call) that says why there are no values. Stored
+    as a new version over the question's untouched draft (kinds "redraft" and "retry"), or as its first answer (kind
+    "new"). False when nothing was stored: no query and no spec, a draft that holds values or that cannot be read again
+    stays, the budget for a proposal is used (next round), the model failed (tried next round), or a person or another
+    round got there first."""
+    replaces = None if kind == "new" else q["draft_id"]
+    got = await _read_values(q, now, rnd)
+    if got["state"] == "wait":
+        return False
+    if got["state"] == "none" and _only_values(q, kind) and not _rests(q["id"], now):
+        _resting[q["id"]] = now + REST
+    if got["state"] == "values":
+        evidence, expected, keyed = got["evidence"], got["expected"], True
+    elif kind == "retry" or spec is None or (kind == "redraft" and q["drafted_from"] != "SPEC.md"):
+        # Nothing to write from: no spec; or nothing new to put over what is there (values stay until others replace them).
+        return False
     else:
         keyed = False
         try:
@@ -140,6 +203,8 @@ async def _draft_one(q: Any, spec: dict[str, Any] | None, codes: set[str], now: 
         cited = [c for c in dict.fromkeys(str(x).strip().upper() for x in (out.get("rules") or [])) if c in codes]
         evidence = {"drafted_from": "SPEC.md", "spec_version": spec.get("version"), "rules": cited,
                     "draft": DRAFT_VERSION}
+        if got.get("reason"):
+            evidence["no_query"] = got["reason"]
     if replaces is not None:
         evidence = dict(evidence, replaced_draft=replaces)
     async with db.lab_engine().begin() as conn:
@@ -172,51 +237,11 @@ async def _still_untouched(conn: Any, question_id: str, draft_id: str) -> bool:
     return newest == draft_id and not reviewed
 
 
-# A question whose newest expected answer is still the coding agent's SPEC.md draft, untouched: nobody accepted, edited or
-# reviewed it. If the answer key now knows the question (its wording was taught after the draft), the values replace it.
-_STALE_SPEC_DRAFTS = (
-    "SELECT q.id::text AS id, q.question, q.organization_id::text AS org, q.asked_at, e.id::text AS draft_id"
-    " FROM tracelab.lab_questions q JOIN tracelab.lab_runs r ON r.id = q.run_id"
-    " JOIN LATERAL (SELECT x.id, x.source, x.evidence FROM tracelab.lab_expected_answers x WHERE x.question_id = q.id"
-    "   ORDER BY x.created_at DESC, x.id DESC LIMIT 1) e ON true"
-    " WHERE {where} AND e.source = 'coding_agent' AND e.evidence->>'drafted_from' = 'SPEC.md'"
-    " AND NOT EXISTS (SELECT 1 FROM tracelab.lab_reviews v WHERE v.subject_kind = 'expected_answer' AND v.subject_id = e.id)"
-    " ORDER BY q.asked_at DESC, q.id LIMIT :lim")
+# ── The values ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-# An untouched SPEC.md draft that is out of date: written by an older prompt (DRAFT_VERSION; none stored = 1, the prompt
-# that could answer "no rule of the specification applies") or from another version of SPEC.md than the approved one.
-_OUTDATED_SPEC_DRAFTS = _STALE_SPEC_DRAFTS.replace(
-    " ORDER BY q.asked_at", " AND (COALESCE(e.evidence->>'draft', '1') <> :dv"
-                            " OR COALESCE(e.evidence->>'spec_version', '') <> :sv) ORDER BY q.asked_at")
-assert _OUTDATED_SPEC_DRAFTS.count(":dv") == 1
-
-
-async def _replace_spec_drafts(stale: Any, now: datetime) -> int:
-    """Put the answer key's values over untouched SPEC.md drafts the key now knows. A new version, so the draft stays as
-    history; never over a person's answer, an accepted one or a reviewed one (re-checked under the sync lock)."""
-    replaced = 0
-    for q in stale:
-        if not answer_key.enabled() or answer_key.match(q["question"]) is None:
-            continue
-        evidence = await _from_key(q, now)
-        if evidence is None:
-            continue                            # the key could not read it: the SPEC draft stays
-        expected = evidence.pop("sentence")
-        async with db.lab_engine().begin() as conn:
-            await _limits(conn)
-            await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": runs.SYNC_LOCK})
-            await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": runs.EXPECTED_LOCK})
-            if not await _still_untouched(conn, q["id"], q["draft_id"]):
-                continue                        # a person, or another round, got there first
-            await runs._insert_expected(conn, AUTHOR, question_id=q["id"], expected=expected, expected_id=None,
-                                        evidence=dict(evidence, replaced_draft=q["draft_id"]), source="coding_agent")
-            replaced += 1
-    return replaced
-
-
-#: A key that could not read a question rests this long before it is tried again (16 Nov 2026 review): the round runs
-#: every minute, each read loads the records' catalogue, and the read-only pool is small. When Hoistra's map of the
-#: records is not built yet, every key rests ("*").
+#: A read that could not be made rests this long before it is tried again (16 Nov 2026 review): the round runs every
+#: minute, each read loads the records' catalogue, and the read-only pool is small. When Hoistra's map of the records is
+#: not built yet, every read rests ("*").
 REST = timedelta(minutes=30)
 _resting: dict[str, datetime] = {}
 
@@ -225,26 +250,168 @@ def _rests(qid: str, now: datetime) -> bool:
     return any(_resting.get(k) is not None and _resting[k] > now for k in ("*", qid))
 
 
-async def _from_key(q: Any, now: datetime) -> dict[str, Any] | None:
-    """The answer key's expected answer for this question (answer_key), or None: no key knows it, the key is off, the
-    records could not be read, or they do not hold a name the question gives - then the SPEC.md draft is used."""
-    found = answer_key.match(q["question"]) if answer_key.enabled() else None
-    if found is None or not q["org"] or _rests(q["id"], now):
-        return None
-    key, params = found
+def _none(reason: str | None, qid: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+    """No values for this question, and why. A passing reason rests (every question for a missing map, else this one)."""
+    if now is not None and qid is not None and reason in RETRY_REASONS:
+        _resting["*" if reason == "no_map" else qid] = now + REST
+    return {"state": "none", "reason": reason}
+
+
+def _called_records(nodes: list) -> bool:
+    return any(isinstance(n, dict) and n.get("name") == records_queries.RECORDS_TOOL and records_queries._is_tool(n)
+               for n in nodes)
+
+
+async def asker_scope(org: str, user_id: str | None) -> dict[str, Any]:
+    """The access the person who asked had, rebuilt read-only: {"scope": "asker", "building_ids": [...] | None, "email"}
+    (None = every building of the company, as an administrator), or {"scope": "company", "building_ids": None, "email":
+    None} when it cannot be rebuilt (no user id on the turn, the account is not found, it is a person of another
+    company, the answer cannot be read) and the read is for the whole company.
+
+    Hoistra's own principal code builds the caller (svc-deepagents services.principal._from_me, from what the identity
+    service's /api/auth/me says), and Trace Lab asks the same two questions the identity service asks, through its
+    read-only connection to the application database: the account (role, company), and for a plain user the buildings
+    allocated to them (user_buildings). Admins and superadmins are not bounded by allocation."""
+    company: dict[str, Any] = {"scope": "company", "building_ids": None, "email": None}
+    if not user_id:
+        return company
     try:
-        out = await answer_key.run(key, params, q["org"])
-    except answer_key.NotReady as exc:
-        _resting["*"] = now + REST
-        log.info("trace_lab.answer_key.not_ready", why=str(exc)[:200])
-        return None
+        from src.services.principal import _from_me
+
+        async with conversations._read() as conn:
+            row = (await conn.execute(text(
+                f"SELECT u.id::text AS id, u.email, u.organization_id::text AS org, u.platform_role AS role"
+                f" FROM {labelling.USERS} u WHERE u.id::text = :u"), {"u": user_id})).mappings().first()
+            if row is None:
+                return company
+            role = str(row["role"] or "user")
+            ids = None
+            if role == "user":
+                if row["org"] != org:
+                    return company              # a person of another company is not who asked here
+                ids = [str(r[0]) for r in (await conn.execute(text(
+                    "SELECT ub.building_id::text FROM plenum_cafm.user_buildings ub WHERE ub.user_id::text = :u"),
+                    {"u": user_id})).all()]
+        who = _from_me({"user": {"id": row["id"], "email": row["email"], "organization_id": row["org"], "role": role,
+                                 "building_ids": ids}})
+    except Exception as exc:  # noqa: BLE001 - the whole company is the fallback
+        log.info("trace_lab.auto_expected.asker_unknown", why=str(exc)[:200])
+        return company
+    return {"scope": "asker", "email": who.email or None,
+            "building_ids": None if who.building_ids is None else [str(b) for b in who.building_ids]}
+
+
+async def _turn_context(q: Any) -> dict[str, Any] | None:
+    """What a question's turn holds for reading its values: its turn id (the sync's link first), its trace's nodes, and the
+    person who asked (the chat's own record of the turn). None when the turn is another company's than the question's:
+    nothing is read for it this round. A turn whose trace is not filed yet has no nodes (`filed` False); one the chat
+    has no record of has no asker."""
+    out: dict[str, Any] = {"turn_id": None, "nodes": [], "filed": False, "user_id": None}
+    async with conversations._lab_read() as conn:
+        out["turn_id"] = (await conn.execute(text(
+            "SELECT l.turn_id FROM tracelab.lab_question_traces l WHERE l.question_id = CAST(:q AS uuid)"
+            " ORDER BY (l.source = 'sync') DESC, l.created_at, l.turn_id LIMIT 1"), {"q": q["id"]})).scalar_one_or_none()
+        if out["turn_id"] is not None:
+            filed = (await conn.execute(text("SELECT t.organization_id::text FROM tracelab.traces t WHERE t.id = :t"),
+                                        {"t": out["turn_id"]})).first()
+            if filed is not None:
+                if filed[0] != q["org"]:
+                    return None
+                out["nodes"], out["filed"] = await eval_store.nodes_of(conn, out["turn_id"]), True
+    if out["turn_id"] is not None:
+        try:
+            async with conversations._read() as conn:
+                turn = (await conn.execute(text(
+                    f"SELECT tt.user_id::text AS user_id, tt.organization_id::text AS org FROM {conversations.TURNS} tt"
+                    " WHERE tt.turn_id = :t"), {"t": out["turn_id"]})).mappings().first()
+        except Exception as exc:  # noqa: BLE001 - without the chat's record the asker is not known: the whole company
+            log.info("trace_lab.auto_expected.turn_unread", why=str(exc)[:200])
+            turn = None
+        if turn is not None:
+            if turn["org"] != q["org"]:
+                return None
+            out["user_id"] = turn["user_id"]
+    return out
+
+
+async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, Any]:
+    """The values of one question, read from the records: {"state": "values", "evidence", "expected"}, or {"state": "none",
+    "reason"} when no query can be made or read (the reason is stored; see RETRY_REASONS), or {"state": "wait"} when
+    nothing is decided this round (another company's turn, the proposal budget used up, the lab database unreadable).
+
+    The queries come from records_queries (Hoistra's own, Trace Lab's fixed one, a proposal); each is read with the
+    asker's access (asker_scope) and becomes one block of the evidence, in order. One failed read fails them all: no half
+    an answer is stored."""
+    qid, org = q["id"], q["org"]
+    question = (q["question"] or "").strip()
+    if not org:
+        return _none("no_company")              # a turn with no company is never read
+    if _rests(qid, now):
+        return _none("no_map" if (_resting.get("*") or now) > now else "read_failed")
+    try:
+        ctx = await _turn_context(q)
+        if ctx is None:
+            log.warning("trace_lab.auto_expected.turn_of_another_company", question_id=qid)
+            return {"state": "wait"}
+        nodes = ctx["nodes"]
+        propose = rnd["proposals"] > 0 and bool(question)           # never a proposal for a blank question
+        got = await records_queries.queries_for(nodes, question, propose=propose)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace_lab.auto_expected.queries_failed", question_id=qid, error=str(exc)[:200])
+        return {"state": "wait"}
+    # Only a planner call spends the budget: a question that is not about records, or has a query already, does not.
+    if propose and (any(x["source"] == "proposed" for x in got["queries"]) or got["none"] == "planner_unavailable"
+                    or (got["none"] == "not_about_records" and records_queries.data_tools(nodes))):
+        rnd["proposals"] -= 1
+    queries = [x for x in got["queries"] if x["source"] != "answer_key" or answer_key.enabled()]
+    if not queries:
+        reason = None if got["queries"] else got["none"]
+        if reason is None and not got["queries"]:
+            if not question:
+                reason = "no_question"
+            elif not propose:
+                # The budget for a proposal is used: a question the planner would be asked about waits for the next round.
+                if not (nodes and not records_queries.data_tools(nodes)):
+                    return {"state": "wait"}
+                reason = "not_about_records"
+        if reason == "not_about_records" and _called_records(nodes):
+            reason = "records_plan_unreadable"      # the turn used the records tool, and its plan could not be found
+        elif reason == "not_about_records" and not ctx["filed"]:
+            reason = "no_trace"                     # nothing is known of the turn's tools until its trace is filed
+        return _none(reason, qid, now)
+    asker = await asker_scope(org, ctx["user_id"])
+    scope = None
+    if asker["scope"] == "asker":
+        if asker["building_ids"] is not None and not asker["building_ids"]:
+            return _none("asker_has_no_buildings")  # allocated to nothing: Hoistra refuses such a read too
+        scope = {"building_ids": asker["building_ids"], "email": asker["email"]}
+    blocks = []
+    try:
+        if rnd.get("onto") is None:
+            rnd["onto"] = await records_run.load_map()
+        onto = rnd["onto"]
+        for item in queries:
+            ask = (item.get("question") or question).strip() or question
+            run = await records_run.run_query(item["plan"], question=ask, org=org, scope=scope)
+            plan = run.get("plan") or item["plan"]  # the plan as run: the steps can refocus it (Ruling 11)
+            facts = records_values.values_of(onto, plan, run)
+            recorded = records_queries.recorded_sql(nodes, item.get("tool_id")) if item.get("tool_id") else []
+            blocks.append({
+                "source": item["source"], "question": ask, "plan": plan, "found": bool(run.get("found")),
+                "unresolved": list(run.get("unresolved") or []), "notes": list(run.get("notes") or []), "facts": facts,
+                "receipts": list(run.get("receipts") or []), "read_at": run.get("read_at"),
+                "sentence": records_values.sentence_of(onto, plan, run, facts),
+                "scope": asker["scope"], "scope_email": asker["email"],
+                "changed": records_values.changed_since(run.get("receipts") or [], recorded)})
+    except records_run.NotReady as exc:
+        log.info("trace_lab.auto_expected.not_ready", why=str(exc)[:200])
+        return _none("no_map", qid, now)
+    except oq.NotAllowed:
+        return _none("asker_has_no_buildings")
     except Exception as exc:  # noqa: BLE001 - the SPEC.md draft is the fallback
-        _resting[q["id"]] = now + REST
-        log.info("trace_lab.answer_key.unread", question_id=q["id"], key=key.id, why=str(exc)[:200])
-        return None
-    if not out.get("found") or not out.get("facts"):
-        _resting[q["id"]] = now + REST
-        return None
-    return {"drafted_from": "answer_key", "key": key.id, "title": key.title, "params": params,
-            "facts": out["facts"], "receipts": out["receipts"], "read_at": out.get("read_at"), "plan": out.get("plan"),
-            "sentence": answer_key.sentence(key, params, out["facts"])[:runs.EXPECTED_MAX]}
+        log.info("trace_lab.auto_expected.unread", question_id=qid, why=str(exc)[:200])
+        return _none("read_failed", qid, now)
+    evidence = answer_key.jsonable({"drafted_from": "records", "draft": DRAFT_VERSION, "read_at": blocks[-1]["read_at"],
+                                    "queries": blocks})
+    return {"state": "values", "evidence": evidence,
+            "expected": " ".join(b["sentence"] for b in blocks)[:runs.EXPECTED_MAX]}

@@ -541,7 +541,7 @@ async def sync_production(m: labelling.Member, *, now: datetime | None = None) -
         out["failed"].setdefault("runs", _why(exc))
         log.warning("trace_lab.runs.sync_session_runs_failed", error=_why(exc))
     try:
-        # Last, the new live questions' expected answers, drafted from SPEC.md (auto_expected): live only.
+        # Last, the new live questions' expected answers (auto_expected): values from the records, else SPEC.md; live only.
         from . import auto_expected
 
         drafted = await auto_expected.draft_for_live(org, now=now)
@@ -1024,8 +1024,9 @@ async def set_expected(m: labelling.Member, code: str, *, expected: str, expecte
 
 async def turn_expected(m: labelling.Member, turn_id: str) -> dict[str, Any]:
     """A turn's expected answer for the session page (14 Nov 2026): the newest one of the question the turn is, of any
-    source. `draft` is true for one the coding agent drafted from SPEC.md (auto_expected), with the spec version and the
-    rules it cites; `from_draft` for a person's version saved from such a draft (Accept on the session page). `live` is
+    source. `draft` is true for one the coding agent drafted (auto_expected): from SPEC.md (with the spec version and the
+    rules it cites), or as values read from the records (kind "records"); `from_draft` for a person's version saved from
+    such a draft (Accept on the session page). `kind` is spec, answer_key, records or person. `live` is
     true only for a question of a live day asked by hand: the page shows this on live turns only, never on Codex ones. A
     turn of another company is not found."""
     labelling.require_active(m)
@@ -1058,9 +1059,11 @@ async def turn_expected(m: labelling.Member, turn_id: str) -> dict[str, Any]:
         exp = expected_out(e)
         ev = exp["evidence"] if isinstance(exp["evidence"], dict) else {}
         draft = e["source"] == "coding_agent"
-        # Accepted on the session page: the person's own version of a draft (SPEC.md, or the answer key's values).
-        taken = not draft and ev.get("drafted_from") in ("SPEC.md", "answer_key")
-        out["kind"] = {"SPEC.md": "spec", "answer_key": "answer_key"}.get(ev.get("drafted_from"), "person")
+        # Accepted on the session page: the person's own version of a draft (SPEC.md, the answer key's values, or the
+        # values read from the records, 19 Nov 2026).
+        taken = not draft and ev.get("drafted_from") in ("SPEC.md", "answer_key", "records")
+        out["kind"] = {"SPEC.md": "spec", "answer_key": "answer_key", "records": "records"}.get(ev.get("drafted_from"),
+                                                                                              "person")
         rules = [str(x) for x in ev.get("rules") or []] if draft else ([str(ev["spec_rule"])] if ev.get("spec_rule") else [])
         out.update(expected=exp, draft=draft, from_draft=taken, decision=decision,
                    spec_version=ev.get("spec_version") if (draft or taken) else None, rules=rules)
