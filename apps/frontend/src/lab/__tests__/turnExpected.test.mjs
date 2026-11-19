@@ -11,6 +11,8 @@ after(cleanBundles);
 const React = (await import('react')).default;
 const { renderToStaticMarkup } = await import('react-dom/server');
 const TE = await bundle('../lab/TurnExpected.jsx');
+const QE = await bundle('../lab/QueryEditor.jsx');
+const QF = await import('../logic/queryForm.js');
 const html = (p) => renderToStaticMarkup(React.createElement(TE.ExpectedView, p || {}));
 const src = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf-8');
 
@@ -123,150 +125,7 @@ test('a checked answer shows each value’s mark and who checked it', () => {
   assert.ok(out.includes('should be 4'));
 });
 
-// ── Correcting Hoistra's query (16 Nov 2026, Hussain): "the user must be able to change the date in the query if the
-// query by the orchestrator is wrong and see the correct answer" - only the expected answer is corrected. ─────────
-const FIELDS = { concept: 'ComplianceCertificate', what: 'compliance certificates', states: ['expiring_soon'], building: 'Bishopsgate',
-  state_choices: [{ id: 'lapsed', description: 'lapsed / expired' }, { id: 'expiring_soon', description: 'status = Expiring soon' }],
-  dates: [{ attribute: 'expiry_date', op: 'within', value: 'next_30_days' }], date_attributes: ['expiry_date', 'issue_date'] };
-
-test('Hoistra’s query is shown as plain fields anyone can change', () => {
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: FIELDS }] },
-    edit: TE.editOf(FIELDS) }));
-  assert.ok(out.includes('Hoistra looked for') && out.includes('compliance certificates'));
-  assert.match(out, /<input type="checkbox"[^>]*checked=""[^>]*aria-label="expiring soon"|aria-label="expiring soon"[^>]*checked=""/);
-  assert.ok(out.includes('value="Bishopsgate"') && out.includes('every building'));
-  assert.ok(out.includes('expiry date') && out.includes('within the next') && out.includes('value="30"'));
-  assert.match(out, />Run with my changes</);
-  assert.match(out, />Add a date</);
-});
-
-test('the changes become the request, and next or last N days a period', () => {
-  const edit = TE.editOf(FIELDS);
-  edit.dates[0] = Object.assign({}, edit.dates[0], { n: '60' });
-  assert.deepEqual(TE.bodyOf(0, edit), { index: 0, states: ['expiring_soon'], building: 'Bishopsgate',
-    dates: [{ attribute: 'expiry_date', op: 'within', value: 'next_60_days' }] });
-  const range = TE.editOf(Object.assign({}, FIELDS, { dates: [{ attribute: 'expiry_date', op: 'between', value: ['2026-11-16', '2027-01-15'] }] }));
-  assert.deepEqual(TE.bodyOf(0, range).dates, [{ attribute: 'expiry_date', op: 'between', value: ['2026-11-16', '2027-01-15'] }]);
-  const month = TE.editOf(Object.assign({}, FIELDS, { dates: [{ attribute: 'issue_date', op: 'within', value: 'this_month' }] }));
-  assert.deepEqual(TE.bodyOf(0, month).dates, [{ attribute: 'issue_date', op: 'within', value: 'this_month' }]);
-});
-
-test('the corrected answer shows what changed and can become the expected answer', () => {
-  const result = { found: true, sentence: '3 compliance certificates: A, B, C.', changes: ['expiry_date: within next_30_days → within next_60_days'],
-    facts: [{ id: 'f1', label: 'Compliance certificates found', value: 3, receipt: 'q1' }],
-    receipts: [{ id: 'q1', label: 'count', sql: 'SELECT count(*) ...', params: {}, row_count: 1, rows: [{ n: 3 }] }], read_at: '2026-11-16T10:00:00Z' };
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: FIELDS }] },
-    edit: TE.editOf(FIELDS), result }));
-  assert.ok(out.includes('Your version finds') && out.includes('3 compliance certificates: A, B, C.'));
-  assert.ok(out.includes('expiry_date: within next_30_days → within next_60_days'));
-  assert.match(out, />Use as the expected answer</);
-  const body = TE.correctedBody(result);
-  assert.equal(body.expected, '3 compliance certificates: A, B, C.');
-  assert.equal(body.evidence.drafted_from, 'answer_key');
-  assert.deepEqual(body.evidence.changes, result.changes);
-  assert.equal(body.evidence.receipts.length, 1);
-});
-
-test('when Hoistra did not read records for this question, it says so plainly', () => {
-  const none = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [] } }));
-  assert.ok(none.includes('Hoistra did not read the records with a query for this question, so there is nothing to correct here.'));
-  const wait = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: false, plans: [] } }));
-  assert.ok(wait.includes('not ready yet'));
-});
-
-// ── Very user friendly (16 Nov 2026, Hussain) ───────────────────────────────────────────────────────────────────────
-const WO = { concept: 'WorkOrder', what: 'work orders', states: ['open', 'overdue'], building: null,
-  state_choices: [{ id: 'open', description: 'not finished (status not in Completed)' }, { id: 'closed', description: 'finished (status in Completed)' },
-    { id: 'scheduled', description: 'status = Scheduled (276 rows)' }, { id: 'overdue', description: 'sla_due_at passed and completed_at empty' }],
-  dates: [], date_attributes: ['sla_due_at', 'completed_at', 'raised_at'] };
-
-test('the query reads as one plain sentence, before and after the changes', () => {
-  assert.equal(TE.describe(WO, TE.editOf(WO)), 'work orders that are open or overdue, in every building, with no date limit');
-  const e = TE.editOf(WO);
-  e.states = ['overdue']; e.building = 'Bishopsgate Tower';
-  e.dates = [{ attribute: 'sla_due_at', how: 'next', n: '60' }];
-  assert.equal(TE.describe(WO, e), 'work orders that are overdue, in Bishopsgate Tower, where the SLA due date is within the next 60 days');
-  e.states = []; e.dates = [{ attribute: 'raised_at', how: 'between', from: '2026-11-01', to: '2026-11-30' }];
-  assert.equal(TE.describe(WO, e), 'work orders in any state, in Bishopsgate Tower, where the raised date is between 2026-11-01 and 2026-11-30');
-});
-
-test('statuses and dates have plain names, and the ones in use come first', () => {
-  assert.equal(TE.dateName('sla_due_at'), 'SLA due date');
-  assert.equal(TE.dateName('expiry_date'), 'expiry date');
-  assert.equal(TE.dateName('completed_at'), 'completed date');
-  assert.equal(TE.stateHelp({ id: 'scheduled', description: 'status = Scheduled (276 rows)' }), 'status is Scheduled');
-  const order = TE.stateOrder(WO, TE.editOf(WO)).map((c) => c.id);
-  assert.deepEqual(order.slice(0, 2), ['open', 'overdue']);
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: WO }], buildings: ['Bishopsgate Tower', 'Harbour Point'] },
-    edit: TE.editOf(WO) }));
-  assert.ok(out.includes('Hoistra looked for') && out.includes('work orders that are open or overdue, in every building, with no date limit'));
-  for (const step of ['1. Check what Hoistra looked for', '2. Change what is wrong', '3. Run it', '4. Use it']) assert.ok(out.includes(step), step);
-  assert.ok(out.includes('not finished'), 'what a status means is shown');
-  assert.ok(out.includes('<option value="Bishopsgate Tower">') && out.includes('list="'), 'building names to pick from');
-  assert.match(out, />Start again</);
-});
-
-test('the result says what Hoistra’s query found and what yours finds', () => {
-  const result = { found: true, sentence: 'Counts: Bishopsgate Tower 9.', changes: ['States: open, overdue → overdue'],
-    facts: [{ id: 'f1', label: 'Bishopsgate Tower', value: 9, receipt: 'q1' }], receipts: [{ id: 'q1', label: 'aggregate', sql: 'SELECT ...', row_count: 1, rows: [{ count: 9 }] }],
-    before: { found: true, sentence: 'Counts: Bishopsgate Tower 13.', facts: [{ id: 'f1', label: 'Bishopsgate Tower', value: 13 }] } };
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: WO }] }, edit: TE.editOf(WO), result }));
-  assert.ok(out.includes('Hoistra’s query found') && out.includes('Counts: Bishopsgate Tower 13.'));
-  assert.ok(out.includes('Your version finds') && out.includes('Counts: Bishopsgate Tower 9.'));
-});
-
-test('when Hoistra used another tool the first result is the question as asked, not Hoistra’s query', () => {
-  const result = { found: true, sentence: '14 compliance certificates.', changes: [], facts: [], receipts: [],
-    before: { found: true, sentence: '7 compliance certificates.', facts: [] } };
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, source: 'answer_key', plans: [{ index: 0, fields: WO }] }, edit: TE.editOf(WO), result }));
-  assert.ok(!out.includes('Hoistra’s query found'));
-  assert.ok(out.includes('The question as asked finds') && out.includes('7 compliance certificates.'));
-});
-
-test('a status is explained in plain words, without the notes written for the model', () => {
-  const lapsed = { id: 'lapsed', description: 'lapsed / expired - status in Expired, Lapsed, Overdue, or stored as in date with expiry_date passed (the expiry date decides). USE THIS for lapsed, expired or overdue certificates' };
-  assert.equal(TE.stateHelp(lapsed), 'status in Expired, Lapsed, Overdue, or stored as in date with expiry date passed');
-  assert.equal(TE.stateHelp({ id: 'valid', description: 'status = Valid' }), 'status is Valid');
-  assert.equal(TE.stateHelp({ id: 'blocked', description: 'blocked / suspended / failed (outcome in Pass — 41 items failed and removed)' }), 'blocked, suspended or failed');
-  assert.equal(TE.stateHelp({ id: 'blocking', description: 'lapsed, expired or blocked - dependent work cannot proceed (outcome in Pass — 41 items failed and remo' }), 'dependent work cannot proceed');
-  const long = TE.stateHelp({ id: 'x', description: 'a '.repeat(80) });
-  assert.ok(long.length <= 91 && long.endsWith('…'));
-});
-
-test('a query in any state has every state ticked, and unticking one narrows it', () => {
-  const ANY = Object.assign({}, WO, { states: [] });
-  const e = TE.editOf(ANY);
-  assert.deepEqual(e.states, ['open', 'closed', 'scheduled', 'overdue'], 'every state the query includes is ticked');
-  assert.equal(TE.describe(ANY, e), 'work orders in any state, in every building, with no date limit');
-  assert.deepEqual(TE.bodyOf(0, e, ANY).states, [], 'all ticked is sent as any state');
-  const most = Object.assign({}, e, { states: ['open', 'scheduled', 'overdue'] });
-  assert.equal(TE.describe(ANY, most), 'work orders in any state except closed, in every building, with no date limit');
-  const fewer = Object.assign({}, e, { states: ['open', 'scheduled'] });
-  assert.equal(TE.describe(ANY, fewer), 'work orders that are open or scheduled, in every building, with no date limit');
-  assert.deepEqual(TE.bodyOf(0, fewer, ANY).states, ['open', 'scheduled']);
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: ANY }] }, edit: e }));
-  assert.equal((out.match(/type="checkbox"[^>]*checked=""/g) || []).length, 4, 'the boxes show what the query uses');
-});
-
-test('a box stays where it is when it is ticked or unticked', () => {
-  const order = (edit) => [...renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: WO }] }, edit }))
-    .matchAll(/aria-label="([^"]+)" type="checkbox"|type="checkbox" aria-label="([^"]+)"/g)].map((m) => m[1] || m[2]);
-  const start = order(TE.editOf(WO));
-  assert.deepEqual(order(Object.assign({}, TE.editOf(WO), { states: ['overdue', 'closed'] })), start);
-});
-
-test('the query check can be folded away', () => {
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: WO }] }, edit: TE.editOf(WO), onHide: () => {} }));
-  assert.match(out, /<button[^>]*aria-expanded="true"[^>]*>Hide<\/button>/);
-});
-
-test('with no state ticked there is nothing to run, and the page says so', () => {
-  const none = Object.assign({}, TE.editOf(WO), { states: [] });
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, plans: [{ index: 0, fields: WO }] }, edit: none }));
-  assert.ok(out.includes('Tick at least one'));
-  assert.match(out, /<button[^>]*disabled=""[^>]*>Run with my changes</);
-});
-
+// ── Values read from the answer key (16 Nov 2026) ─────────────────────────────────────────────────────────────────────
 test('a list answer shows one value, its count, and clicking it lists the records', () => {
   const ev = { drafted_from: 'answer_key', facts: [
       { id: 'f1', label: 'Certificates expiring within the next 60 days', value: 2, receipt: 'q1' },
@@ -293,30 +152,12 @@ test('the SQL is tucked away behind a plain explanation and the records', () => 
   assert.ok(out.indexOf('What it found') < out.indexOf('Show the query (technical)'), 'the records come before the query');
 });
 
-test('when Hoistra used another tool, the same question is offered as a records query to check', () => {
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: { ready: true, source: 'answer_key', plans: [{ index: 0, fields: FIELDS }] },
-    edit: TE.editOf(FIELDS) }));
-  assert.ok(out.includes('Hoistra answered this with another tool, so here is the same question as a records query.'));
-  assert.ok(out.includes('The question asks for') && !out.includes('Hoistra looked for'));
-});
-
 // ── Review fixes before commit (16 Nov 2026) ──
-test('the query that is run is the one shown, by its own number', () => {
-  assert.equal(TE.planIndex({ plans: [{ index: 2, fields: WO }] }), 2);
-  assert.equal(TE.planIndex({ plans: [] }), 0);
-  assert.equal(TE.planIndex(null), 0);
-});
-
 test('Run again now shows only where there is a key to run again', () => {
   const corrected = Object.assign({}, KEYED, { expected: Object.assign({}, KEYED.expected, {
     evidence: Object.assign({}, KEYED.expected.evidence, { key: undefined, source: 'corrected' }) }) });
   assert.ok(!/>Run again now</.test(html({ data: corrected, openFact: 'f1', onRerun: () => {} })));
   assert.match(html({ data: KEYED, openFact: 'f1', onRerun: () => {} }), />Run again now</);
-});
-
-test('while Hoistra’s query is read the check says so, not that there is nothing to correct', () => {
-  const out = renderToStaticMarkup(React.createElement(TE.QueryFix, { query: null }));
-  assert.ok(out.includes('Reading Hoistra’s query…') && !out.includes('nothing to correct'));
 });
 
 // ── Values read from the records, with their source (19 Nov 2026, Hussain and Bala): one block per query Hoistra (or Trace
@@ -493,4 +334,329 @@ test('Run again now names the query it reads again, the first one included', asy
   assert.equal(calls[0].url.searchParams.get('index'), '0', 'the first query is named too');
   assert.equal(calls[1].url.searchParams.get('index'), '2');
   assert.equal(calls[2].url.searchParams.has('index'), false, 'the answer key’s re-run names none');
+});
+
+// ── The query editor (19 Nov 2026, Hussain and Bala): an editor over every part of the records query. A curator changes
+// what was read, runs it, sees Hoistra's values beside their own, and uses the result as the expected answer. Only
+// curators and the platform team may run a query (`can_run`); everyone else sees the values and their receipts. ────────
+const MAPE = {
+  concepts: [
+    { name: 'Building', words: 'buildings', attributes: [{ name: 'name', kind: 'text' }, { name: 'city', kind: 'text' }], states: [], links: ['WorkOrder'] },
+    { name: 'WorkOrder', words: 'work orders', attributes: [{ name: 'raised_at', kind: 'date' }, { name: 'status', kind: 'text' }, { name: 'cost', kind: 'number' }],
+      states: [{ id: 'open', description: 'not finished (status not in Completed)' }, { id: 'overdue', description: 'sla_due_at passed and completed_at empty' },
+        { id: 'closed', description: 'finished (status in Completed)' }], links: ['Building', 'Vendor'] },
+    { name: 'Vendor', words: 'vendors', attributes: [{ name: 'vendor_name', kind: 'text' }], states: [{ id: 'live', description: 'status = Live' }], links: ['WorkOrder'] }],
+  ops: [{ id: 'eq', words: 'is' }, { id: 'ne', words: 'is not' }, { id: 'in', words: 'is one of' }, { id: 'not_in', words: 'is not one of' }, { id: 'lt', words: 'is before' },
+    { id: 'lte', words: 'is on or before' }, { id: 'gt', words: 'is after' }, { id: 'gte', words: 'is on or after' }, { id: 'between', words: 'is between' },
+    { id: 'within', words: 'is within' }, { id: 'contains', words: 'contains' }, { id: 'is_null', words: 'is empty' }],
+  periods: ['today', 'this_month', 'last_month', 'next_month', 'next_30_days']
+};
+const PLAN_A = { question_type: 'list', aggregate: null,
+  focus: { concept: 'WorkOrder', match: null, states: ['open', 'overdue'], via: [], filters: [
+    { attribute: 'raised_at', op: 'within', value: 'next_60_days' }, { attribute: 'status', op: 'in', value: ['Open', 'Late'] },
+    { attribute: 'cost', op: 'between', value: [10, 20] }, { attribute: 'status', op: 'is_null', value: false }] },
+  constraints: [{ concept: 'Building', match: 'Bishopsgate Tower', via: [], states: [], filters: [] }],
+  include: [{ name: 'vendor', concept: 'Vendor', via: [], states: [], filters: [], sort: { attribute: 'vendor_name', dir: 'asc' }, limit: 5 }] };
+const PLAN_B = { question_type: 'count', focus: { concept: 'Building', match: 'ABC', states: [], filters: [], via: [] }, constraints: [], include: [],
+  aggregate: { count_by: [{ concept: 'Building', attribute: 'city' }] } };
+const QRY = { ok: true, ready: true, can_run: true, none: null, map: MAPE, queries: [
+  { index: 0, source: 'hoistra', source_words: 'Hoistra’s query', question: 'Which work orders are open in Bishopsgate Tower?', plan: PLAN_A },
+  { index: 1, source: 'proposed', source_words: 'Proposed for this question - check it before accepting', question: 'How many buildings are there?', plan: PLAN_B }] };
+const el = (out, label) => (new RegExp('<(?:input|select|button|textarea)[^>]*aria-label="' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>').exec(out) || [''])[0];
+const sel = (out, label) => (new RegExp('<select[^>]*aria-label="' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>(.*?)</select>', 's').exec(out) || ['', ''])[1];
+const view = (p) => renderToStaticMarkup(React.createElement(QE.QueryEditorView, Object.assign({ query: QRY }, p || {})));
+const editor = (p) => renderToStaticMarkup(React.createElement(QE.default, Object.assign({ query: QRY }, p || {})));
+
+test('a turn with several queries has one tab for each, and shows the fields of the one open', () => {
+  const out = view();
+  assert.equal((out.match(/role="tab"/g) || []).length, 2);
+  assert.match(out, /role="tablist"/);
+  assert.ok(out.includes('Query 1') && out.includes('Query 2') && out.includes('Hoistra’s query') && out.includes('Proposed for this question - check it before accepting'));
+  assert.equal((out.match(/aria-selected="true"/g) || []).length, 1);
+  assert.match(out, /<button[^>]*aria-selected="true"[^>]*>[^]*?Query 1/);
+  assert.ok(out.includes('Which work orders are open in Bishopsgate Tower?'), 'the question the query was made for');
+  assert.ok(el(out, 'Name or code').includes('placeholder="none"') && sel(out, 'What').includes('<option value="WorkOrder" selected="">work orders</option>'));
+  const second = view({ tab: 1 });
+  assert.match(second, /<button[^>]*aria-selected="true"[^>]*>[^]*?Query 2/);
+  assert.ok(sel(second, 'What').includes('<option value="Building" selected="">buildings</option>'), 'the second query’s own fields');
+});
+
+test('a turn with one query has no tabs', () => {
+  const out = view({ query: Object.assign({}, QRY, { queries: QRY.queries.slice(0, 1) }) });
+  assert.ok(!out.includes('role="tablist"') && !out.includes('role="tab"'));
+  assert.ok(out.includes('Hoistra’s query') && out.includes('aria-label="What"'));
+});
+
+test('the fields are every part of the query: kind of answer, what, name or code, states, conditions, limits, grouping and linked records', () => {
+  const out = view();
+  for (const legend of ['Kind of answer', 'States', 'Conditions', 'Limited to', 'Grouped by', 'Also show']) assert.ok(out.includes('>' + legend + '<'), legend);
+  assert.ok(out.includes('>What<') && out.includes('>Name or code<'));
+  assert.ok(sel(out, 'Kind of answer').includes('<option value="list" selected="">A list of records</option>') && sel(out, 'Kind of answer').includes('>A count<') && sel(out, 'Kind of answer').includes('>One record<'));
+  assert.ok(sel(out, 'What').includes('<option value="WorkOrder" selected="">work orders</option>') && sel(out, 'What').includes('>buildings<') && sel(out, 'What').includes('>vendors<'));
+  assert.ok(el(out, 'Name or code').includes('placeholder="none"'));
+  assert.ok(el(out, 'Limited to 1: name or code').includes('value="Bishopsgate Tower"'));
+});
+
+test('the states are tick boxes with what each means, in the map’s order, and the ones in the query are ticked', () => {
+  const out = view();
+  assert.match(el(out, 'open'), /checked=""/);
+  assert.match(el(out, 'overdue'), /checked=""/);
+  assert.doesNotMatch(el(out, 'closed'), /checked=""/);
+  assert.ok(out.includes('not finished') && out.includes('sla due at passed and completed at empty'), 'what a status means, in plain words');
+  assert.ok(out.indexOf('aria-label="open"') < out.indexOf('aria-label="overdue"') && out.indexOf('aria-label="overdue"') < out.indexOf('aria-label="closed"'));
+  assert.ok(out.includes('Tick none to include every state'));
+});
+
+test('a condition is a column, a condition in words and a value that fits the column', () => {
+  const out = view();
+  assert.ok(sel(out, 'Condition 1: column').includes('<option value="raised_at" selected="">raised date</option>') && sel(out, 'Condition 1: column').includes('>status<'));
+  const how = sel(out, 'Condition 1: how');
+  for (const w of ['is before', 'is after', 'is between', 'is within', 'is empty', 'is not empty']) assert.ok(how.includes('>' + w + '<'), w);
+  assert.ok(how.includes('<option value="within" selected="">is within</option>'));
+  assert.ok(sel(out, 'Condition 1: period').includes('<option value="next" selected="">the next</option>') && sel(out, 'Condition 1: period').includes('>this month<'));
+  assert.ok(el(out, 'Condition 1: days').includes('value="60"') && out.includes('>days<'));
+  assert.ok(el(out, 'Condition 2: value').includes('value="Open, Late"'), 'a list is typed with commas');
+  assert.ok(sel(out, 'Condition 2: how').includes('<option value="in" selected="">is one of</option>'));
+  assert.ok(el(out, 'Condition 3: from').includes('value="10"') && el(out, 'Condition 3: to').includes('value="20"'));
+  assert.ok(el(out, 'Condition 3: from').includes('type="number"'), 'a number column takes a number');
+  assert.ok(sel(out, 'Condition 4: how').includes('<option value="not_null" selected="">is not empty</option>'));
+  assert.equal(el(out, 'Condition 4: value'), '', 'nothing to type for is empty');
+  assert.match(el(out, 'Remove condition 1'), /<button/);
+  assert.match(out, />Add a condition</);
+  assert.ok(out.includes('list="lab-xe-dates"') === false, 'no date column is typed in this query');
+  const dated = QF.formOf(PLAN_A);
+  dated.focus.conditions = [{ attribute: 'raised_at', op: 'gt', value: 'today+30d' }];
+  const date = view({ forms: { 0: dated } });
+  assert.ok(el(date, 'Condition 1: value').includes('value="today+30d"') && el(date, 'Condition 1: value').includes('list="lab-xe-dates"'), 'a date takes a date, today+30d or a period');
+  assert.ok(date.includes('<datalist id="lab-xe-dates"><option value="today"></option><option value="today+30d"></option>'));
+});
+
+test('limits, groupings and linked records each have their own fields, with add and remove', () => {
+  const out = view();
+  assert.ok(sel(out, 'Limited to 1: kind of record').includes('<option value="Building" selected="">buildings</option>'));
+  assert.match(el(out, 'Remove limit 1'), /<button/);
+  assert.match(out, />Add a limit</);
+  assert.match(out, />Add a grouping</);
+  assert.ok(sel(out, 'Also show 1: kind of record').includes('<option value="Vendor" selected="">vendors</option>'));
+  assert.ok(sel(out, 'Also show 1: sort by').includes('<option value="vendor_name" selected="">vendor name</option>') && sel(out, 'Also show 1: sort by').includes('>Not sorted<'));
+  assert.ok(sel(out, 'Also show 1: order').includes('<option value="asc" selected="">lowest or oldest first</option>'));
+  assert.ok(el(out, 'Also show 1: how many').includes('value="5"'));
+  assert.match(el(out, 'Remove linked records 1'), /<button/);
+  assert.match(out, />Add linked records</);
+  const grouped = view({ tab: 1 });
+  assert.ok(sel(grouped, 'Grouped by 1: kind of record').includes('<option value="Building" selected="">buildings</option>'));
+  assert.ok(sel(grouped, 'Grouped by 1: column').includes('<option value="city" selected="">city</option>'));
+  assert.match(el(grouped, 'Remove grouping 1'), /<button/);
+});
+
+test('the query is read out in words, and so is the person’s version once it differs', () => {
+  const out = view();
+  assert.ok(out.includes('Hoistra looked for a list of work orders that are open or overdue where the raised date is within the next 60 days'));
+  assert.ok(!out.includes('Your version'));
+  const mine = QF.formOf(PLAN_A);
+  mine.focus.states = ['overdue'];
+  const changed = view({ forms: { 0: mine } });
+  assert.ok(changed.includes('Your version looks for a list of work orders that are overdue where'));
+  assert.ok(changed.includes('Hoistra looked for a list of work orders that are open or overdue'));
+  const proposed = view({ tab: 1 });
+  assert.ok(proposed.includes('The proposed query looks for a count of buildings matching “ABC”'));
+  const fixed = view({ query: Object.assign({}, QRY, { queries: [Object.assign({}, QRY.queries[0], { source: 'answer_key' })] }) });
+  assert.ok(fixed.includes('Trace Lab’s fixed query looks for a list of work orders'));
+});
+
+test('Run reads the query as it stands; with something missing it cannot run and says what', () => {
+  const out = view();
+  assert.match(out, /<button[^>]*>Run with my changes</);
+  assert.doesNotMatch(out.match(/<button[^>]*>Run with my changes</)[0], /disabled=""/);
+  const bad = QF.formOf(PLAN_A);
+  bad.focus.conditions[0] = { attribute: 'raised_at', op: 'gt', value: '' };
+  const held = view({ forms: { 0: bad } });
+  assert.match(held.match(/<button[^>]*>Run with my changes</)[0], /disabled=""/);
+  assert.ok(held.includes('What, condition 1: give a value.'));
+  assert.match(view({ busy: 0 }).match(/<button[^>]*>Reading…</)[0], /disabled=""/);
+  assert.match(out, />Start again</);
+});
+
+const SIDE_B = { found: true, sentence: 'Work order records found: 14.', unresolved: [], notes: ['Deleted vendors are left out.'], read_at: '2026-11-19T10:00:00+00:00',
+  facts: [{ id: 'f1', kind: 'count', label: 'Work order records found', value: 14, receipt: 'q1' }, { id: 'f2', kind: 'record', label: '', value: 'WO-4527', receipt: 'q2' }],
+  receipts: [{ id: 'q1', label: 'count', sql: 'SELECT count(*) AS n FROM "work_orders" AS f', params: {}, row_count: 1, rows: [{ n: 14 }], psql: 'BEGIN READ ONLY;' },
+    { id: 'q2', label: 'focus WorkOrder', sql: 'SELECT f.title FROM "work_orders" AS f', params: {}, row_count: 1, rows: [{ title: 'WO-4527' }], psql: 'BEGIN READ ONLY;' }] };
+const SIDE_A = { found: true, sentence: 'Work order records found: 9.', unresolved: [], notes: [], read_at: '2026-11-19T10:00:05+00:00',
+  facts: [{ id: 'f1', kind: 'count', label: 'Work order records found', value: 9, receipt: 'q1' }],
+  receipts: [{ id: 'q1', label: 'count', sql: 'SELECT count(*) AS n FROM "work_orders" AS f WHERE f.status = :p0', params: { p0: 'Open' }, row_count: 1, rows: [{ n: 9 }], psql: 'BEGIN READ ONLY;' }] };
+const RAN = { before: SIDE_B, after: SIDE_A, changes: ['States: open, overdue → overdue'], plan: PLAN_A };
+
+test('the result puts what Hoistra’s query found beside what the person’s finds, each value a button to its receipt', () => {
+  const out = view({ results: { 0: RAN } });
+  assert.ok(out.includes('Hoistra’s query found') && out.includes('Your version finds'));
+  assert.ok(out.indexOf('Hoistra’s query found') < out.indexOf('Your version finds'));
+  assert.ok(out.includes('Work order records found: 14.') && out.includes('Work order records found: 9.'));
+  assert.match(out, /class="lab-xe-cols"/);
+  assert.equal((out.match(/aria-label="See how Work order records found: (14|9) was found"/g) || []).length, 2);
+  assert.ok(out.includes('aria-label="See how WO-4527 was found"'));
+  assert.ok(out.includes('States: open, overdue → overdue'), 'what changed, in words');
+  assert.match(out, />Use as the expected answer</);
+  assert.ok(out.includes('Deleted vendors are left out.'), 'how Hoistra’s query was read');
+  assert.ok(!/\b(pass|fail|correct|wrong|right)\b/i.test(out.slice(out.indexOf('lab-xe-result'))), 'Trace Lab does not judge the values');
+});
+
+test('a value opens how it was found, on whichever side it is', () => {
+  const mine = view({ results: { 0: RAN }, openKey: 'after:f1', onCopy: () => {} });
+  assert.ok(mine.includes('How this value was found') && mine.includes('f.status = :p0') && mine.includes('<th>p0</th><td>Open</td>'));
+  assert.ok(mine.includes('aria-expanded="true"'));
+  assert.ok(!mine.includes('SELECT f.title'), 'only that value’s query');
+  const theirs = view({ results: { 0: RAN }, openKey: 'before:f2' });
+  assert.ok(theirs.includes('This is one of the records the query below found.') && theirs.includes('SELECT f.title FROM'));
+  assert.ok(!/>Run again now</.test(theirs) && !/This is right/.test(theirs), 'no marks or re-runs inside the editor');
+});
+
+test('the person’s version can be used only as it was run', () => {
+  assert.match(view({ results: { 0: RAN } }).match(/<button[^>]*>Use as the expected answer</)[0], /^(?!.*disabled)/s);
+  const edited = QF.formOf(PLAN_A);
+  edited.focus.match = 'changed after the run';
+  const out = view({ results: { 0: RAN }, forms: { 0: edited } });
+  assert.match(out.match(/<button[^>]*>Use as the expected answer</)[0], /disabled=""/);
+  assert.ok(out.includes('You changed the query after this run. Run it again to see what it finds.'));
+  assert.match(view({ results: { 0: RAN }, saving: true }).match(/<button[^>]*>Saving…</)[0], /disabled=""/);
+  const missing = view({ results: { 0: Object.assign({}, RAN, { after: Object.assign({}, SIDE_A, { found: false, unresolved: ['ABC'], sentence: 'Not on record: ABC' }) }) } });
+  assert.ok(!missing.includes('Use as the expected answer'));
+  assert.ok(missing.includes('The records do not hold ABC. Check the spelling.'));
+});
+
+test('a result belongs to its own tab', () => {
+  const out = view({ results: { 0: RAN }, tab: 1 });
+  assert.ok(!out.includes('Your version finds'));
+});
+
+test('the words the records engine gives for a query it refuses sit beside the editor', () => {
+  const out = view({ errors: { 0: { reason: 'bad_query', words: ['What: Floor has no state \'open\'.', 'Condition 2 names a column the records do not have.'] } } });
+  assert.match(out, /<aside[^>]*role="alert"[^>]*class="lab-xe-side[^"]*"|<aside[^>]*class="lab-xe-side[^"]*"[^>]*role="alert"/);
+  assert.ok(out.includes('This query cannot run') && out.includes('Floor has no state &#x27;open&#x27;.') && out.includes('Condition 2 names a column the records do not have.'));
+  assert.ok(out.indexOf('lab-xe-fields') < out.indexOf('lab-xe-side'), 'the fields come first, the words beside them');
+  const other = view({ errors: { 0: { reason: '', words: ['Could not run it: the service did not answer.'] } } });
+  assert.ok(other.includes('Could not run it: the service did not answer.') && !other.includes('This query cannot run'));
+  assert.ok(!view().includes('lab-xe-side'));
+});
+
+test('the editor can be folded away', () => {
+  assert.match(view({ onHide: () => {} }), /<button[^>]*aria-expanded="true"[^>]*>Hide<\/button>/);
+});
+
+test('when the person may not run queries the editor is not shown, only the queries in words', () => {
+  const out = editor({ query: Object.assign({}, QRY, { can_run: false }) });
+  assert.ok(!out.includes('aria-label="What"') && !out.includes('Run with my changes') && !out.includes('Add a condition') && !out.includes('role="tablist"'));
+  assert.ok(out.includes('Hoistra looked for a list of work orders that are open or overdue') && out.includes('Hoistra’s query'));
+  assert.ok(out.includes('Proposed for this question - check it before accepting'));
+  assert.ok(out.includes('Only curators and the platform team can change and run a query.'));
+});
+
+test('a turn with no query says why in plain words, and nothing else', () => {
+  const none = (reason, more) => editor({ query: Object.assign({ ok: true, ready: true, can_run: true, queries: [], none: reason, map: MAPE }, more || {}) });
+  assert.ok(none('not_about_records').includes('This question is not about records, so there is no query to check.'));
+  assert.ok(none('records_plan_unreadable').includes('Hoistra read the records, but its query could not be read back from the trace.'));
+  assert.ok(none('planner_unavailable').includes('No query could be proposed right now; it is tried again later.'));
+  assert.ok(none('no_map').includes('Hoistra&#x27;s map of the records is not ready yet; it is tried again later.'));
+  assert.ok(none('read_failed').includes('The records could not be read; it is tried again later.'));
+  assert.ok(none('plan_does_not_fit').includes('The query does not fit the records any more.'));
+  assert.ok(none('no_trace').includes('The conversation is not filed yet; it is tried again later.'));
+  assert.ok(none('asker_has_no_buildings').includes('The person who asked has no buildings, so nothing can be read for them.'));
+  assert.ok(none('no_company').includes('This question has no company, so nothing can be read.'));
+  assert.ok(none('no_question').includes('There is no question text to plan from.'));
+  assert.ok(none('something_else').includes('No query to check.') && none(null).includes('No query to check.'));
+  const out = none('not_about_records');
+  assert.ok(!out.includes('Run with my changes') && !out.includes('aria-label="What"'));
+  assert.ok(none('x', { ready: false }).includes('Hoistra&#x27;s map of the records is not ready yet; it is tried again later.'), 'a map that is not ready says so, whatever else came back');
+});
+
+test('while the query is read the editor says so, and a failed read says what failed', () => {
+  assert.ok(editor({ query: null }).includes('Reading the query…'));
+  const out = editor({ query: null, error: 'Could not read the query: the service did not answer.' });
+  assert.match(out, /role="alert"[^>]*>Could not read the query: the service did not answer\./);
+  assert.ok(!out.includes('Reading the query…'));
+});
+
+test('the editor starts on the first query, with the fields and the words ready to change', () => {
+  const out = editor();
+  assert.ok(out.includes('role="tablist"') && out.includes('aria-label="Kind of answer"') && out.includes('Run with my changes'));
+  assert.ok(out.includes('Hoistra looked for a list of work orders'));
+  assert.match(editor({ onHide: () => {} }), />Hide</);
+});
+
+test('running a query sends its number and the plan, and keeps the plan that was run beside its result', async () => {
+  const sent = [];
+  const ok = await QF.tryRun(async (body) => { sent.push(body); return { before: SIDE_B, after: SIDE_A, changes: ['x'] }; }, 1, QF.formOf(PLAN_B));
+  assert.deepEqual(sent, [{ index: 1, plan: PLAN_B }]);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.result.plan, PLAN_B, 'what Use will save is what was run');
+  assert.deepEqual(ok.result.after, SIDE_A);
+  const bad = await QF.tryRun(async () => { const e = new Error('Floor has no state open.'); e.reason = 'bad_query'; e.status = 422; e.body = { detail: { reason: 'bad_query', error: 'Floor has no state open.' } }; throw e; }, 0, QF.formOf(PLAN_B));
+  assert.deepEqual(bad, { ok: false, reason: 'bad_query', words: ['Floor has no state open.'] });
+  const several = await QF.tryRun(async () => { const e = new Error('x'); e.reason = 'bad_query'; e.body = { detail: { reason: 'bad_query', error: 'x', problems: ['One.', 'Two.'] } }; throw e; }, 0, QF.formOf(PLAN_B));
+  assert.deepEqual(several.words, ['One.', 'Two.']);
+  const none = await QF.tryRun(async () => { throw new Error(''); }, 0, QF.formOf(PLAN_B));
+  assert.deepEqual(none.words, ['Could not run it: The service did not answer. Try again.'], 'a refusal that is not the map’s own is said as a failure to run');
+  assert.deepEqual(none.ok, false);
+});
+
+test('Use is allowed for a result that found its records and is still the query on the page', () => {
+  assert.equal(QF.canUse(RAN, QF.formOf(PLAN_A)), true);
+  const edited = QF.formOf(PLAN_A);
+  edited.focus.match = 'x';
+  assert.equal(QF.canUse(RAN, edited), false);
+  assert.equal(QF.canUse(Object.assign({}, RAN, { after: Object.assign({}, SIDE_A, { found: false }) }), QF.formOf(PLAN_A)), false);
+  assert.equal(QF.canUse(null, QF.formOf(PLAN_A)), false);
+  assert.equal(QF.canUse({ before: SIDE_B, after: null, plan: PLAN_A }, QF.formOf(PLAN_A)), false);
+});
+
+// ── The session page around the editor ──────────────────────────────────────────────────────────────────────────────
+test('a draft from SPEC.md that has no values says why in plain words, and an accepted one does not', () => {
+  const draft = (reason) => Object.assign({}, DRAFT, { expected: Object.assign({}, DRAFT.expected, { evidence: { drafted_from: 'SPEC.md', no_query: reason } }) });
+  assert.ok(html({ data: draft('not_about_records') }).includes('This question is not about records, so there is no query to check.'));
+  assert.ok(html({ data: draft('no_company') }).includes('This question has no company, so nothing can be read.'));
+  assert.ok(html({ data: draft('brand_new_reason') }).includes('No query to check.'));
+  assert.ok(!html({ data: DRAFT }).includes('no query to check') && !html({ data: DRAFT }).includes('No query to check'));
+  assert.ok(!html({ data: Object.assign({}, draft('no_company'), { draft: false, from_draft: true }) }).includes('nothing can be read'));
+  assert.ok(!html({ data: RECORDS }).includes('No query to check'));
+});
+
+test('an answer that uses the person’s own version of a query says so', () => {
+  const mine = JSON.parse(JSON.stringify(RECORDS));
+  Object.assign(mine, { draft: false, from_draft: false });
+  Object.assign(mine.expected, { source: 'manual', author_email: 'me@x.test' });
+  Object.assign(mine.expected.evidence.queries[0], { source: 'person', edited_from: 'hoistra' });
+  const out = html({ data: mine });
+  assert.ok(out.includes('Changed query used as the expected answer · me@x.test'));
+  assert.ok(out.includes('Your version of the query') && out.includes('lab-xp-source'));
+  assert.ok(!out.includes('lab-xp-proposed">Your version'));
+});
+
+test('the page offers Check and change the query, which opens the editor', () => {
+  const page = src('TurnExpected.jsx');
+  assert.ok(page.includes("import QueryEditor from './QueryEditor.jsx'") && page.includes('<QueryEditor ') && page.includes('Check and change the query'));
+  assert.ok(page.includes('labApi.turnExpectedQuery(turnId)') && page.includes('labApi.turnExpectedTry(turnId, body)'));
+  assert.ok(page.includes('usedBody(') && page.includes('save(usedBody('), 'Use as the expected answer saves the person’s version through the same save as Accept');
+  for (const gone of ['QueryFix', 'editOf', 'bodyOf', 'planIndex', 'correctedBody', 'dateName', 'stateOrder']) assert.ok(!page.includes(gone), gone + ' is replaced by the editor');
+});
+
+test('the editor’s requests: the turn’s queries with the map, and one query run with a plan', async () => {
+  const { labApi } = await import('../labApi.js');
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url: new URL(String(url)), method: (opts && opts.method) || 'GET', body: opts && opts.body ? JSON.parse(opts.body) : null });
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '{"ok":true}', headers: { get: () => null } };
+  };
+  try {
+    await labApi.turnExpectedQuery('t1');
+    await labApi.turnExpectedTry('t1', { index: 1, plan: PLAN_B });
+    await labApi.turnExpectedTry('t1', { plan: PLAN_B });
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(calls.length, 3);
+  for (const c of calls) assert.equal(c.url.pathname, '/backend/trace-lab/api/trace-lab/lab/turns/t1/expected/query');
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[1].method, 'POST');
+  assert.deepEqual(calls[1].body, { index: 1, plan: PLAN_B }, 'the number of the query and the whole plan, nothing else');
+  assert.deepEqual(calls[2].body, { index: 0, plan: PLAN_B }, 'the first query is named too');
 });

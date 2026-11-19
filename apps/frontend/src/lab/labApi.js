@@ -74,9 +74,11 @@ export const labApi = {
   // Run again now: the answer key's values read afresh, read-only, nothing stored (16 Nov 2026). A records draft names the stored
   // query it reads again (`?index=N`, the first one is 0); the answer key names none.
   turnExpectedCheck: (id, index) => call('POST', '/lab/turns/' + enc(id) + '/expected/check', { query: index != null ? { index } : {} }),
-  // Correcting Hoistra's query: its records query as fields, and that query with a person's changes, read again.
+  // The query editor (19 Nov 2026): the turn's records queries with Hoistra's map of the records, and a person's version of
+  // one of them (its number, and the whole plan) read again beside the original. A plan the map refuses answers `bad_query`
+  // with words to show; a person who may not run queries is refused. Reading several queries takes a while.
   turnExpectedQuery: (id) => call('GET', '/lab/turns/' + enc(id) + '/expected/query'),
-  turnExpectedTry: (id, body) => call('POST', '/lab/turns/' + enc(id) + '/expected/query', { body }),
+  turnExpectedTry: (id, run) => call('POST', '/lab/turns/' + enc(id) + '/expected/query', { body: { index: run.index || 0, plan: run.plan }, timeoutMs: 60000 }),
   linkTrace: (code, turnId) => call('POST', '/lab/q/' + enc(code) + '/traces', { body: { turn_id: turnId } }),
   answerCandidates: (code, q) => call('GET', '/lab/q/' + enc(code) + '/candidates', { query: q ? { q } : {} }),
   setCell: (code, mode, value) => call('PUT', '/lab/q/' + enc(code) + '/cells', { body: { mode, value } }),

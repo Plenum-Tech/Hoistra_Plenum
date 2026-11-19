@@ -58,3 +58,25 @@
 .lab-xp-static { cursor: default; text-decoration: none; }
 .lab-xp-nolink { color: var(--color-neutral-500); }
 .lab-xp-notes { margin: 4px 0 0; padding-left: 18px; }
+/* The query editor (19 Nov 2026): every part of the query as fields, run, and compared with Hoistra's values. */
+.lab-xe-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.lab-xe-tab { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%; padding: 6px 12px; border: 1px solid var(--color-divider);
+  border-radius: 8px; background: var(--color-surface); font: inherit; font-size: 13px; color: var(--color-text); text-align: left; cursor: pointer; }
+.lab-xe-tab:hover { border-color: var(--color-accent); }
+.lab-xe-tab.lab-on { border-color: var(--color-accent); box-shadow: 0 0 0 1.5px var(--color-accent); }
+.lab-xe-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 14px; align-items: start; }
+.lab-xe-fields { min-width: 0; }
+.lab-xe-side { position: sticky; top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--color-accent-900); color: var(--color-text); font-size: 13px; }
+.lab-xe-words { margin: 6px 0 0; padding-left: 18px; }
+.lab-xe-item { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--color-divider); border-radius: 8px; }
+.lab-xe-item-head { justify-content: space-between; margin-bottom: 6px; }
+.lab-xe-pair { align-items: flex-end; gap: 12px; }
+.lab-xe-cond { flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 13px; }
+.lab-xe-hint { margin: 2px 0 6px; }
+.lab-xe-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.lab-xe-col { min-width: 0; padding: 10px 12px; border: 1px solid var(--color-divider); border-radius: 10px; }
+.lab-xe-noquery { padding: 8px 10px; border-radius: 8px; background: var(--color-neutral-900); }
+@media (max-width: 760px) {
+  .lab-xe-grid, .lab-xe-cols { grid-template-columns: minmax(0, 1fr); }
+  .lab-xe-side { position: static; }
+}

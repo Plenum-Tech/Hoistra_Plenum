@@ -11,6 +11,9 @@ export const SOURCE_WORDS = {
   proposed: 'Proposed for this question - check it before accepting'
 };
 
+// A query a person changed and used as the expected answer is theirs: the query editor stores it with source "person".
+export const PERSON_WORDS = 'Your version of the query';
+
 const list = (x) => (Array.isArray(x) ? x : []);
 
 // The blocks of a draft's evidence, in the order the queries were read.
@@ -21,7 +24,7 @@ export function blocksOf(evidence) {
     return {
       index,
       source: x.source || '',
-      sourceWords: SOURCE_WORDS[x.source] || '',
+      sourceWords: SOURCE_WORDS[x.source] || (x.source === 'person' ? PERSON_WORDS : ''),
       question: x.question || '',
       sentence: x.sentence || '',
       facts: list(x.facts),

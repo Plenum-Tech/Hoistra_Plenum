@@ -98,3 +98,13 @@ test('each kind of value says in plain words how it was found', () => {
   assert.equal(R.explainOf({ kind: 'stated', label: 'Contract value', value: 900 }), 'This value was read by the query below.');
   assert.equal(R.explainOf({}), 'This value was read by the query below.');
 });
+
+test('a query the person changed and used is called theirs, and the words Trace Lab stores for the others are not touched', () => {
+  const b = R.blocksOf({ queries: [{ source: 'person', edited_from: 'proposed', plan: { focus: { concept: 'Vendor' } }, sentence: 'Vendor records found: 2.', facts: [], receipts: [] }] })[0];
+  assert.equal(b.source, 'person');
+  assert.equal(b.sourceWords, 'Your version of the query');
+  assert.equal(R.PERSON_WORDS, 'Your version of the query');
+  assert.equal(b.rerunnable, true, 'there is a query to read again');
+  assert.equal(R.SOURCE_WORDS.person, undefined);
+  assert.equal(R.blocksOf({ queries: [{ source: 'something_else' }] })[0].sourceWords, '');
+});
