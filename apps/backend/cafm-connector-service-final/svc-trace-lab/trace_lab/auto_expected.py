@@ -59,6 +59,11 @@ PROPOSALS_PER_ROUND = 10
 #: again. 1 (no "draft" key): the prompt that could answer "no rule of the specification applies"; 2: the SPEC.md prompt
 #: that always writes what a correct answer contains; 3: exact values read from the records (drafted_from "records").
 DRAFT_VERSION = 3
+#: How a values draft words what it read, stored in its evidence ("wording"; none stored = 1). 2 (19 Nov 2026): a figure the
+#: record states comes first and the count beside it reads "Floor-by-floor entries" (records_values). Only a values draft
+#: that holds a stated figure reads differently, so only those are read again: no other draft is touched and no model is
+#: asked.
+WORDING = 2
 MAX_TOKENS = 600
 ENV_SWITCH = "TRACE_LAB_AUTO_EXPECTED"
 #: Who a draft is written by: the coding agent, as its other suggestions are.
@@ -114,13 +119,17 @@ _UNTOUCHED = (
 # A draft that is only ever put over by values (an older answer-key or values draft) is read again while it has had fewer
 # than :cap tries (`tries` in its evidence); a SPEC.md draft is put over by the model, so the cap does not apply to it.
 _TRIES = "COALESCE(NULLIF(e.evidence->>'tries', '')::int, 0)"
-_OUTDATED_BY_VERSION = ("e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key', 'records')"
+# A values draft that holds a figure the record states, worded before WORDING: read again (with tries left).
+_OLD_WORDING = ("(e.evidence->>'drafted_from' = 'records' AND COALESCE(e.evidence->>'wording', '1') <> :wv"
+                " AND jsonb_path_exists(e.evidence, '$.queries[*].facts[*] ? (@.kind == \"stated\")')"
+                f" AND {_TRIES} < :cap)")
+_OUTDATED_BY_VERSION = ("((e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key', 'records')"
                         " AND COALESCE(e.evidence->>'draft', '1') <> :dv"
-                        f" AND (e.evidence->>'drafted_from' = 'SPEC.md' OR {_TRIES} < :cap)")
-_OUTDATED_BY_SPEC = ("e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key', 'records')"
+                        f" AND (e.evidence->>'drafted_from' = 'SPEC.md' OR {_TRIES} < :cap)) OR {_OLD_WORDING})")
+_OUTDATED_BY_SPEC = ("((e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key', 'records')"
                      " AND (COALESCE(e.evidence->>'draft', '1') <> :dv OR (e.evidence->>'drafted_from' = 'SPEC.md'"
                      " AND COALESCE(e.evidence->>'spec_version', '') <> :sv))"
-                     f" AND (e.evidence->>'drafted_from' = 'SPEC.md' OR {_TRIES} < :cap)")
+                     f" AND (e.evidence->>'drafted_from' = 'SPEC.md' OR {_TRIES} < :cap)) OR {_OLD_WORDING})")
 # An untouched, current SPEC.md draft that holds no values for a passing reason, with tries left: read again.
 _RETRY_DRAFTS = ("e.evidence->>'drafted_from' = 'SPEC.md'"
                  " AND e.evidence->>'no_query' IN ('" + "', '".join(RETRY_REASONS) + "')"
@@ -160,7 +169,7 @@ async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
             " ORDER BY q.asked_at DESC, q.id LIMIT :lim"), {k: v for k, v in page.items() if k != "cap"})).mappings().all()
         outdated = (await conn.execute(text(_UNTOUCHED.format(
             where=where, draft=_OUTDATED_BY_SPEC if spec is not None else _OUTDATED_BY_VERSION)),
-            dict(page, dv=str(DRAFT_VERSION), **({"sv": str(spec.get("version"))} if spec is not None else {})))
+            dict(page, dv=str(DRAFT_VERSION), wv=str(WORDING), **({"sv": str(spec.get("version"))} if spec is not None else {})))
         ).mappings().all()
         again = (await conn.execute(text(_UNTOUCHED.format(where=where, draft=_RETRY_DRAFTS)), page)).mappings().all()
     codes = loop.rule_codes(spec) if spec else set()
@@ -530,7 +539,7 @@ async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, 
     except Exception as exc:  # noqa: BLE001 - the SPEC.md draft is the fallback
         log.info("trace_lab.auto_expected.unread", question_id=qid, why=str(exc)[:200])
         return _none("read_failed", qid, now)
-    evidence = answer_key.jsonable({"drafted_from": "records", "draft": DRAFT_VERSION, "read_at": blocks[-1]["read_at"],
+    evidence = answer_key.jsonable({"drafted_from": "records", "draft": DRAFT_VERSION, "wording": WORDING, "read_at": blocks[-1]["read_at"],
                                     "queries": blocks})
     return {"state": "values", "evidence": evidence,
             "expected": " ".join(b["sentence"] for b in blocks)[:runs.EXPECTED_MAX]}

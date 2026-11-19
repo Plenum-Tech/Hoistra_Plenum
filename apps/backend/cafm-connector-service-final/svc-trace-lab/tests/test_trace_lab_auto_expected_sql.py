@@ -1819,3 +1819,34 @@ async def test_anyone_may_accept_or_check_the_values_but_only_curators_change_wh
     again = copy.deepcopy(now["expected"]["evidence"])
     again["queries"][0]["facts"][0]["check"] = "right"
     await runs.set_expected(viewer, code, expected=now["expected"]["expected"], evidence=again)     # checks on it: fine
+
+
+async def test_a_values_draft_with_a_stated_figure_worded_before_is_read_again_and_no_other_draft_is(
+        lab_scratch, main_scratch, monkeypatch):
+    """19 Nov 2026: "ABC states floors: 25. Floor records found: 0." now reads "ABC states floors: 25. Floor-by-floor
+    entries: 0 (none entered)." Values drafts stored before (no "wording") that hold a stated figure are read again; a
+    values draft without one, and a current one, are left alone, and no model is asked."""
+    code = await _live_run(main_scratch)
+    qs = sorted((await runs.list_questions(member(), code))["questions"], key=lambda q: q["asked_at"])
+    stated = {"kind": "stated", "label": "ABC states floors", "value": 25, "receipt": "q1"}
+    count = {"kind": "count", "label": "Floor records found", "value": 0, "receipt": "q2"}
+    old = {"drafted_from": "records", "draft": auto_expected.DRAFT_VERSION}
+    async with lab_scratch.begin() as c:
+        for q, facts, extra in ((qs[0], [count, stated], {}), (qs[1], [count], {}),
+                                (qs[2], [stated, count], {"wording": auto_expected.WORDING})):
+            await runs._insert_expected(c, auto_expected.AUTHOR, question_id=q["id"], expected="old words",
+                                        expected_id=None, source="coding_agent",
+                                        evidence=dict(old, queries=[{"facts": facts}], **extra))
+    before = await _newest(lab_scratch)
+    asked = _model(monkeypatch)
+    _queries(monkeypatch)
+    reads = _records(monkeypatch)
+    out = await auto_expected.draft_for_live(None, now=NOW)
+    assert out["redrafted"] == 1 and out["drafted"] == 0 and asked == []
+    after = await _newest(lab_scratch)
+    assert after[qs[0]["id"]]["evidence"]["wording"] == auto_expected.WORDING
+    assert after[qs[0]["id"]]["evidence"]["replaced_draft"] == before[qs[0]["id"]]["id"]
+    assert after[qs[1]["id"]]["id"] == before[qs[1]["id"]]["id"], "no stated figure: the words did not change"
+    assert after[qs[2]["id"]]["id"] == before[qs[2]["id"]]["id"], "already worded the new way"
+    assert [r["question"] for r in reads] == [qs[0]["question"]]
+    assert (await auto_expected.draft_for_live(None, now=NOW))["redrafted"] == 0, "read once"
