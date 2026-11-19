@@ -236,7 +236,9 @@ def _block(plan=R62, question="How many floors does ABC have?", **more):
 
 def _turn(monkeypatch, blocks=None, *, kind="records", live=True, company=ORG, text="How many floors does ABC have?", more=None):
     evidence = {"drafted_from": "records", "draft": 3, "queries": blocks} if blocks is not None else {}
-    got = dict({"kind": kind, "live": live, "company": company, "text": text, "expected": {"evidence": evidence}}, **(more or {}))
+    # draft: the newest expected answer is the coding agent's own, untouched (a person's version says draft False).
+    got = dict({"kind": kind, "live": live, "company": company, "text": text, "expected": {"evidence": evidence}, "draft": True},
+               **(more or {}))
 
     async def turn_expected(m, turn_id):
         return got
@@ -475,6 +477,61 @@ async def test_an_asker_with_no_buildings_or_who_cannot_be_read_is_not_read_for(
     with pytest.raises(Invalid) as e:
         await ak.recheck(member(), "turn-1", index=0)
     assert e.value.reason == reason and reads.calls == []
+
+
+# ── Who may run what (final review, 19 Nov 2026; spec call 7: curators and the platform team may run edited queries) ──
+
+REVIEWER = dict(org=ORG, role="reviewer", all_companies=False, manages=False)
+
+
+def _asks(monkeypatch, scope=None):
+    _no_user(monkeypatch)
+    calls = []
+
+    async def asker(org, user_id):
+        calls.append((org, user_id))
+        return scope or {"scope": "asker", "building_ids": ["b1"], "email": "asker@example.com"}
+    monkeypatch.setattr(auto_expected, "asker_scope", asker)
+    return calls
+
+
+@pytest.mark.parametrize("marks", [{"source": "person", "edited_from": "hoistra"}, {"edited": True}])
+async def test_a_query_a_person_changed_is_run_again_only_by_curators_and_the_platform_team(reads, monkeypatch, marks):
+    _asks(monkeypatch)
+    _turn(monkeypatch, [_block(R62, **marks)], more={"draft": False})
+    with pytest.raises(Forbidden):
+        await ak.recheck(member(**REVIEWER), "turn-1", index=0)
+    assert reads.calls == [], "nothing is read for them"
+    await ak.recheck(member(org=ORG, role="admin", all_companies=False, manages=True), "turn-1", index=0)
+    assert reads.calls[0]["mode"] == "as_written"
+
+
+async def test_hoistras_own_query_saved_by_a_person_is_run_again_by_anyone(reads, monkeypatch):
+    """Accept and Save my checks keep Hoistra's query as it was: anyone may read it again."""
+    _asks(monkeypatch)
+    _turn(monkeypatch, [_block(R62, source="hoistra")], more={"draft": False})
+    out = await ak.recheck(member(**REVIEWER), "turn-1", index=0)
+    assert reads.calls[0]["mode"] == "hoistra" and out["found"] is True
+
+
+async def test_a_scope_written_with_a_persons_version_is_not_trusted_it_is_read_again_as_the_asker(reads, monkeypatch):
+    """Only the coding agent's own draft says how it was read; on a version a person saved, "company" could be anyone's
+    word, so the asker's access is rebuilt: never more than they could see."""
+    asked = _asks(monkeypatch)
+    _turn(monkeypatch, [_block(scope="company")], more={"draft": False})
+    out = await ak.recheck(member(), "turn-1", index=0)
+    assert asked and reads.calls[0]["scope"] == {"building_ids": ["b1"], "email": "asker@example.com"} and out["scope"] == "asker"
+    reads.calls.clear()
+    got = await ak.try_query(member(), "turn-1", index=0, plan=_changed_plan("Building"))
+    assert [c["scope"] for c in reads.calls] == [{"building_ids": ["b1"], "email": "asker@example.com"}] * 2
+    assert got["scope"] == "asker"
+
+
+async def test_the_coding_agents_own_draft_says_how_it_was_read(reads, monkeypatch):
+    asked = _asks(monkeypatch)
+    _turn(monkeypatch, [_block(scope="company")])
+    out = await ak.recheck(member(**REVIEWER), "turn-1", index=0)
+    assert asked == [] and reads.calls[0]["scope"] is None and out["scope"] == "company"
 
 
 # ── The query as fields' replacement: GET and POST /expected/query ──

@@ -1001,7 +1001,8 @@ async def get_question(m: labelling.Member, code: str, *, turn_id: str | None = 
 
 async def set_expected(m: labelling.Member, code: str, *, expected: str, expected_id: str | None = None,
                        evidence: Any = None) -> dict[str, Any]:
-    """A person types or corrects the expected answer: a new version, the newest wins."""
+    """A person types or corrects the expected answer: a new version, the newest wins. Records evidence that holds a query
+    the question's answers do not already hold is a curator's to save (_refuse_new_queries)."""
     from . import loop
 
     labelling.require_active(m)
@@ -1017,9 +1018,54 @@ async def set_expected(m: labelling.Member, code: str, *, expected: str, expecte
             evidence = {**evidence, "spec_rule": rule}
         await loop.refuse_copy(conn, row["id"], expected)
         await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": EXPECTED_LOCK})
+        await _refuse_new_queries(conn, m, row["id"], evidence)
         await _insert_expected(conn, m, question_id=row["id"], expected=expected,
                                expected_id=_opt(expected_id, 200, "expected_id"), evidence=evidence, source="manual")
     return (await get_question(m, code))["expected"]
+
+
+def _what_runs(evidence: Any) -> set[str]:
+    """What Run again now would read for an expected answer with this evidence, each as text: every records query (the
+    question Hoistra's steps are given, the plan, and whether it is read as written) and, for an answer the answer key
+    drafted, its key and parameters."""
+    from .answer_key import _edited
+
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except ValueError:
+            return set()
+    if not isinstance(evidence, dict):
+        return set()
+    out = set()
+    if evidence.get("drafted_from") == "answer_key":
+        out.add(json.dumps({"key": evidence.get("key"), "params": evidence.get("params")}, sort_keys=True, default=str))
+    blocks = evidence.get("queries")
+    for b in blocks if isinstance(blocks, list) else []:
+        if isinstance(b, dict) and isinstance(b.get("plan"), dict):
+            out.add(json.dumps({"question": str(b.get("question") or ""), "plan": b["plan"], "as_written": _edited(b)},
+                               sort_keys=True, default=str))
+    return out
+
+
+async def _refuse_new_queries(conn: Any, m: labelling.Member, question_id: str, evidence: Any) -> None:
+    """Only curators and the platform team may change or run a query (spec call 7, Hussain 18 Nov 2026). Anyone else may
+    save the values as they are (Accept, Save my checks) or their own words, but never a query that neither the question's
+    newest expected answer nor the coding agent's newest draft holds: Run again now would read it for them."""
+    if can_curate(m):
+        return
+    asked = _what_runs(evidence)
+    if not asked:
+        return
+    held: set[str] = set()
+    for source in (None, "coding_agent"):
+        ev = (await conn.execute(text(
+            "SELECT e.evidence FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:q AS uuid)"
+            + (" AND e.source = :s" if source else "") + " ORDER BY e.created_at DESC, e.id DESC LIMIT 1"),
+            {"q": question_id, **({"s": source} if source else {})})).scalar_one_or_none()
+        held |= _what_runs(ev)
+    if not asked <= held:
+        raise Forbidden("curators_only", "Only company admins, the platform team and the consultant can change a query.")
 
 
 async def turn_expected(m: labelling.Member, turn_id: str) -> dict[str, Any]:

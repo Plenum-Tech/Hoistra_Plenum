@@ -414,16 +414,17 @@ async def _turn_user(turn_id: str, org: str) -> str | None:
 
 
 async def _read_scope(got: dict, turn_id: str, block: dict | None) -> tuple[dict | None, dict]:
-    """The access a query is read with: the one it was drafted with. A stored query that says it was read for the whole
-    company is read for the whole company again; any other (or one not stored yet, or one whose block does not say) is read
-    as the person who asked, with their access rebuilt the way the drafting round rebuilds it (auto_expected.asker_scope):
-    never more than they could see. Returns the scope run_query takes (None: the whole company) and {"scope",
-    "scope_email"} for the page."""
+    """The access a query is read with: the one it was drafted with. A query of the coding agent's own draft (the newest
+    expected answer, untouched: `draft`) that says it was read for the whole company is read for the whole company again;
+    any other - a version a person saved, whose blocks anyone could have written, a query not stored yet, one whose block
+    does not say - is read as the person who asked, with their access rebuilt the way the drafting round rebuilds it
+    (auto_expected.asker_scope): never more than they could see. Returns the scope run_query takes (None: the whole
+    company) and {"scope", "scope_email"} for the page."""
     from . import auto_expected
     from .review_errors import Invalid
 
     company = {"scope": "company", "scope_email": None}
-    if block is not None and block.get("scope") == "company":
+    if block is not None and block.get("scope") == "company" and got.get("draft") is True:
         return None, company
     try:
         asker = await auto_expected.asker_scope(got["company"], await _turn_user(turn_id, got["company"]))
@@ -463,7 +464,8 @@ async def recheck(m: Any, turn_id: str, *, index: int = 0) -> dict:
     """Run again now (the receipt panel): the turn's values read afresh, for the same company, with nothing stored; the page
     shows them beside the values read when the question was asked. For values read from the records it is the stored query
     `index` (evidence.queries[index], the plan as run) read the way Hoistra reads one and with the access it was drafted
-    with; for an answer the answer key itself drafted (before 19 Nov 2026) it is the same key with the same parameters.
+    with (_read_scope); a query a person changed is read as written, and only for curators and the platform team (spec
+    call 7: everyone else may not run a changed query); for an answer the answer key itself drafted (before 19 Nov 2026) it is the same key with the same parameters.
     Returns found, facts, receipts, read_at, unresolved, notes, sentence, and scope and scope_email (the access it was read
     with)."""
     from . import runs
@@ -479,6 +481,8 @@ async def recheck(m: Any, turn_id: str, *, index: int = 0) -> dict:
         block = stored[index] if isinstance(stored, list) and _is_index(index) and 0 <= index < len(stored) else None
         if not isinstance(block, dict) or not isinstance(block.get("plan"), dict):
             raise Invalid("no_query", "That query is not in this expected answer.")
+        if _edited(block) and not got.get("draft"):
+            runs.require_curator(m)                 # a query a person changed: curators and the platform team (call 7)
         scope, who = await _read_scope(got, turn_id, block)
         out = await _read(block["plan"], question=str(block.get("question") or got.get("text") or "").strip(), org=got["company"],
                           mode="as_written" if _edited(block) else "hoistra", scope=scope, person=False)

@@ -1778,3 +1778,41 @@ async def test_a_question_of_another_companys_turn_rests_and_takes_no_slot_of_th
     assert second["drafted"] == 1 and looked.count(stuck) == 1, "it rests and the slot goes to the next question"
     await auto_expected.draft_for_live(None, now=NOW + auto_expected.REST + timedelta(minutes=2), limit=1)
     assert looked.count(stuck) == 2, "looked at again after the rest"
+
+
+# 2   only curators and the platform team may change what a saved answer runs (spec call 7); anyone may accept or check.
+
+async def test_anyone_may_accept_or_check_the_values_but_only_curators_change_what_runs(lab_scratch, main_scratch, monkeypatch):
+    import copy
+
+    from trace_lab.review_errors import Forbidden
+
+    _code, turn, _reads = await _drafted(lab_scratch, main_scratch, monkeypatch)
+    viewer = member(org=ORG, role="reviewer", all_companies=False, manages=False)
+    got = await runs.turn_expected(viewer, turn)
+    code, words, ev = got["question"], got["expected"]["expected"], got["expected"]["evidence"]
+    await runs.set_expected(viewer, code, expected=words, evidence=dict(ev, drafted_from="records"))      # Accept
+    checked = copy.deepcopy(ev)
+    checked["queries"][0]["facts"][0].update(check="wrong", corrected="24", note="One floor was sold.")
+    await runs.set_expected(viewer, code, expected=words, evidence=checked)                               # Save my checks
+
+    def changed(how):
+        out = copy.deepcopy(ev)
+        how(out["queries"][0])
+        return out
+    for other in (changed(lambda b: b["plan"]["focus"].update(concept="Building")),          # another query
+                  changed(lambda b: b.update(source="person")),                               # read as written instead
+                  changed(lambda b: b.update(question="How many buildings are there?")),      # Hoistra's steps asked otherwise
+                  dict(ev, queries=ev["queries"] + [copy.deepcopy(ev["queries"][0]) | {"question": "Another?"}]),
+                  {"drafted_from": "answer_key", "key": "wo_at_building", "params": {"states": ["open"], "building": "Elsewhere"}}):
+        with pytest.raises(Forbidden) as e:
+            await runs.set_expected(viewer, code, expected=words, evidence=other)
+        assert e.value.reason == "curators_only"
+    await runs.set_expected(viewer, code, expected="My own words.")                               # Edit: words only
+    mine = changed(lambda b: (b["plan"]["focus"].update(concept="Building"), b.update(source="person")))
+    await runs.set_expected(member(), code, expected="Building records found: 4.", evidence=mine)  # a curator may
+    now = await runs.turn_expected(viewer, turn)
+    assert now["expected"]["evidence"]["queries"][0]["plan"]["focus"]["concept"] == "Building"
+    again = copy.deepcopy(now["expected"]["evidence"])
+    again["queries"][0]["facts"][0]["check"] = "right"
+    await runs.set_expected(viewer, code, expected=now["expected"]["expected"], evidence=again)     # checks on it: fine
