@@ -927,24 +927,35 @@ async def file_waiting_live(*, org: str | None = None, limit: int = WAITING_PER_
     # company or of another company than the round's, a conversation another company has filed, and one held after a
     # failure (HOLD_S) are passed over, so they never keep an older question waiting.
     async with conversations._read() as conn:
-        found = [(r[0], r[1]) for r in (await conn.execute(text(
-            f"SELECT tt.session_id, tt.organization_id::text FROM {TURNS} tt WHERE tt.turn_id = ANY(CAST(:ids AS text[]))"
-            " AND tt.session_id IS NOT NULL AND tt.organization_id IS NOT NULL AND tt.session_id NOT LIKE 'scn\\_\\_%'"
-            " GROUP BY tt.session_id, tt.organization_id ORDER BY max(tt.started_at) DESC, tt.session_id"),
-            {"ids": turns})).all()]
-    found = [(s, o) for s, o in found if 1 <= len(s) <= SESSION_ID_MAX and (org is None or o == org)
-             and _HELD.get(s, 0) <= _clock()]
-    if found:
+        rows = [(r[0], r[1], r[2]) for r in (await conn.execute(text(
+            f"SELECT tt.turn_id, tt.session_id, tt.organization_id::text FROM {TURNS} tt"
+            " WHERE tt.turn_id = ANY(CAST(:ids AS text[])) AND tt.session_id IS NOT NULL"
+            " AND tt.organization_id IS NOT NULL AND tt.session_id NOT LIKE 'scn\\_\\_%'"
+            " ORDER BY tt.started_at DESC, tt.session_id, tt.turn_id"), {"ids": turns})).all()]
+    rows = [(t, sid, o) for t, sid, o in rows if 1 <= len(sid) <= SESSION_ID_MAX and (org is None or o == org)
+            and _HELD.get(sid, 0) <= _clock()]
+    if rows:
+        owner = {sid: o for _t, sid, o in rows}
         async with conversations._lab_read() as conn:
             other = {r[0] for r in (await conn.execute(text(
                 "SELECT s.id, s.organization_id::text FROM tracelab.sessions s WHERE s.id = ANY(CAST(:ids AS text[]))"),
-                {"ids": [s for s, _o in found]})).all() if r[1] != dict(found).get(r[0])}
-        found = [(s, o) for s, o in found if s not in other]
-    sids = list(dict.fromkeys(s for s, _o in found))[:max(1, int(limit))]
+                {"ids": sorted(owner)})).all() if r[1] != owner.get(r[0])}
+        rows = [(t, sid, o) for t, sid, o in rows if sid not in other]
+    sids = list(dict.fromkeys(sid for _t, sid, _o in rows))[:max(1, int(limit))]
     if not sids:
         return {"sessions": 0, "traces": 0, "failed": 0}
-    return await ingest_from_main(since=_EPOCH, run_tag=CHAT_TAG, sessions={s: None for s in sids}, org=org,
-                                  remember=True)
+    out = await ingest_from_main(since=_EPOCH, run_tag=CHAT_TAG, sessions={s: None for s in sids}, org=org,
+                                 remember=True)
+    # A conversation the read passed over with none of its waiting turns filed (it found nothing new in it) is held too,
+    # so it says "retrying" and gives its place to another conversation next round.
+    mine = {t: sid for t, sid, _o in rows if sid in set(sids)}
+    async with conversations._lab_read() as conn:
+        filed = {r[0] for r in (await conn.execute(text(
+            "SELECT t.id FROM tracelab.traces t WHERE t.id = ANY(CAST(:ids AS text[]))"), {"ids": sorted(mine)})).all()}
+    for sid in sids:
+        if not any(t in filed for t, s in mine.items() if s == sid):
+            _HELD[sid] = max(_HELD.get(sid, 0), _clock() + HOLD_S)
+    return out
 
 
 async def _session_row(conn: Any, m: labelling.Member, session_id: str) -> Mapping[str, Any]:

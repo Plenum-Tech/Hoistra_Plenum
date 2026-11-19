@@ -711,3 +711,20 @@ async def test_a_held_conversation_does_not_take_the_rounds_place(lab_scratch, m
     monkeypatch.setitem(eval_store._HELD, "report-held-1", eval_store._clock() + 600)
     assert (await eval_store.file_waiting_live(limit=1))["sessions"] == 1
     assert "turn-r1" not in await _states(code)
+
+
+async def test_a_conversation_the_round_picks_but_cannot_file_is_held_and_gives_way(lab_scratch, main_scratch,
+                                                                                     monkeypatch):
+    """A conversation already filed with as many traces as the chat has turns, but not the question's turn, is skipped by
+    the read as having nothing new: the round holds it, so it says "retrying" and the next round files another one."""
+    monkeypatch.setattr(eval_store, "_HELD", {})
+    code = await _report_run(main_scratch, at=T0 - timedelta(days=2))
+    await _main(main_scratch, "turn-st1", "report-stuck-1", at=T0, question="stuck")
+    await runs.sync_live(None, now=NOW)
+    await seed_session(lab_scratch, "report-stuck-1", tag="chat", turn_ids=("turn-elsewhere",))
+    first = await eval_store.file_waiting_live(limit=1)
+    assert first["sessions"] == 0 and "report-stuck-1" in eval_store._HELD
+    assert (await eval_store.file_waiting_live(limit=1))["sessions"] == 1
+    assert "turn-r1" not in await _states(code)
+    day = (await runs.list_runs(member(), kind="production"))["runs"][0]["code"]
+    assert (await _states(day)).get("turn-st1") == "retrying"
