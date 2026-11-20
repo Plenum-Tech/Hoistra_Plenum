@@ -129,7 +129,7 @@ from .udr_hybrid_tools import (
     answer_with_graph_context,
 )
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
-from ..services import chat_memories, chat_threads
+from ..services import chat_memories, chat_threads, memorilla
 from . import cert_checks, cert_expiry, page_access, planner, spaces, thread_scope, trace
 from . import final_answer as final_step  # the module; `final_answer` is a local name in the loop
 from . import evidence as answer_evidence
@@ -7108,6 +7108,39 @@ class DeepAgentOrchestrator:
                     out[t.name] = dict(getattr(t, "args", None) or {})
         return out
 
+    async def _recalled_plan(self, user_message: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """The plan an earlier good turn ran for a question close to this one, from Memorilla
+        (services/memorilla.py), checked again against today's tools: (a plan to run step by step,
+        None) when it has several steps or reads a tool, (None, a routing) when it is one engine, so
+        the turn goes where that turn went without asking the router again, or (None, None).
+
+        Only a new question asks (a follow-up depends on the thread, not on its wording), and only
+        when PLENUM_MEMORY_URL is set. The search is one "plan recall" span either way, saying which
+        past question was closest, how close, and why its plan was or was not used (20 Nov 2026)."""
+        if not memorilla.enabled():
+            return None, None
+        _, org = chat_memories._caller()
+        tools, schemas = self._planner_tools(), self._planner_schemas()
+        allowed = planner.planning_engines()
+        plan, info = await memorilla.recall_plan(
+            org, user_message,
+            validate=lambda p: memorilla.check_plan(
+                p, validate=lambda q: planner.validate(q, tools, schemas, planner.records_map()),
+                engines=planner.ENGINES, allowed=allowed))
+        trace.on_memory("plan recall", {"question": user_message, "collection": info.get("collection")},
+                        {k: v for k, v in info.items() if k not in ("question", "collection", "ms")},
+                        ok=not info.get("error"), error=info.get("error"), latency_ms=info.get("ms"))
+        if plan is None:
+            return None, None
+        recalled = {"question": info.get("matched_question"), "similarity": info.get("similarity"),
+                    "from_turn": info.get("from_turn")}
+        steps = plan.get("steps") or []
+        if len(steps) == 1 and steps[0].get("kind") == "engine":
+            return None, {"agent": steps[0]["target"], "also": [], "source": "memorilla", "recalled": recalled,
+                          "reason": f"the same plan as the earlier question \"{recalled['question']}\" "
+                                    f"(similarity {recalled['similarity']})"}
+        return plan | {"recalled": recalled}, None
+
     def _planner_tools(self) -> dict[str, str]:
         """The tools a plan step may name: every engine's read tools in this space, one line each."""
         out: dict[str, str] = {}
@@ -8761,7 +8794,15 @@ class DeepAgentOrchestrator:
                 routing = {"agent": None, "also": [], "source": "conversation",
                            "reason": "the previous answer asked for this; continuing that conversation"}
             else:
-                routing = await select_agent(user_message, step["router_context"])
+                # A new question close to one an earlier good turn answered runs that turn's plan
+                # (Memorilla; services/memorilla.py), else the router reads it as before.
+                recalled_plan, routing = (await self._recalled_plan(user_message)) if step["kind"] == "route" else (None, None)
+                if recalled_plan is not None:
+                    trace.on_plan(recalled_plan, source="memorilla", recalled=recalled_plan.get("recalled"))
+                    return await self._run_planned_turn(
+                        session_id, user_message, recalled_plan, previous=step.get("previous_answer"))
+                if routing is None:
+                    routing = await select_agent(user_message, step["router_context"])
             # The question belongs to a module this space does not have. Nothing runs and no
             # register is read: the point of a space is that its data is its own (spaces.py).
             _outside = (routing or {}).get("out_of_module")
@@ -8803,7 +8844,8 @@ class DeepAgentOrchestrator:
                 trace.on_plan(None, source="planner", rejected=why)
             trace.on_plan(planner.one_step_plan(engine or "orchestrator loop",
                                                 routing.get("reason") if routing else None,
-                                                source=(routing or {}).get("source") or "router"), source="router")
+                                                source=(routing or {}).get("source") or "router"),
+                          source="memorilla" if (routing or {}).get("source") == "memorilla" else "router", recalled=(routing or {}).get("recalled"))
         if engine is not None and route_intent not in core_routes:
             # Any compliance data question is answered from the WHOLE portfolio: the shortcut
             # fetches every building certificate + vendor accreditation (all columns) and lets the
@@ -9308,7 +9350,24 @@ class DeepAgentOrchestrator:
             elif step["kind"] == "choose":
                 routing = {"clarify": True, "reason": None}
             else:
-                routing = await select_agent(user_message, step["router_context"])
+                # A new question close to one an earlier good turn answered runs that turn's plan
+                # (Memorilla; services/memorilla.py), else the router reads it as before.
+                recalled_plan, routing = (await self._recalled_plan(user_message)) if step["kind"] == "route" else (None, None)
+                if recalled_plan is not None:
+                    trace.on_plan(recalled_plan, source="memorilla", recalled=recalled_plan.get("recalled"))
+                    yield {"type": "reasoning", "label": "Plan", "domain": "orchestrator",
+                           "text": "An earlier question was answered this way → \"" + str(recalled_plan["recalled"].get("question"))
+                                   + "\". Running the same plan."}
+                    async for ev in self._stream_planned_turn(sid, user_message, recalled_plan, _stream_t0,
+                                                              previous=step.get("previous_answer")):
+                        yield ev
+                    return
+                if routing is not None:
+                    yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
+                           "text": "An earlier question was answered by the " + str(routing.get("agent")) + " engine → \""
+                                   + str(routing["recalled"].get("question")) + "\". Sending this one the same way."}
+                else:
+                    routing = await select_agent(user_message, step["router_context"])
             # The question belongs to a module this space does not have. Nothing runs and no
             # register is read: the point of a space is that its data is its own (spaces.py).
             _outside = (routing or {}).get("out_of_module")
@@ -9372,7 +9431,8 @@ class DeepAgentOrchestrator:
                 yield {"type": "reasoning", "label": "Plan", "text": "No valid plan (" + str(why) + "); answering by direct routing instead.",
                        "domain": "orchestrator"}
             trace.on_plan(planner.one_step_plan(phase2_engine or "orchestrator loop", routing.get("reason") if routing else None,
-                                                source=(routing or {}).get("source") or "router"), source="router")
+                                                source=(routing or {}).get("source") or "router"),
+                          source="memorilla" if (routing or {}).get("source") == "memorilla" else "router", recalled=(routing or {}).get("recalled"))
             if phase2_engine is not None:
                 yield {
                     "type": "reasoning",

@@ -713,9 +713,25 @@ def on_model_end(run_id: str, output_msg: Any) -> None:
         log.warning("trace.on_model_end_failed", error=str(exc)[:200])
 
 
-def on_plan(plan: dict | None, *, source: str, rejected: str | None = None) -> None:
+def on_memory(name: str, inputs: Any, output: Any, *, ok: bool = True, error: str | None = None,
+              latency_ms: float | None = None) -> None:
+    """A memory step as its own span under the root (kind "memory"): a recall of notes, a recall of
+    a past plan, a note marked used, a note saved. Recall used to leave no span, so a trace could
+    not say which notes shaped an answer, or that any were saved (20 Nov 2026)."""
+    try:
+        t = _turn.get()
+        if t is None or t.flushed:
+            return
+        s = t.new(kind="memory", name=str(name)[:120], agent="orchestrator", parent_id=t.root.id, input=_bound(inputs))
+        s.close(output=_bound(output), ok=ok, error=error, latency_ms=latency_ms)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_memory_failed", error=str(exc)[:200])
+
+
+def on_plan(plan: dict | None, *, source: str, rejected: str | None = None, recalled: dict | None = None) -> None:
     """The plan the turn runs on - one step chosen by the router, or the planner's steps - as the
-    span right after `prompt assembled`, so every run says why it went where it went."""
+    span right after `prompt assembled`, so every run says why it went where it went. A plan taken
+    from an earlier turn (source "memorilla") names that turn and how close its question was."""
     try:
         t = _turn.get()
         if t is None or t.flushed:
@@ -723,7 +739,7 @@ def on_plan(plan: dict | None, *, source: str, rejected: str | None = None) -> N
         steps = (plan or {}).get("steps") or []
         name = "plan" if not plan else (f"plan: {len(steps)} step" + ("s" if len(steps) != 1 else ""))
         s = t.new(kind="plan", name=name, agent="orchestrator", parent_id=t.root.id,
-                  input=_bound({"source": source, "question": t.question}))
+                  input=_bound({"source": source, "question": t.question, **({"recalled": recalled} if recalled else {})}))
         s.close(output=_bound({"plan": plan, "rejected": rejected}), ok=rejected is None, error=rejected)
         if plan:
             t.route = (plan.get("mode") or "") + ":" + ",".join(str(x.get("target")) for x in steps)
@@ -970,6 +986,35 @@ async def _write(t: Turn, answer: str, tool_calls: list, ledger_summary: dict[st
         log.info("trace.written", turn_id=t.turn_id, spans=len(t.spans), cost_usd=tot["cost_usd"])
     except Exception as exc:  # noqa: BLE001
         log.warning("trace.write_failed", turn_id=t.turn_id, error=str(exc)[:300])
+        return
+    await _index_plan(t)
+
+
+async def _index_plan(t: Turn) -> None:
+    """A good turn's plan, kept in Memorilla so the next question like this one runs it again
+    (services/memorilla.py; 20 Nov 2026). Good = the turn finished ok with no failed step. Not kept:
+    a plan that was itself recalled, a follow-up (it depends on the thread, not its words), a plan
+    the planner cannot check again (the orchestrator loop, a clarify), and a question of under
+    four words. Memorilla only says which past question is closest; the plan run is read back from
+    this turn's own plan span, so a thumbs-down given later still stops it being reused."""
+    try:
+        from ..services import memorilla
+
+        if not memorilla.enabled() or not t.root.ok or any(s.kind == "step" and not s.ok for s in t.spans):
+            return
+        span = next((s for s in reversed(t.spans) if s.kind == "plan" and isinstance(s.output, dict) and s.output.get("plan")), None)
+        if span is None:
+            return
+        if (span.input or {}).get("source") in ("memorilla", "conversation", "rerun"):
+            return
+        plan = span.output["plan"]
+        steps = (plan.get("steps") or []) if isinstance(plan, dict) else []
+        question = (t.question or "").strip()
+        if not steps or any(s.get("kind") not in ("engine", "tool") for s in steps) or len(question.split()) < 4:
+            return
+        await memorilla.add_plan(t.organization_id, question, plan)
+    except Exception as exc:  # noqa: BLE001 - never the turn's problem
+        log.warning("trace.index_plan_failed", turn_id=t.turn_id, error=str(exc)[:200])
 
 
 # ── reading, for the dashboard ────────────────────────────────────────────────────────

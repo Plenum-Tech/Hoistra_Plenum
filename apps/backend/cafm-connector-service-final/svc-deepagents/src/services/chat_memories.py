@@ -352,33 +352,88 @@ async def review(memory_id: str, decision: str) -> bool:
     return bool(res.rowcount)
 
 
+async def _ranked_by_memorilla(question: str, mems: list[dict[str, Any]], org: str | None,
+                                qn: "_QuestionNames") -> list[tuple[float, dict[str, Any]]]:
+    """The caller's memories as Memorilla ranks them (services/memorilla.py). A hit counts only when
+    it is one of `mems` - what this caller may see - matched by the memory's own text; a memory
+    named in the question is still recalled at RECALL_NAMED at least, as with the local ranking."""
+    from . import memorilla
+
+    hits = await memorilla.search_memories(org, question)
+    out: dict[str, tuple[float, dict[str, Any]]] = {}
+    for h in hits:
+        ht = h.get("text") or ""
+        m = next((m for m in mems if (m.get("text") or "") and m["text"] in ht), None)
+        if m is None or m["id"] in out:
+            continue
+        s = float(h.get("similarity") or 0)
+        out[m["id"]] = (s if s >= memorilla.MEMORY_MIN else 0.0, m)
+    for m in mems:
+        if m["id"] not in out and names_used(question, m, qn):
+            out[m["id"]] = (RECALL_NAMED, m)
+        elif m["id"] in out and out[m["id"]][0] < RECALL_NAMED and names_used(question, m, qn):
+            out[m["id"]] = (RECALL_NAMED, m)
+    return sorted(out.values(), key=lambda x: -x[0])
+
+
 async def recall(question: str, *, top: int = RECALL_TOP) -> list[dict[str, Any]]:
-    """The memories that bear on this question, best first; marks them used."""
+    """The memories that bear on this question, best first; marks them used.
+
+    Ranked by Memorilla when PLENUM_MEMORY_URL is set (falling back to the local ranking if it
+    fails), else locally. Either way the recall is one "memory recall" span in the run trace: which
+    notes, how close, by which path, and that they were marked used (20 Nov 2026)."""
     if not _ready or len((question or "").strip()) < 3:
         return []
+    import time
+
+    from ..agents import trace
+    from . import memorilla
+
+    t0 = time.perf_counter()
+    path, error = "local", None
     try:
         mems = await visible()
         if not mems:
             return []
-        vecs = await embed([question]) if any(m.get("embedding") for m in mems) else None
-        q_vec = vecs[0] if vecs else None
         qn = _QuestionNames(question)
+        ranked: list[tuple[float, dict[str, Any]]] | None = None
+        if memorilla.enabled():
+            try:
+                _, org = _caller()
+                ranked, path = await _ranked_by_memorilla(question, mems, org, qn), "memorilla"
+            except Exception as exc:  # noqa: BLE001 - the local ranking still answers
+                error = "memorilla: " + str(exc)[:200]
+                log.warning("chat_memories.memorilla_failed", error=str(exc)[:200])
+        if ranked is None:
+            vecs = await embed([question]) if any(m.get("embedding") for m in mems) else None
+            q_vec = vecs[0] if vecs else None
 
-        def ranked_score(m: dict[str, Any]) -> float:
-            s = score(question, q_vec, m)
-            return max(s, RECALL_NAMED) if s < RECALL_NAMED and names_used(question, m, qn) else s
+            def ranked_score(m: dict[str, Any]) -> float:
+                s = score(question, q_vec, m)
+                return max(s, RECALL_NAMED) if s < RECALL_NAMED and names_used(question, m, qn) else s
 
-        ranked = sorted(((ranked_score(m), m) for m in mems), key=lambda x: -x[0])
-        hits = [m | {"score": round(s, 3)} for s, m in ranked[:top] if s >= RECALL_MIN]
+            ranked = sorted(((ranked_score(m), m) for m in mems), key=lambda x: -x[0])
+            if error:
+                path = "local (memorilla failed)"
+        floor = RECALL_MIN if path != "memorilla" else min(RECALL_MIN, memorilla.MEMORY_MIN)
+        hits = [m | {"score": round(s, 3)} for s, m in ranked[:top] if s >= floor and s > 0]
         if hits:
             from ..database import _get_engine
 
             async with _get_engine().begin() as conn:
                 await conn.execute(text(f"UPDATE {TABLE} SET last_used_at = now(), use_count = use_count + 1"
                                         " WHERE id = ANY(CAST(:ids AS uuid[]))"), {"ids": [h["id"] for h in hits]})
+        trace.on_memory("memory recall",
+                        {"question": question, "path": path, "top": top, "visible_memories": len(mems)},
+                        {"recalled": [{"id": h["id"], "kind": h.get("kind"), "subject": h.get("subject"), "score": h["score"],
+                                       "text": (h.get("text") or "")[:200]} for h in hits],
+                         "marked_used": len(hits), "fallback_reason": error},
+                        latency_ms=(time.perf_counter() - t0) * 1000)
         return hits
     except Exception as exc:  # noqa: BLE001
         log.warning("chat_memories.recall_failed", error=str(exc)[:300])
+        trace.on_memory("memory recall", {"question": question, "path": path}, None, ok=False, error=str(exc)[:300],
+                        latency_ms=(time.perf_counter() - t0) * 1000)
         return []
 
 
@@ -463,6 +518,7 @@ async def store(items: list[dict[str, Any]], *, principal: Principal, org: str |
     vecs = await embed([i["text"] for i in items])
     ex_vecs = any(e.get("embedding") for e in existing)
     inserted = 0
+    added: list[dict[str, Any]] = []
     from ..database import _get_engine
 
     async with _get_engine().begin() as conn:
@@ -490,6 +546,13 @@ async def store(items: list[dict[str, Any]], *, principal: Principal, org: str |
                  "turn": source_turn, "by": str(principal.user_id), "email": principal.email,
                  "status": "pending" if needs_approval(principal, it["kind"]) else "active"})
             inserted += 1
+            added.append(it | {"personal": owner is not None})
+    # Memorilla keeps its own copy to rank from (services/memorilla.py). A pending one is added too:
+    # recall only keeps hits the caller may see, so it is not recalled until it is approved.
+    from . import memorilla
+
+    for it in added if memorilla.enabled() else []:
+        await memorilla.add_memory(org, it["kind"], it["text"], it.get("subject"), personal=it["personal"])
     return inserted
 
 
