@@ -45,7 +45,9 @@ MEMORY_MIN = float(os.environ.get("PLENUM_MEMORY_MIN", "0.45"))
 #: A past plan is reused only at this similarity or above ...
 PLAN_MIN = float(os.environ.get("PLENUM_PLAN_MIN", "0.65"))
 #: ... and only when the closest plan that differs from it is at least this much further away.
-PLAN_MARGIN = float(os.environ.get("PLENUM_PLAN_MARGIN", "0.05"))
+#: 0.04 since the 27-question search test (20 Nov 2026): 0.05 held back two right matches
+#: (margins 0.048 and 0.044); the one wrong match it has to stop was 0.024 ahead.
+PLAN_MARGIN = float(os.environ.get("PLENUM_PLAN_MARGIN", "0.04"))
 
 _PLAN_LINE = re.compile(r"^Question:\s*(?P<q>.*?)\s*\|\s*Plan\b(?P<plan>.*)$", re.S)
 
