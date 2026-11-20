@@ -738,8 +738,17 @@ def on_plan(plan: dict | None, *, source: str, rejected: str | None = None, reca
             return
         steps = (plan or {}).get("steps") or []
         name = "plan" if not plan else (f"plan: {len(steps)} step" + ("s" if len(steps) != 1 else ""))
+        # The rules the plan was made under (services/memorilla.rules_fingerprint): plan recall
+        # reuses a stored plan only while they are still today's.
+        try:
+            from ..services.memorilla import rules_fingerprint
+
+            rules = rules_fingerprint()
+        except Exception:  # noqa: BLE001 - a plan span is never lost for its stamp
+            rules = None
         s = t.new(kind="plan", name=name, agent="orchestrator", parent_id=t.root.id,
-                  input=_bound({"source": source, "question": t.question, **({"recalled": recalled} if recalled else {})}))
+                  input=_bound({"source": source, "question": t.question, "rules": rules,
+                                **({"recalled": recalled} if recalled else {})}))
         s.close(output=_bound({"plan": plan, "rejected": rejected}), ok=rejected is None, error=rejected)
         if plan:
             t.route = (plan.get("mode") or "") + ":" + ",".join(str(x.get("target")) for x in steps)

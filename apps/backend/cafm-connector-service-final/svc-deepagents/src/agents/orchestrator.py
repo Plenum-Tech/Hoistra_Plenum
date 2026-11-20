@@ -7134,6 +7134,9 @@ class DeepAgentOrchestrator:
             return None, None
         recalled = {"question": info.get("matched_question"), "similarity": info.get("similarity"),
                     "from_turn": info.get("from_turn")}
+        # The tools that turn called, for each engine this turn runs to follow (_run_phase2_engine).
+        memorilla.turn_recipe.set({"question": recalled["question"], "from_turn": recalled["from_turn"],
+                                   "tools": info.get("tools") or []})
         steps = plan.get("steps") or []
         if len(steps) == 1 and steps[0].get("kind") == "engine":
             return None, {"agent": steps[0]["target"], "also": [], "source": "memorilla", "recalled": recalled,
@@ -8031,6 +8034,18 @@ class DeepAgentOrchestrator:
         recall = chat_memories.turn_recall.get() or chat_memories.format_recall(await chat_memories.recall(user_message))
         if recall:
             prompt_parts.append(recall)
+        # A reused plan brings the tools its earlier turn called: this engine is told to call the
+        # same ones in the same order, with every argument set from this question
+        # (services/memorilla.py recipe_block). One "tool replay" span says what it was given.
+        _recipe = memorilla.turn_recipe.get()
+        if _recipe:
+            block, calls = memorilla.recipe_block(_recipe.get("tools") or [], tool_names, _recipe.get("question"))
+            trace.on_memory("tool replay", {"engine": engine, "from_turn": _recipe.get("from_turn"),
+                                            "past_question": _recipe.get("question"),
+                                            "past_tools": [c.get("tool") for c in _recipe.get("tools") or []]},
+                            {"given": calls, "skipped": "none of the past tools belong to this engine" if not calls else None})
+            if block:
+                prompt_parts.append(block)
         prompt_parts.append("# User request\n" + (user_message or "").strip())
         prompt = "\n\n".join(prompt_parts)
 
@@ -8784,6 +8799,7 @@ class DeepAgentOrchestrator:
         _turn_page_engines.set(frozenset())
         _turn_catalogue_via_task.set(False)
         chat_memories.turn_recall.set("")
+        memorilla.turn_recipe.set(None)
         if engine is None and route_intent not in core_routes:
             step = await self._conversation_step(session_id, user_message, extra_context, session_state)
             user_message, extra_context = step["message"], step["context"]
@@ -9322,6 +9338,7 @@ class DeepAgentOrchestrator:
         _turn_page_engines.set(frozenset())
         _turn_catalogue_via_task.set(False)
         chat_memories.turn_recall.set("")
+        memorilla.turn_recipe.set(None)
         _turn_previous.set(None)
         if route_intent in phase2_core_routes:
             # Every turn records its plan (see run_stateful).

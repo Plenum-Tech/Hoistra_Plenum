@@ -26,9 +26,11 @@ Every call is best-effort with a short timeout: Memorilla being down never break
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
+from contextvars import ContextVar
 from typing import Any
 
 import structlog
@@ -48,6 +50,14 @@ PLAN_MIN = float(os.environ.get("PLENUM_PLAN_MIN", "0.65"))
 #: 0.04 since the 27-question search test (20 Nov 2026): 0.05 held back two right matches
 #: (margins 0.048 and 0.044); the one wrong match it has to stop was 0.024 ahead.
 PLAN_MARGIN = float(os.environ.get("PLENUM_PLAN_MARGIN", "0.04"))
+
+#: The recalled turn's tools: {"question", "from_turn", "tools": [{tool, engine, args}]} - set when a
+#: past plan is reused, read where an engine's prompt is built, cleared at the start of every turn.
+turn_recipe: ContextVar[dict | None] = ContextVar("memorilla_turn_recipe", default=None)
+#: Tools that are the loop's own plumbing, not a read of the records: never part of a recipe.
+META_TOOLS = frozenset({"task", "select_skill", "memory_set", "write_todos", "think", "compact_context"})
+#: Most tool calls a recipe carries, and characters of one call's arguments shown.
+RECIPE_MAX, ARGS_MAX = 8, 300
 
 _PLAN_LINE = re.compile(r"^Question:\s*(?P<q>.*?)\s*\|\s*Plan\b(?P<plan>.*)$", re.S)
 
@@ -147,6 +157,57 @@ def choose_plan_hit(hits: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, 
     return top, "ok"
 
 
+# ── whether a stored plan was made under today's rules (20 Nov 2026) ──────────────────────
+# A plan is what the router and planner decided under the rules of the day: the router's prompt,
+# its catalogue of agents, the planner's prompt. When those change, an old plan can be an old
+# mistake: "Which contracts come up for renewal in the next 90 days?" was routed to compliance on
+# 12 Nov, the same day the router was told a contract renewal is a contract question - and was
+# still being replayed to compliance by plan recall (Qwen A/B, P14). So every plan span is stamped
+# with a fingerprint of those rules (trace.on_plan), and a stored plan is reused only while the
+# fingerprint is today's. A plan from before stamping is reused only when its turn is on or after
+# PLENUM_PLANS_SINCE (an ISO date); unset, it is not reused.
+
+_rules: str | None = None
+
+
+def rules_fingerprint() -> str:
+    """12 hex characters naming the routing and planning rules this process runs on."""
+    global _rules
+    if _rules is None:
+        import hashlib
+
+        from ..agents import agent_router, planner
+
+        catalogue = agent_router._catalogue(None)[0]
+        text_ = "\n\x1e".join([agent_router._PROMPT, catalogue, planner.PLAN_PROMPT, planner.RECORDS_RULES])
+        _rules = hashlib.sha256(text_.encode("utf-8")).hexdigest()[:12]
+    return _rules
+
+
+def plans_since() -> str | None:
+    return (os.environ.get("PLENUM_PLANS_SINCE") or "").strip() or None
+
+
+def stale_reason(rules: str | None, started_at: Any, *, current: str, since: str | None) -> str | None:
+    """Why a stored plan may not be reused today, or None when it may."""
+    if rules:
+        return None if rules == current else f"the routing rules changed since that plan ({rules} then, {current} now)"
+    if not since:
+        return "the plan predates rule stamps and PLENUM_PLANS_SINCE is not set"
+    from datetime import date, datetime
+
+    try:
+        cut = datetime.fromisoformat(since)
+    except ValueError:
+        return f"PLENUM_PLANS_SINCE is not a date: {since!r}"
+    when = started_at if isinstance(started_at, datetime) else datetime.fromisoformat(str(started_at)) if started_at else None
+    if when is None:
+        return "the plan's turn has no time"
+    if when.tzinfo is not None and cut.tzinfo is None:
+        cut = cut.replace(tzinfo=when.tzinfo)
+    return None if when >= cut else f"the plan predates rule stamps and is older than PLENUM_PLANS_SINCE ({since})"
+
+
 def check_plan(plan: dict[str, Any], *, validate, engines, allowed) -> tuple[dict[str, Any] | None, str | None]:
     """A past plan checked against today. A one-engine plan from the router carries no `ask` - the
     turn is sent to that engine whole - so the planner's step check (which wants one) does not fit
@@ -164,15 +225,16 @@ def check_plan(plan: dict[str, Any], *, validate, engines, allowed) -> tuple[dic
     return validate(plan)
 
 
-async def plan_of_question(org: str | None, question: str) -> tuple[dict[str, Any] | None, str | None]:
-    """The plan of the latest good turn that asked exactly this question: (plan, turn_id).
+async def plan_of_question(org: str | None, question: str) -> tuple[dict[str, Any] | None, str | None, dict[str, Any]]:
+    """The plan of the latest good turn that asked exactly this question: (plan, turn_id, meta), meta
+    being {"rules": the rules fingerprint it was stamped with or None, "started_at"}.
 
     Good = finished ok, no thumbs-down, and no verify step failed - the same rule the export used."""
     from ..database import _get_engine
 
     async with _get_engine().connect() as conn:
         row = (await conn.execute(text("""
-            SELECT p.output->'plan' AS plan, t.turn_id
+            SELECT p.output->'plan' AS plan, t.turn_id, p.input->>'rules' AS rules, t.started_at
               FROM plenum_cafm.agent_trace_turns t
               JOIN plenum_cafm.agent_trace_spans p ON p.turn_id = t.turn_id AND p.kind = 'plan'
              WHERE t.ok AND coalesce(t.feedback_rating, '') <> 'down'
@@ -183,13 +245,63 @@ async def plan_of_question(org: str | None, question: str) -> tuple[dict[str, An
                                 WHERE v.turn_id = t.turn_id AND v.kind = 'step' AND NOT v.ok)
              ORDER BY t.started_at DESC, p.seq DESC LIMIT 1"""), {"org": org, "q": question})).first()
     if row is None:
-        return None, None
+        return None, None, {}
     plan = row[0]
     if isinstance(plan, str):
-        import json
-
         plan = json.loads(plan)
-    return (plan if isinstance(plan, dict) else None), row[1]
+    return (plan if isinstance(plan, dict) else None), row[1], {"rules": row[2], "started_at": row[3]}
+
+
+async def tools_of_turn(turn_id: str) -> list[dict[str, Any]]:
+    """The tools a past turn called that finished ok, in order: [{tool, engine, args}]. Read from its
+    tool spans; the loop's own plumbing (META_TOOLS) is left out."""
+    from ..database import _get_engine
+
+    async with _get_engine().connect() as conn:
+        rows = (await conn.execute(text("""
+            SELECT name, agent, input FROM plenum_cafm.agent_trace_spans
+             WHERE turn_id = :t AND kind = 'tool' AND ok AND coalesce(agent, '') <> 'tool:meta'
+             ORDER BY seq"""), {"t": turn_id})).all()
+    out = []
+    for name, agent, args in rows:
+        if name in META_TOOLS:
+            continue
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {"_": args}
+        out.append({"tool": name, "engine": agent, "args": args if isinstance(args, dict) else {}})
+    return out
+
+
+def recipe_block(recipe: list[dict[str, Any]], tool_names: list[str], past_question: str | None = None) -> tuple[str, list[dict[str, Any]]]:
+    """The engine prompt's "how this was answered before" block and the calls it names: only the
+    tools this engine has, a repeat in a row once, at most RECIPE_MAX. The arguments are shown as
+    the earlier question's, to be set again from this one - an earlier question about August must
+    not make this one about September read August."""
+    calls: list[dict[str, Any]] = []
+    for c in recipe or []:
+        if c.get("tool") not in tool_names:
+            continue
+        if calls and calls[-1]["tool"] == c["tool"] and calls[-1]["args"] == c.get("args"):
+            continue
+        calls.append({"tool": c["tool"], "args": c.get("args") or {}})
+        if len(calls) >= RECIPE_MAX:
+            break
+    if not calls:
+        return "", []
+    lines = ["# How an earlier question like this was answered",
+             (f'The question "{past_question}" was answered well by calling these tools, in this order:'
+              if past_question else "An earlier question like this was answered well by calling these tools, in this order:")]
+    for n, c in enumerate(calls, 1):
+        args = json.dumps(c["args"], ensure_ascii=False, default=str)
+        lines.append(f"{n}. {c['tool']}({args if len(args) <= ARGS_MAX else args[:ARGS_MAX] + ' …'})")
+    lines.append("Call the same tools in the same order unless this question clearly needs something else. "
+                 "Set every argument from THIS question - its buildings, assets, vendors, dates and periods - "
+                 "never copy a value from the earlier one that this question does not state. "
+                 "The figures still come from what the tools return now.")
+    return "\n".join(lines), calls
 
 
 async def recall_plan(org: str | None, question: str, *, validate) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -208,16 +320,26 @@ async def recall_plan(org: str | None, question: str, *, validate) -> tuple[dict
             return None, info
         past_q = parse_plan_hit(top["text"])[0]
         info["matched_question"], info["similarity"] = past_q, round(float(top["similarity"]), 4)
-        plan, turn_id = await plan_of_question(org, past_q)
+        plan, turn_id, meta = await plan_of_question(org, past_q)
         info["from_turn"] = turn_id
         if plan is None:
             info["used"], info["why"] = False, "the past turn's plan was not found in the trace tables"
+            return None, info
+        current = rules_fingerprint()
+        info["rules"] = {"plan": meta.get("rules"), "now": current, "plan_made": str(meta.get("started_at") or "")}
+        stale = stale_reason(meta.get("rules"), meta.get("started_at"), current=current, since=plans_since())
+        if stale:
+            info["used"], info["why"] = False, stale
             return None, info
         checked, why = validate({k: v for k, v in plan.items() if k != "areas"})
         if checked is None:
             info["used"], info["why"] = False, f"the past plan no longer validates: {why}"
             return None, info
         info["used"], info["why"] = True, "ok"
+        try:
+            info["tools"] = await tools_of_turn(turn_id)
+        except Exception as exc:  # noqa: BLE001 - the plan stands without its recipe
+            info["tools"], info["tools_error"] = [], str(exc)[:200]
         return checked, info
     except Exception as exc:  # noqa: BLE001 - recall never breaks a turn
         info["used"], info["error"] = False, str(exc)[:300]

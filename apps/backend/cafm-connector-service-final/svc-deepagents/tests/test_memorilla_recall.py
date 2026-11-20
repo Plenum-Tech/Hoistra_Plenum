@@ -181,7 +181,7 @@ def test_recall_plan_reads_the_past_turns_plan_and_checks_it_again(db, monkeypat
 
     async def plan_of_question(org, q):
         assert q == "What needs my approval today?" and org == ORG
-        return plan, "turn-abc"
+        return plan, "turn-abc", {"rules": memorilla.rules_fingerprint(), "started_at": None}
 
     monkeypatch.setattr(memorilla, "plan_of_question", plan_of_question)
     seen = []
@@ -204,6 +204,133 @@ def test_a_one_engine_plan_from_the_router_is_checked_by_its_engine_not_by_the_p
     two = {"steps": [one["steps"][0], {"id": "s2", "kind": "engine", "target": "wo_engine"}]}
     got, why = memorilla.check_plan(two, validate=refuse, engines={"compliance", "wo_engine"}, allowed={"compliance", "wo_engine"})
     assert got is None and why == "step s1: no ask"
+
+
+PAST_TOOLS = [
+    {"tool": "list_building_certificates", "engine": "compliance", "args": {"building_name": "Bishopsgate Tower", "limit": 200}},
+    {"tool": "list_building_certificates", "engine": "compliance", "args": {"building_name": "Bishopsgate Tower", "limit": 200}},
+    {"tool": "answer_from_records", "engine": "maintenance",
+     "args": {"question": "How many work orders were raised at Bishopsgate Tower between 2026-08-01 and 2026-08-31?"}},
+    {"tool": "list_vendor_accreditations", "engine": "compliance", "args": {}},
+]
+
+
+def test_the_recipe_names_only_this_engines_tools_in_order_once_each():
+    block, calls = memorilla.recipe_block(PAST_TOOLS, ["list_building_certificates", "list_vendor_accreditations"],
+                                          "Which certificates have lapsed at Bishopsgate Tower?")
+    assert [c["tool"] for c in calls] == ["list_building_certificates", "list_vendor_accreditations"]
+    assert block.index("1. list_building_certificates(") < block.index("2. list_vendor_accreditations(")
+    assert '"Which certificates have lapsed at Bishopsgate Tower?"' in block
+    assert "Set every argument from THIS question" in block
+
+
+def test_a_recipe_never_tells_the_engine_to_reuse_an_earlier_period():
+    block, calls = memorilla.recipe_block(PAST_TOOLS, ["answer_from_records"])
+    assert calls[0]["args"]["question"].endswith("2026-08-31?")   # shown as the earlier question's
+    assert "never copy a value from the earlier one that this question does not state" in block
+
+
+def test_no_recipe_when_none_of_the_past_tools_are_this_engines():
+    assert memorilla.recipe_block(PAST_TOOLS, ["get_energy_overview"]) == ("", [])
+    assert memorilla.recipe_block([], ["list_building_certificates"]) == ("", [])
+
+
+def test_a_recipe_is_capped_and_long_arguments_are_cut():
+    many = [{"tool": "t", "args": {"n": i, "text": "x" * 500}} for i in range(20)]
+    block, calls = memorilla.recipe_block(many, ["t"])
+    assert len(calls) == memorilla.RECIPE_MAX and " …" in block
+
+
+def test_the_past_turns_tools_come_with_the_reused_plan(db, monkeypatch):
+    plan = {"mode": "single", "steps": [{"id": "s1", "kind": "engine", "target": "compliance", "ask": None}]}
+    db["hits"] = [_plan_hit(0.79, "Which certificates have lapsed at Bishopsgate Tower?")]
+
+    async def plan_of_question(org, q):
+        return plan, "turn-6aee", {"rules": memorilla.rules_fingerprint(), "started_at": None}
+
+    async def tools_of_turn(turn_id):
+        assert turn_id == "turn-6aee"
+        return PAST_TOOLS[:1]
+
+    monkeypatch.setattr(memorilla, "plan_of_question", plan_of_question)
+    monkeypatch.setattr(memorilla, "tools_of_turn", tools_of_turn)
+    got, info = asyncio.run(memorilla.recall_plan(ORG, "Which certificates at Bishopsgate Tower have expired?",
+                                                   validate=lambda p: (p, None)))
+    assert got == plan and info["tools"] == PAST_TOOLS[:1]
+
+
+def test_tools_of_turn_skips_the_loops_own_plumbing(monkeypatch):
+    rows = [("task", "tool:meta", {"description": "x"}), ("select_skill", "orchestrator loop", {}),
+            ("list_compliance_approvals", "compliance", '{"status": "pending"}')]
+
+    class _R:
+        def all(self):
+            return rows
+
+    class _C:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, stmt, params=None):
+            assert "kind = 'tool'" in str(stmt) and params == {"t": "turn-1"}
+            return _R()
+
+    import src.database as database
+
+    monkeypatch.setattr(database, "_get_engine", lambda: type("E", (), {"connect": lambda self: _C()})())
+    got = asyncio.run(memorilla.tools_of_turn("turn-1"))
+    assert got == [{"tool": "list_compliance_approvals", "engine": "compliance", "args": {"status": "pending"}}]
+
+
+def test_a_stamped_plan_is_reused_only_under_the_same_rules():
+    now = "abc123def456"
+    assert memorilla.stale_reason(now, None, current=now, since=None) is None
+    why = memorilla.stale_reason("000000000000", None, current=now, since="2026-01-01")
+    assert why and "routing rules changed" in why          # a date never revives a plan made under other rules
+
+
+def test_an_unstamped_plan_needs_plenum_plans_since_and_a_turn_after_it():
+    t = datetime(2026, 11, 12, 8, 22, tzinfo=timezone.utc)
+    assert "not set" in memorilla.stale_reason(None, t, current="x", since=None)
+    assert "older than" in memorilla.stale_reason(None, t, current="x", since="2026-11-14")
+    assert memorilla.stale_reason(None, t, current="x", since="2026-11-12") is None
+    assert memorilla.stale_reason(None, "2026-11-17T07:22:00+00:00", current="x", since="2026-11-14") is None
+    assert "not a date" in memorilla.stale_reason(None, t, current="x", since="last tuesday")
+
+
+def test_a_plan_from_before_a_rules_change_is_not_reused(db, monkeypatch):
+    plan = {"mode": "single", "steps": [{"id": "s1", "kind": "engine", "target": "compliance", "ask": None}]}
+    db["hits"] = [_plan_hit(0.77, "Which contracts come up for renewal in the next 90 days?")]
+
+    async def plan_of_question(org, q):
+        return plan, "turn-d1fd", {"rules": None, "started_at": datetime(2026, 11, 12, 8, 22, tzinfo=timezone.utc)}
+
+    monkeypatch.setattr(memorilla, "plan_of_question", plan_of_question)
+    monkeypatch.setenv("PLENUM_PLANS_SINCE", "2026-11-14")
+    got, info = asyncio.run(memorilla.recall_plan(ORG, "Which contracts need renewing in the next three months?",
+                                                   validate=lambda p: (p, None)))
+    assert got is None and not info["used"] and "older than PLENUM_PLANS_SINCE" in info["why"]
+    assert info["rules"]["plan"] is None and info["rules"]["now"] == memorilla.rules_fingerprint()
+
+
+def test_every_plan_span_is_stamped_with_todays_rules(db):
+    async def run():
+        trace.on_activity({"agent": "orchestrator", "stage": "turn", "direction": "input", "turn_id": "turn-r", "session_id": "s1",
+                           "summary": "q", "payload": {"message": "Which certificates have lapsed?"}})
+        trace.on_plan({"steps": [{"id": "s1", "kind": "engine", "target": "compliance"}]}, source="router")
+        return trace.current()
+
+    prev = trace._ready
+    trace._ready = True
+    try:
+        t = asyncio.run(run())
+    finally:
+        trace._ready = prev
+    span = next(s for s in t.spans if s.kind == "plan")
+    assert span.input["rules"] == memorilla.rules_fingerprint() and len(span.input["rules"]) == 12
 
 
 def test_recall_plan_never_raises(db):
