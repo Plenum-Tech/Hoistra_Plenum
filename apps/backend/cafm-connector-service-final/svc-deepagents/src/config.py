@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Walk up from this file's location to find the nearest .env
@@ -43,6 +43,53 @@ class Settings(BaseSettings):
     # OpenAI — main orchestrator
     openai_api_key: str = Field("", validation_alias=AliasChoices("OPENAI_API_KEY", "openai_api_key"))
     openai_model: str = "gpt-4o-mini"
+    # cognee graph memory beside Memorilla (services/cognee_graph.py): companies whose company facts
+    # also go into a knowledge graph, read at recall time for how facts connect. Comma-separated
+    # ids, "*" for all, "" (default) off.
+    cognee_memory_companies: str = Field(
+        default="",
+        validation_alias=AliasChoices("COGNEE_MEMORY_COMPANIES"),
+    )
+    # cognee's OWN Postgres. Empty = off. Refused when it names the main database in any spelling:
+    # cognee creates and writes its own tables.
+    cognee_db_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("COGNEE_DB_URL"),
+    )
+    # "shadow" (default): the graph recall is traced only. "live": it joins the recall block the
+    # model and the sub-agents receive.
+    cognee_memory_mode: str = Field(
+        default="shadow",
+        validation_alias=AliasChoices("COGNEE_MEMORY_MODE"),
+    )
+    # cognee's models. Graph building uses the orchestrator's model and OPENAI_API_BASE (a local
+    # server such as Ollama works). Embeddings default to OpenAI's text-embedding-3-small; for a
+    # local model set e.g. provider "ollama", model "qwen3-embedding:0.6b", dimensions 1024,
+    # endpoint "http://localhost:11434/api/embed", tokenizer "Qwen/Qwen3-Embedding-0.6B".
+    cognee_embedding_provider: str = Field(
+        default="openai", validation_alias=AliasChoices("COGNEE_EMBEDDING_PROVIDER"))
+    cognee_embedding_model: str = Field(
+        default="openai/text-embedding-3-small",
+        validation_alias=AliasChoices("COGNEE_EMBEDDING_MODEL"))
+    cognee_embedding_dimensions: int = Field(
+        default=1536, validation_alias=AliasChoices("COGNEE_EMBEDDING_DIMENSIONS"))
+    cognee_embedding_endpoint: str = Field(
+        default="", validation_alias=AliasChoices("COGNEE_EMBEDDING_ENDPOINT"))
+    cognee_embedding_tokenizer: str = Field(
+        default="", validation_alias=AliasChoices("COGNEE_EMBEDDING_TOKENIZER"))
+    # "none" stops Qwen3's thinking on Ollama (~10x fewer tokens per graph-building call).
+    cognee_llm_reasoning_effort: str = Field(
+        default="", validation_alias=AliasChoices("COGNEE_LLM_REASONING_EFFORT"))
+
+    @field_validator("cognee_memory_mode", "cognee_embedding_provider", "cognee_embedding_model",
+                     "cognee_embedding_dimensions", mode="before")
+    @classmethod
+    def _blank_cognee_setting_is_default(cls, value, info):
+        """A blank COGNEE_* line (as in a copied .env.example) means "use the default" — it must
+        never stop the service from starting."""
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
     openai_api_base: str = Field(
         "",
         validation_alias=AliasChoices("OPENAI_API_BASE", "OPENAI_BASE_URL", "OPENAI_API_BASE_URL"),

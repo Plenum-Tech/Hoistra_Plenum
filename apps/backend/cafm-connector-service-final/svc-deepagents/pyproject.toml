@@ -33,6 +33,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# cognee graph memory (services/cognee_graph.py): lazy-imported, only needed where
+# COGNEE_MEMORY_COMPANIES / COGNEE_DB_URL are set. Install with: pip install -e ".[cognee]"
+# The [postgres] extra builds psycopg2 from source: the image needs libpq-dev and gcc first.
+# Pinned to 1.6.x — the config field names in cognee_graph._cognee_settings are 1.6.10's.
+# KNOWN CONFLICT: cognee 1.6 needs openai>=2.20; langchain-openai<0.3 (above) needs openai<2, so
+# this extra cannot be installed with the service yet. Next version: cognee as its own service.
+cognee = [
+    "cognee[postgres]>=1.6,<1.7",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
