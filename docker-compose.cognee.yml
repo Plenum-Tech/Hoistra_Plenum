@@ -1,0 +1,38 @@
+# cognee graph memory: cognee's OWN Postgres, local only.
+#
+# cognee creates and writes its own tables, so it must never share the main database (which the
+# local stack points at production). This file is additive and optional:
+#
+#   docker compose -f docker-compose.cognee.yml up -d
+#
+# Then set, in svc-deepagents' local env only (never in docker-compose.azure-safe.yml):
+#   COGNEE_DB_URL=postgresql://cognee:cognee@localhost:5462/cognee      (service run on the host)
+#   COGNEE_DB_URL=postgresql://cognee:cognee@cognee-pg:5432/cognee      (service in a container,
+#       with this file added to the same `docker compose -f ... -f docker-compose.cognee.yml` run)
+#   COGNEE_MEMORY_COMPANIES=<test company org id>
+#   COGNEE_MEMORY_MODE=shadow        (default; "live" to add graph-linked memories to recall)
+# KNOWN CONFLICT: cognee 1.6 needs openai>=2.20 and svc-deepagents pins langchain-openai<0.3
+# (openai<2), so cognee cannot be installed in svc-deepagents yet; the next version runs cognee as
+# its own service. Until then the feature stays off (it is off unless both settings are set).
+#
+# See docs/superpowers/specs/2026-11-20-memorilla-cognee-hybrid-design.md.
+services:
+  cognee-pg:
+    image: pgvector/pgvector:pg16
+    container_name: cognee-pg
+    environment:
+      POSTGRES_USER: cognee
+      POSTGRES_PASSWORD: cognee
+      POSTGRES_DB: cognee
+    ports:
+      - "5462:5432"
+    volumes:
+      - cognee_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cognee -d cognee"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cognee_pg_data:

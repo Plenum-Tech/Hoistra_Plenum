@@ -349,7 +349,37 @@ async def review(memory_id: str, decision: str) -> bool:
             res = await conn.execute(text(f"UPDATE {TABLE} SET status = 'rejected', deleted_at = now(), deleted_by = CAST(:by AS uuid),"
                                           f" reviewed_by = CAST(:by AS uuid), reviewed_by_email = :email, reviewed_at = now()"
                                           f" WHERE id = CAST(:id AS uuid) AND status = 'pending' AND {where}"), params)
+    # An approved company fact joins the cognee graph now; a rejected one was never in it.
+    if res.rowcount and decision == "approve":
+        await _graph_sync(org, memory_id, "add")
     return bool(res.rowcount)
+
+
+async def _graph_sync(org: str | None, memory_id: str, action: str) -> None:
+    """Hand one memory to the cognee graph (services/cognee_graph.py): "add" after approval,
+    "forget" after a forget. Reads the row back only when the graph is on for this company, so
+    with it off nothing changes; the graph write itself runs in the background. Never raises."""
+    from . import cognee_graph
+
+    if not cognee_graph.enabled(org):
+        return
+    try:
+        from ..database import _get_engine
+
+        async with _get_engine().begin() as conn:
+            row = (await conn.execute(
+                text(f"SELECT kind, text, subject, user_id FROM {TABLE}"
+                     " WHERE id = CAST(:id AS uuid)"),
+                {"id": memory_id})).mappings().first()
+        if not row:
+            return
+        item = {"kind": row["kind"], "text": row["text"], "subject": row["subject"],
+                "personal": row["user_id"] is not None, "active": True}
+        write = (cognee_graph.add_memories_soon if action == "add"
+                 else cognee_graph.forget_memories_soon)
+        write(org, [item])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("chat_memories.graph_sync_failed", action=action, error=str(exc)[:200])
 
 
 async def _ranked_by_memorilla(question: str, mems: list[dict[str, Any]], org: str | None,
@@ -546,13 +576,17 @@ async def store(items: list[dict[str, Any]], *, principal: Principal, org: str |
                  "turn": source_turn, "by": str(principal.user_id), "email": principal.email,
                  "status": "pending" if needs_approval(principal, it["kind"]) else "active"})
             inserted += 1
-            added.append(it | {"personal": owner is not None})
+            added.append(it | {"personal": owner is not None,
+                               "active": not needs_approval(principal, it["kind"])})
     # Memorilla keeps its own copy to rank from (services/memorilla.py). A pending one is added too:
     # recall only keeps hits the caller may see, so it is not recalled until it is approved.
-    from . import memorilla
+    from . import cognee_graph, memorilla
 
     for it in added if memorilla.enabled() else []:
         await memorilla.add_memory(org, it["kind"], it["text"], it.get("subject"), personal=it["personal"])
+    # The cognee graph (services/cognee_graph.py) gets the company's active facts and corrections,
+    # in the background: how they connect. A pending one joins when it is approved (review()).
+    cognee_graph.add_memories_soon(org, added)
     return inserted
 
 
@@ -602,6 +636,9 @@ async def forget(memory_id: str) -> bool:
     async with _get_engine().begin() as conn:
         res = await conn.execute(text(f"UPDATE {TABLE} SET deleted_at = now(), deleted_by = CAST(:by AS uuid)"
                                       f" WHERE id = CAST(:id AS uuid) AND {where}"), params)
+    # What people forget leaves the cognee graph too, so it never comes back as a connection.
+    if res.rowcount:
+        await _graph_sync(org, memory_id, "forget")
     return bool(res.rowcount)
 
 

@@ -129,7 +129,7 @@ from .udr_hybrid_tools import (
     answer_with_graph_context,
 )
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
-from ..services import chat_memories, chat_threads, memorilla
+from ..services import chat_memories, chat_threads, cognee_graph, memorilla
 from . import cert_checks, cert_expiry, page_access, planner, spaces, thread_scope, trace
 from . import final_answer as final_step  # the module; `final_answer` is a local name in the loop
 from . import evidence as answer_evidence
@@ -1016,8 +1016,21 @@ class DeepAgentOrchestrator:
         if ws or thread_scope.active_scope.get() is None:
             thread_scope.active_scope.set(ws or await self._question_scope(user_message))
         scope_text = thread_scope.scope_block(ws) if ws else ""
-        # What earlier conversations taught us that bears on this question (services/chat_memories.py).
-        memories_text = chat_memories.format_recall(await chat_memories.recall(user_message))
+        # What earlier conversations taught us that bears on this question
+        # (services/chat_memories.py, ranked by Memorilla), read together with the company's memory
+        # graph (services/cognee_graph.py), which adds the remembered facts linked to it that
+        # similarity missed (a vendor's hold reached through the asset it maintains). Live mode
+        # reads both together; shadow mode reads the graph after the turn has moved on and only
+        # traces it, and with the graph off the recall is exactly Memorilla's as before.
+        if cognee_graph.live():
+            _recalled, _graph = await asyncio.gather(chat_memories.recall(user_message),
+                                                     cognee_graph.graph_for(user_message))
+            _recalled = _recalled + await cognee_graph.linked_memories(
+                user_message, _recalled, _graph)
+        else:
+            _recalled = await chat_memories.recall(user_message)
+            cognee_graph.shadow_soon(user_message, _recalled)
+        memories_text = chat_memories.format_recall(_recalled)
         chat_memories.turn_recall.set(memories_text)
         for block in [b for b in (scope_text, memories_text) if b]:
             wrapped = wrapped.replace("\n\n---\n\n**Current user message:**", "\n\n" + block + "\n\n---\n\n**Current user message:**", 1) \
