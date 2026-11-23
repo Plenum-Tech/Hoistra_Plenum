@@ -347,3 +347,78 @@ async def recall_plan(org: str | None, question: str, *, validate) -> tuple[dict
         return None, info
     finally:
         info["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+
+
+# ── latent recall: Memorilla's memory tokens (23 Nov 2026) ───────────────────────────────────
+#
+# Everything above uses the server as a similarity search: the closest entries, as text. Latent
+# recall is what Memorilla is for: the server reads a whole set of memories into its 16 memory
+# tokens and its decoder (Qwen3-8B) writes a short note of what bears on the question - things
+# spread over many memories, or never stated in one, that a top-k search does not surface.
+#
+# The caller SENDS the memories to read. The server's company collection holds every memory of the
+# company - other people's preferences, ones still pending approval - and a note blends what it
+# reads, so it cannot be filtered afterwards the way search hits are. chat_memories.latent_recall
+# sends exactly visible()'s memories: latent recall never reads more than search may return.
+#
+# Server contract (the plenum-memory server, outside this repository):
+#
+#   POST /v1/memory/recall
+#     {"question": str, "documents": [str, ...], "instructions": str, "max_tokens": int}
+#   -> {"note": str, "ms": float?, "model": str?}
+#
+#   It writes the documents into Memorilla's memory (cached by their content, so the same set is not
+#   encoded twice) and answers the question with `instructions` as the system prompt, e.g.
+#   MemoryVLLM.answer(question, model.write(documents), system_prompt=instructions).
+#
+# PLENUM_MEMORY_LATENT: off (default) | shadow - asked for and traced only, the turn never waits
+# for it | live - the note joins the recall block the model reads. Off whenever PLENUM_MEMORY_URL is.
+
+#: Seconds the recall call may take (decoder on a GPU: about 1-3 s).
+LATENT_TIMEOUT = float(os.environ.get("PLENUM_MEMORY_LATENT_TIMEOUT", "6"))
+#: Most memories sent in one call (visible() is newest first, so the oldest are left out).
+LATENT_MAX_DOCS = int(os.environ.get("PLENUM_MEMORY_LATENT_DOCS", "400"))
+#: The note's length ceiling, in decoder tokens, and in characters once back.
+LATENT_MAX_TOKENS = int(os.environ.get("PLENUM_MEMORY_LATENT_TOKENS", "200"))
+LATENT_MAX_CHARS = 1500
+
+RECALL_INSTRUCTIONS = (
+    "You are the memory of a facilities-management assistant. The memories are facts, corrections and "
+    "preferences people told it in earlier conversations. Write at most 5 short lines stating only what "
+    "in the memories bears on the question - rules, corrections, preferences, names - each line one "
+    "memory's point in plain words. Never state a count, cost, date or status as current: those are "
+    "re-read from live data. If nothing in the memories bears on the question, write exactly: nothing relevant"
+)
+
+_NOTHING = re.compile(r"^\W*(nothing relevant|nothing|none|no relevant memor)", re.I)
+
+
+def latent_mode() -> str:
+    """'off' | 'shadow' | 'live'."""
+    mode = (os.environ.get("PLENUM_MEMORY_LATENT") or "off").strip().lower()
+    return mode if mode in ("shadow", "live") and enabled() else "off"
+
+
+async def recall_note(question: str, documents: list[str]) -> dict[str, Any]:
+    """Memorilla's note over `documents` for `question`: {"note", "documents", "server_ms", "model"}.
+
+    "note" is "" when nothing bears on the question. Raises when the server fails or is off - the
+    caller traces the failure and the turn goes on without the note."""
+    if not enabled():
+        raise RuntimeError("PLENUM_MEMORY_URL is not set")
+    docs = [d for d in documents if (d or "").strip()][:LATENT_MAX_DOCS]
+    if not docs or len((question or "").strip()) < 3:
+        return {"note": "", "documents": len(docs), "server_ms": None, "model": None}
+    import httpx
+
+    async with httpx.AsyncClient(timeout=LATENT_TIMEOUT) as client:
+        r = await client.post(url() + "/v1/memory/recall",
+                              json={"question": question.strip(), "documents": docs,
+                                    "instructions": RECALL_INSTRUCTIONS, "max_tokens": LATENT_MAX_TOKENS})
+        r.raise_for_status()
+        data = r.json() or {}
+    note = str(data.get("note") or "").strip()
+    if _NOTHING.match(note):
+        note = ""
+    return {"note": note[:LATENT_MAX_CHARS], "documents": len(docs),
+            "server_ms": data.get("ms"), "model": data.get("model")}

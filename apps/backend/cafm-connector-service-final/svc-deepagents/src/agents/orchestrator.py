@@ -1022,6 +1022,10 @@ class DeepAgentOrchestrator:
         # similarity missed (a vendor's hold reached through the asset it maintains). Live mode
         # reads both together; shadow mode reads the graph after the turn has moved on and only
         # traces it, and with the graph off the recall is exactly Memorilla's as before.
+        # Memorilla's latent memory (services/chat_memories.py latent_recall) starts alongside: a note
+        # over everything the caller may see, read as a whole. Live: awaited below and added to the
+        # block; shadow: it runs on and is traced only; off (PLENUM_MEMORY_LATENT unset): nothing.
+        _latent_task = chat_memories.start_latent_recall(user_message)
         if cognee_graph.live():
             _recalled, _graph = await asyncio.gather(chat_memories.recall(user_message),
                                                      cognee_graph.graph_for(user_message))
@@ -1031,6 +1035,8 @@ class DeepAgentOrchestrator:
             _recalled = await chat_memories.recall(user_message)
             cognee_graph.shadow_soon(user_message, _recalled)
         memories_text = chat_memories.format_recall(_recalled)
+        if _latent_task is not None:
+            memories_text = "\n\n".join(b for b in (memories_text, await _latent_task) if b)
         chat_memories.turn_recall.set(memories_text)
         for block in [b for b in (scope_text, memories_text) if b]:
             wrapped = wrapped.replace("\n\n---\n\n**Current user message:**", "\n\n" + block + "\n\n---\n\n**Current user message:**", 1) \
@@ -8044,7 +8050,12 @@ class DeepAgentOrchestrator:
             prompt_parts.append("# Extraction / runtime context\n" + extra_context.strip())
         # What earlier conversations taught us: the turn's block when the orchestrator read the
         # question, else recalled here (a direct engine dispatch never builds the stateful input).
-        recall = chat_memories.turn_recall.get() or chat_memories.format_recall(await chat_memories.recall(user_message))
+        recall = chat_memories.turn_recall.get()
+        if not recall:
+            _latent_task = chat_memories.start_latent_recall(user_message)
+            recall = chat_memories.format_recall(await chat_memories.recall(user_message))
+            if _latent_task is not None:
+                recall = "\n\n".join(b for b in (recall, await _latent_task) if b)
         if recall:
             prompt_parts.append(recall)
         # A reused plan brings the tools its earlier turn called: this engine is told to call the

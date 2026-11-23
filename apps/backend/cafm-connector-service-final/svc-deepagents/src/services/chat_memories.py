@@ -467,6 +467,70 @@ async def recall(question: str, *, top: int = RECALL_TOP) -> list[dict[str, Any]
         return []
 
 
+#: Latent recalls still running in shadow mode: held so they are not collected mid-flight.
+_LATENT_TASKS: set[asyncio.Task] = set()
+
+
+async def latent_recall(question: str) -> str:
+    """Memorilla's latent memory over everything this caller may see (services/memorilla.py, 23 Nov 2026).
+
+    Sends visible()'s memories - never the server's whole company collection - and gets back a short
+    note of what bears on the question. One "latent recall" span either way. Returns the block the
+    model reads in live mode; "" in shadow mode, when off, when nothing bears on the question, or
+    when the server fails (recall never breaks a turn)."""
+    from . import memorilla
+
+    mode = memorilla.latent_mode()
+    if mode == "off" or not _ready or len((question or "").strip()) < 3:
+        return ""
+    import time
+
+    from ..agents import trace
+
+    t0 = time.perf_counter()
+    try:
+        mems = await visible()
+        docs = [memorilla.memory_text(m.get("kind") or "fact", m.get("text") or "", m.get("subject"),
+                                      personal=m.get("kind") == "preference") for m in mems]
+        out = await memorilla.recall_note(question, docs)
+        note = out["note"]
+        trace.on_memory("latent recall",
+                        {"question": question, "mode": mode, "visible_memories": len(mems), "sent": out["documents"]},
+                        {"note": note, "used": mode == "live" and bool(note), "server_ms": out.get("server_ms"),
+                         "model": out.get("model")},
+                        latency_ms=(time.perf_counter() - t0) * 1000)
+        return format_latent(note) if mode == "live" else ""
+    except Exception as exc:  # noqa: BLE001 - the turn goes on without the note
+        log.warning("chat_memories.latent_recall_failed", error=str(exc)[:300])
+        trace.on_memory("latent recall", {"question": question, "mode": mode}, None, ok=False,
+                        error=str(exc)[:300], latency_ms=(time.perf_counter() - t0) * 1000)
+        return ""
+
+
+def start_latent_recall(question: str) -> "asyncio.Task[str] | None":
+    """Start latent_recall alongside the rest of recall. Live: the task, to await before the prompt is
+    built. Shadow: None - it runs on and traces its note, and the turn never waits for it. Off: None."""
+    from . import memorilla
+
+    mode = memorilla.latent_mode()
+    if mode == "off":
+        return None
+    task = asyncio.ensure_future(latent_recall(question))   # copies the turn's context: caller, trace
+    if mode == "live":
+        return task
+    _LATENT_TASKS.add(task)
+    task.add_done_callback(_LATENT_TASKS.discard)
+    return None
+
+
+def format_latent(note: str) -> str:
+    """The block the model reads in live mode: a summary, never figures."""
+    if not (note or "").strip():
+        return ""
+    return ("## What earlier conversations add, read as a whole (Memorilla - background only, not figures; "
+            "re-read live data for any count, cost or status)\n" + note.strip())
+
+
 def format_recall(hits: list[dict[str, Any]]) -> str:
     """The block the model reads. Figures are never in here, so it is told to re-read them."""
     if not hits:
