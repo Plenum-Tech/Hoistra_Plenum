@@ -183,6 +183,6 @@ export default function ProgressView({ me, run }) {
       .catch((e) => { if (live) setRes((p) => Object.assign({}, p, { loading: false, error: errText(e) })); });
     return () => { live = false; };
   }, [run, tick]);
-  return <ProgressBody data={res.data} loading={res.loading} error={res.error} canEdit={!!(me && me.all_companies)}
+  return <ProgressBody data={res.data} loading={res.loading} error={res.error} canEdit={!!(me && (me.all_companies || me.own_only))}
     onRetry={() => setTick((n) => n + 1)} />;
 }

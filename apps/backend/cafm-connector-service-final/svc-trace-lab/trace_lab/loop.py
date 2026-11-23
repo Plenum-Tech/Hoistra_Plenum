@@ -157,6 +157,29 @@ async def live_modes(conn: Any) -> list[dict[str, Any]]:
     return (await resolve_modes(conn))[0]
 
 
+async def mode_owners(conn: Any) -> dict[str, str | None]:
+    """Who made each failure mode: the person who wrote its lineage's first version (None: the coding agent's)."""
+    out: dict[str, str | None] = {}
+    for r in await _mode_rows(conn):
+        out.setdefault(r["lineage_id"], r["created_by"])
+    return out
+
+
+async def visible_modes(conn: Any, m: labelling.Member | None, modes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The failure modes (live or proposed, each with its lineage_id) the caller sees (23 Nov 2026, Hussain: a
+    consultant should not see other failure modes): a Hoistra consultant only the ones they made, which are theirs
+    alone; anyone else every mode but a consultant's (labelling.hoistra_consultants). No caller: all of them."""
+    if m is None or not modes:
+        return modes
+    owners = await mode_owners(conn)
+    if getattr(m, "own_only", False):
+        return [x for x in modes if owners.get(x["lineage_id"]) == m.user_id]
+    private = await labelling.hoistra_consultants({o for o in owners.values() if o})
+    if not private:
+        return modes
+    return [x for x in modes if owners.get(x["lineage_id"]) not in private]
+
+
 # ── expected answers ─────────────────────────────────────────────────────────────────────────────
 
 #: The current expected answer of question `q`: the newest one a person wrote or imported, or a coding agent's that a
@@ -303,16 +326,18 @@ async def spec_markdown(m: labelling.Member) -> str | None:
     return spec["body"] if spec else None
 
 
-async def _positives(conn: Any, lineage: str | None = None) -> dict[str, list[str]]:
-    """{mode lineage: [question ids]} that a PERSON marked positive (their newest value). Agents' suggestions never count."""
+async def _positives(conn: Any, lineage: str | None = None, *, author: str | None = None) -> dict[str, list[str]]:
+    """{mode lineage: [question ids]} that a PERSON marked positive (their newest value). Agents' suggestions never count.
+    `author`: only that person's (a Hoistra consultant sees only their own marks, 23 Nov 2026)."""
     rows = (await conn.execute(text("""
         SELECT mode, question_id FROM (
           SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
                  c.mode_lineage_id::text AS mode, c.question_id::text AS question_id, c.value
             FROM tracelab.lab_label_cells c
            WHERE c.source = 'manual' AND (CAST(:lin AS uuid) IS NULL OR c.mode_lineage_id = CAST(:lin AS uuid))
+             AND (CAST(:author AS uuid) IS NULL OR c.author_id = CAST(:author AS uuid))
            ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email), c.created_at DESC, c.id DESC
-        ) x WHERE value = 'positive'"""), {"lin": lineage})).mappings().all()
+        ) x WHERE value = 'positive'"""), {"lin": lineage, "author": author})).mappings().all()
     out: dict[str, list[str]] = {}
     for r in rows:
         out.setdefault(r["mode"], [])
@@ -327,7 +352,7 @@ async def draft_spec(m: labelling.Member) -> dict[str, Any]:
     runs.require_taxonomist(m)
     async with db.lab_engine().connect() as conn:
         spec = await approved_spec(conn)
-        modes = await live_modes(conn)
+        modes = await visible_modes(conn, m, await live_modes(conn))
         pos = await _positives(conn)
     rules = [dict(r) for r in (spec or {}).get("rules") or []]
     covered = {r.get("mode_lineage_id") for r in rules}
@@ -380,7 +405,7 @@ async def propose_spec(m: labelling.Member, *, rules: Any, intro: str | None = N
     intro = runs._opt(intro, INTRO_MAX, "intro")
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
-        modes = await live_modes(conn)
+        modes = await visible_modes(conn, m, await live_modes(conn))
         clean = _clean_rules(rules, {md["lineage_id"] for md in modes})
         names = {md["lineage_id"]: md["name"] for md in modes}
         body = render(None, intro, clean, names)
@@ -399,9 +424,11 @@ async def proposals(m: labelling.Member) -> dict[str, Any]:
     """Everything waiting for a person: failure modes and specification versions (platform team and consultant decide),
     and expected answers of the questions the caller may see (curators decide)."""
     labelling.require_active(m)
-    where, p = runs._scope(m, "r")
+    # The questions the caller sees: a Hoistra consultant's own only (runs._scope_q).
+    where, p = runs._scope_q(m)
     async with db.lab_engine().connect() as conn:
         _live, modes = await resolve_modes(conn)
+        _live, modes = await visible_modes(conn, m, _live), await visible_modes(conn, m, modes)
         versions = [v for v in await _versions(conn) if v["status"] == "proposed"]
         spec = await approved_spec(conn)
         rows = (await conn.execute(text(f"""
@@ -428,6 +455,10 @@ async def proposals(m: labelling.Member) -> dict[str, Any]:
                AND NOT EXISTS (SELECT 1 FROM tracelab.lab_label_cells x WHERE x.question_id = c.question_id
                                 AND x.mode_lineage_id = c.mode_lineage_id AND x.source = 'manual')
              ORDER BY c.question_id, c.mode_lineage_id, c.created_at DESC"""), p)).mappings().all()
+    if getattr(m, "own_only", False):
+        # A Hoistra consultant sees only their own marks (23 Nov 2026): the agent's suggested labels and expected
+        # answers waiting in the Loop are not theirs, and a curator decides the expected answers anyway.
+        rows, suggested = [], []
     labels = sorted(({"id": r["id"], "question": runs.question_code(r["run_no"], r["seq_no"]), "question_text": r["question"],
                       "mode": r["lineage"], "mode_name": live_names[r["lineage"]], "at": _iso(r["created_at"])}
                      for r in suggested if r["lineage"] in live_names), key=lambda x: x["at"] or "", reverse=True)
@@ -476,13 +507,13 @@ async def decide(m: labelling.Member, kind: str, subject_id: str, *, decision: s
             if v is None or v["status"] != "proposed":
                 raise NotFound("proposal_not_found", "That specification version is not waiting for a decision.")
             if decision == "approved":
-                live_ids = {md["lineage_id"] for md in await live_modes(conn)}
+                live_ids = {md["lineage_id"] for md in await visible_modes(conn, m, await live_modes(conn))}
                 for r in v["rules"]:
                     if r.get("mode_lineage_id") and r["mode_lineage_id"] not in live_ids and not r.get("mode_retired"):
                         raise Invalid("mode_not_confirmed",
                                       f"{r['code']} names a failure mode that is not confirmed any more.")
         else:
-            where, p = runs._scope(m, "r")
+            where, p = runs._scope_q(m)
             row = (await conn.execute(text(
                 "SELECT e.id::text AS id, e.expected, e.evidence, e.source, e.question_id::text AS question_id "
                 "FROM tracelab.lab_expected_answers e JOIN tracelab.lab_questions q ON q.id = e.question_id "
@@ -533,7 +564,7 @@ async def _add_rule(conn: Any, m: labelling.Member, lineage: str, *, note: str |
     rules = [dict(r) for r in (spec or {}).get("rules") or []]
     if any(r.get("mode_lineage_id") == lineage for r in rules):
         return None
-    modes = await live_modes(conn)
+    modes = await visible_modes(conn, m, await live_modes(conn))
     names = {md["lineage_id"]: md["name"] for md in modes}
     md = next((x for x in modes if x["lineage_id"] == lineage), None)
     if md is None:
@@ -577,10 +608,10 @@ async def decide_label(m: labelling.Member, cell_id: str, *, decision: str) -> d
     if decision not in DECISIONS:
         raise Invalid("bad_decision", "Choose approve or reject.")
     cid = _uuid(cell_id)
-    if cid is None:
+    if cid is None or getattr(m, "own_only", False):     # a consultant is shown no suggestions (proposals)
         raise NotFound("proposal_not_found", "That suggestion is not in Trace Lab.")
     labelling.require_active(m)
-    where, p = runs._scope(m, "r")
+    where, p = runs._scope_q(m)
     async with db.lab_engine().connect() as conn:
         row = (await conn.execute(text(
             "SELECT c.mode_lineage_id::text AS lineage, r.run_no, q.seq_no, c.source, EXISTS (SELECT 1 FROM "
@@ -626,7 +657,7 @@ async def add_correction(m: labelling.Member, *, kind: str, reference: str, mode
         raise Invalid("no_target", "Say which failure mode or rule this change corrects.")
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
-        if lin and not any(md["lineage_id"] == lin for md in await live_modes(conn)):
+        if lin and not any(md["lineage_id"] == lin for md in await visible_modes(conn, m, await live_modes(conn))):
             raise NotFound("mode_not_found", "That failure mode is not confirmed in Trace Lab.")
         if rule and rule not in rule_codes(await approved_spec(conn)):
             raise Invalid("rule_not_found", f"{rule} is not a rule of the approved specification.")
@@ -691,7 +722,7 @@ async def make_regression(m: labelling.Member, lineage_id: str, *, company: str 
         raise Invalid("company_required", "Choose the company whose questions make up the regression run.")
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
-        modes = {md["lineage_id"]: md for md in await live_modes(conn)}
+        modes = {md["lineage_id"]: md for md in await visible_modes(conn, m, await live_modes(conn))}
         if lin not in modes:
             raise NotFound("mode_not_found", "That failure mode is not confirmed in Trace Lab.")
         spec = await approved_spec(conn)
@@ -1016,23 +1047,33 @@ async def overview(m: labelling.Member) -> dict[str, Any]:
     specification, the corrections made for it, and its regression runs with their latest comparison."""
     labelling.require_active(m)
     where, p = runs._scope(m, "r")
+    # The questions shown under each mode: a Hoistra consultant's own only (runs._scope_q).
+    where_q, pq = runs._scope_q(m)
+    own_only = getattr(m, "own_only", False)
     async with db.lab_engine().connect() as conn:
         live, proposed = await resolve_modes(conn)
+        # The caller's modes only (visible_modes): a Hoistra consultant's are theirs alone.
+        live, proposed = await visible_modes(conn, m, live), await visible_modes(conn, m, proposed)
         spec = await approved_spec(conn)
-        pos = await _positives(conn)
+        # A Hoistra consultant: only the positives they set themselves.
+        pos = await _positives(conn, author=m.user_id if own_only else None)
         all_ids = sorted({qid for ids in pos.values() for qid in ids})
         qrows = {r["id"]: dict(r) for r in (await conn.execute(text(
             f"SELECT q.id::text AS id, r.run_no, q.seq_no, q.question, "
             f"coalesce(q.organization_id, r.organization_id)::text AS company, "
             f"EXISTS (SELECT 1 FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id AND {CURRENT_EXPECTED_WHERE}) "
             f"AS has_expected FROM tracelab.lab_questions q JOIN tracelab.lab_runs r ON r.id = q.run_id "
-            f"WHERE q.id = ANY(CAST(:ids AS uuid[])) AND {where}"), {**p, "ids": all_ids})).mappings().all()}
+            f"WHERE q.id = ANY(CAST(:ids AS uuid[])) AND {where_q}"), {**pq, "ids": all_ids})).mappings().all()}
+        if own_only:
+            # Their positives count only on the questions they asked, as everything else they see.
+            pos = {lin: [qid for qid in ids if qid in qrows] for lin, ids in pos.items()}
         # Each question's current expected answer, so the Loop page can open it for editing (10 Nov 2026: once saved
-        # it could only be read from the question page, as raw JSON).
+        # it could only be read from the question page, as raw JSON). A consultant's: their own or the agent's draft.
         current = {r["question_id"]: dict(r) for r in (await conn.execute(text(
             "SELECT DISTINCT ON (e.question_id) e.question_id::text AS question_id, e.expected, e.evidence "
-            f"FROM tracelab.lab_expected_answers e WHERE e.question_id = ANY(CAST(:ids AS uuid[])) AND {CURRENT_EXPECTED_WHERE} "
-            "ORDER BY e.question_id, e.created_at DESC, e.id DESC"), {"ids": list(qrows)})).mappings().all()}
+            f"FROM tracelab.lab_expected_answers e WHERE e.question_id = ANY(CAST(:ids AS uuid[])) AND {CURRENT_EXPECTED_WHERE}"
+            f"{runs.mine_expected_sql(m)} ORDER BY e.question_id, e.created_at DESC, e.id DESC"),
+            {**runs.mine_params(m), "ids": list(qrows)})).mappings().all()}
         corr = (await conn.execute(text(
             "SELECT mode_lineage_id::text AS mode, spec_rule, count(*) AS n, max(created_at) AS last "
             "FROM tracelab.lab_corrections GROUP BY 1, 2"))).mappings().all()

@@ -14,10 +14,10 @@ const ADMIN = { id: 'u2', role: 'admin', access_role: null, pages: null };
 const role = (pages, key) => ({ id: 'u3', role: 'user', access_role: key || 'compliance_officer', pages });
 const OFFICER = role(['compliance', 'buildings']);
 
-test('the four roles and the six pages are exactly these, in this order', () => {
+test('the five roles and the six pages are exactly these, in this order', () => {
   assert.deepEqual(A.ACCESS_ROLES.map((r) => [r.key, r.label]), [
     ['portfolio_management', 'Portfolio Management'], ['property_manager', 'Property Manager'],
-    ['general_user', 'General User'], ['compliance_officer', 'Compliance Officer']]);
+    ['general_user', 'General User'], ['compliance_officer', 'Compliance Officer'], ['consultant', 'Consultant']]);
   assert.deepEqual(A.PAGE_OPTIONS.map((p) => [p.key, p.label, p.hint || '']), [
     ['buildings', 'Buildings', ''], ['compliance', 'Compliance', ''], ['energy', 'Energy', ''],
     ['vendors', 'Vendors', 'Vendor performance'], ['ops', 'Maintenance', 'Vendor operations'],

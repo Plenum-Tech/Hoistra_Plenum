@@ -25,16 +25,41 @@ from __future__ import annotations
 
 import csv
 import io
+from dataclasses import dataclass
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from . import db, learning, scenario_run, scenario_store, scenarios
+from src.services.principal import Principal
+
+from . import auth, db, labelling, learning, scenario_run, scenario_store, scenarios
 from .routes_golden import reader
 from .routes_conversations import Reviewer, reviewer
 
 router = APIRouter(tags=["Trace Lab scenarios"])
+
+
+@dataclass(frozen=True)
+class Learner:
+    """Who reads the Learning draft and what it is drawn from: the company's reviews for a reviewer (a company admin,
+    or a superadmin acting for the company); for a Hoistra consultant (23 Nov 2026) only the reviews of the questions
+    they asked and the sessions they ran (`own_uid`)."""
+    org: str
+    own_uid: str | None = None
+
+
+async def _learner_scope(organization_id: str | None = Query(None, max_length=64),
+                         principal: Principal = auth.caller) -> Learner:
+    if labelling.is_hoistra_consultant(principal):
+        m = await labelling.access(principal, organization_id)
+        return Learner(m.org, m.user_id)
+    return Learner(auth.require_reviewer(principal, organization_id))
+
+
+async def learner(who: Learner = Depends(_learner_scope), _ready: Any = Depends(db.require_ready)) -> Learner:
+    """Checked before readiness, as `reviewer` is, so a stranger learns nothing about Trace Lab's state."""
+    return who
 
 #: The golden-set upload's own header. The generator fills what it can and leaves the rest.
 CSV_HEADER = ("id", "question", "expected_answer", "evaluation", "page_context", "notes")
@@ -163,7 +188,7 @@ async def run_scenarios(request: Request, body: RunRequest,
 
 
 @router.get("/learning/draft")
-async def learning_draft(run: str | None = None, who: Reviewer = Depends(reviewer)) -> dict[str, Any]:
+async def learning_draft(run: str | None = None, who: Learner = Depends(learner)) -> dict[str, Any]:
     """What reviewers have left, drafted into markdown with its evidence.
 
     It applies nothing. The documents the agents read live in plenum_cafm, which this service may
@@ -172,7 +197,7 @@ async def learning_draft(run: str | None = None, who: Reviewer = Depends(reviewe
     opinion, and a loop that taught the agents straight from opinions would drift with whoever
     reviewed last.
     """
-    found = await learning.gather(who.org, run_code=run)
+    found = await learning.gather(who.org, run_code=run, own_uid=who.own_uid)
     return {"ok": True, "counts": found["counts"], "markdown": learning.draft(found),
             # Grouped by the skill document each note is probably about, because that is the unit
             # a skill document is edited in and the unit the Skill lab takes a proposal in. The
@@ -184,9 +209,9 @@ async def learning_draft(run: str | None = None, who: Reviewer = Depends(reviewe
 
 
 @router.get("/learning/draft.md")
-async def learning_draft_file(run: str | None = None, who: Reviewer = Depends(reviewer)) -> Response:
+async def learning_draft_file(run: str | None = None, who: Learner = Depends(learner)) -> Response:
     """The same draft as a file, so it can be opened beside the skill document it is about."""
-    found = await learning.gather(who.org, run_code=run)
+    found = await learning.gather(who.org, run_code=run, own_uid=who.own_uid)
     return Response(content=learning.draft(found), media_type="text/markdown",
                     headers={"Content-Disposition": 'attachment; filename="what-the-reviews-say.md"'})
 

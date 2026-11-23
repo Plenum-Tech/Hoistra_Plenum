@@ -92,6 +92,15 @@ def window_words(w: str) -> str:
 
 
 _VENDOR = re.compile(r"\b(?:vendors?|contractors?|suppliers?)\b")
+# A building "at risk" (23 Nov 2026, R67-12 "Which buildings put me at risk this month?"): the planner read it as
+# certificates that EXPIRE this month and found none, while the buildings at risk are the ones holding a lapsed
+# certificate - lapsed in Hoistra's own sense (the `lapsed` state: status Expired / Lapsed / Overdue, or past its expiry
+# date), whenever it lapsed. That is what the compliance agent answered from, so the key reads exactly that.
+# The building's own certificates only: a vendor's accreditation or insurance (cert_scope Vendor) is filed against a
+# building it works at, but it is the vendor's risk (Bishopsgate Tower, 23 Nov 2026: 4 lapsed of its own - FRA, fire
+# alarm, LOLER, F-Gas, as Hoistra answered - beside 14 lapsed vendor certificates). An unset scope stays: older rows.
+_NOT_VENDORS = {"attribute": "cert_scope", "op": "not_in", "value": ["Vendor"]}
+_RISK = re.compile(r"\bat[\s-]risk\b|\brisk(?:s|y)?\b|\bexposed\b|\bexposure\b|\bnon[\s-]?complian|\bout of compliance\b")
 _BLOCKED = re.compile(r"\bblocked\b|\bnot eligible\b|\bineligible\b|\bcan(?:no|')t work\b|\bsuspended\b|\bnot allowed\b")
 _PLACE = re.compile(r"\b(?:at|in|for)\s+(?:the\s+)?([A-Za-z0-9][\w&'.\- ]*?)\s*(?:[?.!,]|$|\bright now\b|\btoday\b|\bthis\b)")
 _NOT_A_PLACE = re.compile(r"^(?:next|last|past|coming|this|today|now|renewal|my|all|each|every|it|them|total|"
@@ -204,12 +213,24 @@ KEYS: dict[str, Key] = {
                    "include": [], "aggregate": None},
         _listed(lambda p: "Certificates expiring " + window_words(p["window"])
                 + (" at " + p["building"] if p.get("building") else ""), _cert_item)),
+    "buildings_at_risk": Key(
+        "buildings_at_risk", "Buildings at risk: lapsed certificates by building",
+        lambda p: {"question_type": "count",
+                   "focus": dict(_node("ComplianceCertificate", None, ["lapsed"]), filters=[_NOT_VENDORS]),
+                   "constraints": [_node("Building", via=True)], "include": [],
+                   "aggregate": {"count_by": [{"concept": "Building", "attribute": "name"}]}},
+        _grouped),
     "vendors_blocked": Key(
         "vendors_blocked", "Blocked vendors",
         lambda p: {"question_type": "list", "focus": _node("Vendor", None, ["blocked"]), "constraints": [],
                    "include": [], "aggregate": None},
         _listed(lambda p: "Blocked vendors", _vendor_item)),
 }
+
+
+#: Keys whose plan changed before drafts kept the plan they were read with (auto_expected._stale_key): their drafts are
+#: read again once. buildings_at_risk, 23 Nov 2026: a vendor's certificate is no longer counted as the building's.
+REVISED_KEYS = frozenset({"buildings_at_risk"})
 
 
 def match(question: str | None) -> tuple[Key, dict] | None:
@@ -220,6 +241,8 @@ def match(question: str | None) -> tuple[Key, dict] | None:
         return None
     if _VENDOR.search(q) and _BLOCKED.search(q) and not _WO.search(q):
         return KEYS["vendors_blocked"], {}
+    if _WHICH_BUILDING.search(q) and _RISK.search(q) and not _WO.search(q):
+        return KEYS["buildings_at_risk"], {}
     if _WO.search(q):
         states = ["open", "overdue"] if _DELAYED.search(q) else ["open"]
         if _WHICH_BUILDING.search(q) and _MOST.search(q):
@@ -241,6 +264,8 @@ def match(question: str | None) -> tuple[Key, dict] | None:
 
 def sentence(key: Key, params: dict, facts: list) -> str:
     """The expected answer in one line, from the values."""
+    if key.id == "buildings_at_risk":
+        return _at_risk_sentence(facts)
     if not facts:
         return "Nothing was found in the records."
     if key.id == "wo_most_by_building":
@@ -275,6 +300,21 @@ def sentence(key: Key, params: dict, facts: list) -> str:
         head = f"{total} {one} {'is' if total == 1 else 'are'} {state}{where}"
     more = "" if total <= len(items) else f", and {total - len(items)} more"
     return head + (": " + ", ".join(items) + more if items else "") + "."
+
+
+def _at_risk_sentence(facts: list) -> str:
+    """Buildings at risk, each with how many lapsed certificates it holds, most first."""
+    if not facts:
+        return "No building holds a lapsed certificate."
+
+    def one(f: dict) -> str:
+        n = int(f["value"])
+        return f"{f['label']} ({n} lapsed certificate{'' if n == 1 else 's'})"
+    if len(facts) == 1:
+        return f"1 building is at risk: {one(facts[0])}."
+    more = len(facts) - ITEMS_SHOWN if len(facts) > ITEMS_SHOWN else 0
+    return (f"{len(facts)} buildings are at risk: " + ", ".join(one(f) for f in facts[:ITEMS_SHOWN])
+            + (f", and {more} more" if more else "") + ".")
 
 
 # ── reading it ────────────────────────────────────────────────────────────────────────────────────────────────────

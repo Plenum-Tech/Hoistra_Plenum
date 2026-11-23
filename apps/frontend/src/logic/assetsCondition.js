@@ -796,9 +796,13 @@ export const assetsConditionMethods = {
       && cf.band === BAND_OF[f] ? new Set(cf.ids) : null;
     const serverFiltered = !!fromServer;
 
+    // The assets the "Est. asset value at risk" card sums (23 Nov 2026: every card opens what it counts): the value
+    // read lists only the contributing ones, those with a value at risk above nothing.
+    const atRisk = new Set(((s.asVar && s.asVar.assets) || []).filter((r) => r && r.asset_id).map((r) => String(r.asset_id)));
     const localShown = (x) => f === 'Threat' ? x.cond === 'threat'
       : f === 'Watch' ? x.cond === 'watch'
       : f === 'In control' ? x.cond === 'ok'
+      : f === 'Value at risk' ? atRisk.has(String(x.a && x.a.asset_id))
       : f === 'Not scored' ? x.unscored
       : f === 'Open work order' ? woCount(x.a) > 0
       : true;

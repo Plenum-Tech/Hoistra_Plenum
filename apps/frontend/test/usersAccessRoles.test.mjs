@@ -53,9 +53,9 @@ beforeEach(() => {
 });
 
 // ── inviting ────────────────────────────────────────────────────────────────────────────
-test('the invite form offers No role and the four roles, with No role chosen', () => {
+test('the invite form offers No role and the five roles, with No role chosen', () => {
   const v = form(page());
-  assert.deepEqual(v.usRoleChips.map((c) => c.label), ['No role — normal user', 'Portfolio Management', 'Property Manager', 'General User', 'Compliance Officer']);
+  assert.deepEqual(v.usRoleChips.map((c) => c.label), ['No role — normal user', 'Portfolio Management', 'Property Manager', 'General User', 'Compliance Officer', 'Consultant']);
   assert.deepEqual(on(v.usRoleChips), ['No role — normal user']);
   assert.equal(v.usRoleOn, false);
   assert.equal(v.usSendOff, false);
@@ -203,4 +203,68 @@ test('a refused change is put back and the server\'s reason is shown', async () 
   await settle();
   assert.deepEqual(on(person(x).pageChips), ['Energy']);
   assert.ok(x.flashes.some((m) => m.indexOf('Roles are not available on this installation yet.') > -1));
+});
+
+
+// ── the consultant (23 Nov 2026) ────────────────────────────────────────────────────────
+test('picking Consultant in the invite form shows Buildings ticked and fixed, and says what it means', () => {
+  const x = page();
+  chip(form(x).usRoleChips, 'Consultant').pick();
+  const v = form(x);
+  // every page is offered (23 Nov 2026): Buildings ticked and fixed, the other five tick boxes
+  assert.equal(v.usPageChips.length, 6);
+  assert.deepEqual(on(v.usPageChips), ['Buildings']);
+  assert.equal(chip(v.usPageChips, 'Buildings').fixed, true);
+  assert.equal(v.usPageChips.filter((c) => c.fixed).length, 1);
+  chip(v.usPageChips, 'Buildings').pick();          // fixed: pressing it changes nothing
+  assert.deepEqual(on(form(x).usPageChips), ['Buildings']);
+  chip(form(x).usPageChips, 'Vendors').pick();
+  assert.deepEqual(on(form(x).usPageChips), ['Buildings', 'Vendors']);
+  assert.equal(v.usSendOff, false);
+  assert.match(v.usRoleNote, /always opens the Buildings page, and any other page ticked here/);
+  assert.match(v.usRoleNote, /every module's data/);
+  assert.match(v.usRoleNote, /Trace Lab/);
+});
+
+test('inviting a consultant sends the role with Buildings and the buildings chosen', async () => {
+  const x = page();
+  x.setState({ usName: 'Cara Mensah', usEmail: 'cara@example.com', usBlds: ['Harbour Point'] });
+  chip(form(x).usRoleChips, 'Consultant').pick();
+  form(x).usSend();
+  await settle();
+  assert.equal(sent.invite.length, 1);
+  assert.equal(sent.invite[0].access_role, 'consultant');
+  assert.deepEqual(sent.invite[0].pages, ['buildings']);
+  assert.deepEqual(sent.invite[0].building_ids, [B1]);
+});
+
+test('making a row a consultant saves at once, with Buildings', async () => {
+  const x = page([row({ accessRole: 'compliance_officer', accessRoleLabel: 'Compliance Officer', pages: ['compliance'] })]);
+  chip(person(x).roleChips, 'Consultant').pick();
+  await settle();
+  assert.deepEqual(sent.patch, [[U1, { access_role: 'consultant', pages: ['buildings'] }]]);
+  const u = person(x);
+  assert.equal(u.roleTag, 'Consultant');
+  assert.deepEqual(on(u.pageChips), ['Buildings']);
+  assert.match(u.accessNote, /always opens the Buildings page/);
+  assert.ok(x.flashes.some((f) => /now a consultant/.test(f)), x.flashes.join(' | '));
+});
+
+test('ticking a page for a consultant saves it beside Buildings, and their data stays every page', async () => {
+  const x = page([row({ accessRole: 'consultant', accessRoleLabel: 'Consultant', pages: null, screens: ['buildings'] })]);
+  x.setState({ usOpen: U1 });
+  chip(person(x).pageChips, 'Vendors').pick();
+  await settle();
+  assert.deepEqual(sent.patch, [[U1, { access_role: 'consultant', pages: ['buildings', 'vendors'] }]]);
+  const u = person(x);
+  assert.deepEqual(on(u.pageChips), ['Buildings', 'Vendors']);
+  chip(u.pageChips, 'Buildings').pick();            // fixed: never unticked
+  await settle();
+  assert.equal(sent.patch.length, 1);
+});
+
+test('a consultant row tells Trace Lab who the person is', () => {
+  const x = page([row({ accessRole: 'consultant', accessRoleLabel: 'Consultant', pages: null })]);
+  x.setState({ usOpen: U1 });
+  assert.equal(person(x).labUser.accessRole, 'consultant');
 });

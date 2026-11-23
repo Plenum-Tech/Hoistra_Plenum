@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -35,15 +35,16 @@ from .review_errors import ReviewError, http_error_for
 router = APIRouter(tags=["Trace Lab step labelling"])
 
 
-async def _member(organization_id: str | None = Query(None, max_length=64), principal: Principal = auth.caller,
-                  _ready: Any = Depends(db.require_ready)) -> labelling.Member:
-    return await labelling.access(principal, organization_id)
+async def _member(request: Request, organization_id: str | None = Query(None, max_length=64),
+                  principal: Principal = auth.caller, _ready: Any = Depends(db.require_ready)) -> labelling.Member:
+    # A Hoistra consultant reaches only the routes for their own sessions (labelling.require_route).
+    return labelling.require_route(await labelling.access(principal, organization_id), request)
 
 
-async def _any_company(organization_id: str | None = Query(None, max_length=64), principal: Principal = auth.caller,
-                       _ready: Any = Depends(db.require_ready)) -> labelling.Member:
+async def _any_company(request: Request, organization_id: str | None = Query(None, max_length=64),
+                       principal: Principal = auth.caller, _ready: Any = Depends(db.require_ready)) -> labelling.Member:
     """The notes lists: the platform team and a consultant read every company's notes without naming one."""
-    return await labelling.access(principal, organization_id, all_companies_ok=True)
+    return labelling.require_route(await labelling.access(principal, organization_id, all_companies_ok=True), request)
 
 
 async def _call(coro):

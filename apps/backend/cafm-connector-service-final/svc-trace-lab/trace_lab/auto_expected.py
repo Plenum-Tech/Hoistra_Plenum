@@ -82,6 +82,11 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["expecte
 #: Why a SPEC.md draft holds no values, when the reason passes and the values are read again later (BACKOFF): Hoistra's map
 #: of the records is not built, the planner or the read failed, the turn's trace is not filed yet. Any other reason stays.
 RETRY_REASONS = ("no_map", "planner_unavailable", "read_failed", "no_trace")
+#: Stamped (`records_gate`) on every SPEC.md draft with no values tried since a stage that reads records itself counts
+#: as reading them (records_queries.reads_records, 23 Nov 2026). A draft with no values tried before it has no stamp and
+#: is read again once, at once (_due): the compliance agent's questions were all filed "not_about_records" and never
+#: got their values, and a try that met no map of the records (no_map) had gone on to wait hours.
+RECORDS_GATE = "stages"
 #: How long a read waits before it is tried again, by how many tries it has had: 30 minutes, 2 hours, 8 hours. After
 #: the last, a draft is not read again (the round runs every minute, each read loads the records' catalogue, and a
 #: proposal is a model call).
@@ -130,11 +135,42 @@ _OUTDATED_BY_SPEC = ("((e.evidence->>'drafted_from' IN ('SPEC.md', 'answer_key',
                      " AND (COALESCE(e.evidence->>'draft', '1') <> :dv OR (e.evidence->>'drafted_from' = 'SPEC.md'"
                      " AND COALESCE(e.evidence->>'spec_version', '') <> :sv))"
                      f" AND (e.evidence->>'drafted_from' = 'SPEC.md' OR {_TRIES} < :cap)) OR {_OLD_WORDING})")
-# An untouched, current SPEC.md draft that holds no values for a passing reason, with tries left: read again.
+# An untouched, current SPEC.md draft that holds no values for a passing reason, with tries left: read again. So is,
+# once, one filed "not_about_records" before a stage that reads records counted (RECORDS_GATE, 23 Nov 2026).
 _RETRY_DRAFTS = ("e.evidence->>'drafted_from' = 'SPEC.md'"
-                 " AND e.evidence->>'no_query' IN ('" + "', '".join(RETRY_REASONS) + "')"
+                 " AND (e.evidence->>'no_query' IN ('" + "', '".join(RETRY_REASONS) + "')"
+                 " OR (e.evidence->>'no_query' = 'not_about_records' AND e.evidence->>'records_gate' IS NULL))"
                  f" AND {_TRIES} < :cap")
 assert _OUTDATED_BY_SPEC.count(":dv") == 1 and _OUTDATED_BY_VERSION.count(":dv") == 1
+# An untouched values draft read from a query the planner PROPOSED, or from a key of the answer key: read again when
+# its question now has a key (a proposal is a guess, the key a person's: 23 Nov 2026, R67-12's proposal counted
+# certificates expiring this month, 0, where a lapsed one makes a building at risk), or when its key's plan has changed
+# since (_stale_key, checked in Python).
+_PROPOSED_VALUES = ("e.evidence->>'drafted_from' = 'records'"
+                    " AND e.evidence->'queries'->0->>'source' IN ('proposed', 'answer_key')"
+                    f" AND {_TRIES} < :cap")
+
+
+def _plan_text(plan: Any) -> str:
+    return json.dumps(answer_key.jsonable(plan), sort_keys=True)
+
+
+def _stale_key(q: Any) -> bool:
+    """Whether a values draft (from a proposal or a key) is to be read again with its question's key as it is now: one
+    from a proposal whose question has a key; one from a key whose plan is not the key's plan now (`key_plan`, stored
+    since 23 Nov 2026; a draft from before it is stale only when its key is in answer_key.REVISED_KEYS)."""
+    got = answer_key.match(q["question"]) if answer_key.enabled() else None
+    if got is None:
+        return False
+    key, params = got
+    first = ((_evidence_of(q).get("queries") or [{}])[0]) or {}
+    if first.get("source") == "proposed":
+        return True
+    if first.get("source") != "answer_key":
+        return False
+    if "key_plan" in first:
+        return _plan_text(first["key_plan"]) != _plan_text(key.plan(params))
+    return key.id in answer_key.REVISED_KEYS
 
 
 async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
@@ -172,11 +208,15 @@ async def draft_for_live(org: str | None = None, *, now: datetime | None = None,
             dict(page, dv=str(DRAFT_VERSION), wv=str(WORDING), **({"sv": str(spec.get("version"))} if spec is not None else {})))
         ).mappings().all()
         again = (await conn.execute(text(_UNTOUCHED.format(where=where, draft=_RETRY_DRAFTS)), page)).mappings().all()
+        rekey = [q for q in (await conn.execute(text(_UNTOUCHED.format(where=where, draft=_PROPOSED_VALUES)),
+                                                page)).mappings().all()
+                 if _stale_key(q)]
     codes = loop.rule_codes(spec) if spec else set()
     tally = {"drafted": 0, "failed": 0, "keyed": 0, "redrafted": 0, "replaced": 0}
     # The newest questions first, new, out of date or to be read again (18 Nov 2026): a draft on what people just asked is
     # not left behind a backlog of older questions. A question in more than one list is worked once.
-    cands: dict[str, tuple[Any, str]] = {q["id"]: (q, "retry") for q in again}
+    cands: dict[str, tuple[Any, str]] = {q["id"]: (q, "retry") for q in rekey}
+    cands.update({q["id"]: (q, "retry") for q in again})
     cands.update({q["id"]: (q, "redraft") for q in outdated})
     cands.update({q["id"]: (q, "new") for q in todo})
     # A question held out of the round (_held) takes no slot of it.
@@ -217,8 +257,12 @@ def _evidence_of(q: Any) -> dict[str, Any]:
 
 def _due(q: Any, now: datetime) -> bool:
     """Whether a draft that could not be read is read again now: it has had fewer than len(BACKOFF) tries, and BACKOFF of
-    them has passed since the last (a draft never tried is due at once)."""
+    them has passed since the last (a draft never tried is due at once). A SPEC.md draft with no values that was last
+    tried before RECORDS_GATE (no stamp) is due at once, whatever its tries: once, since that try stamps it."""
     ev = _evidence_of(q)
+    if (ev.get("drafted_from") == "SPEC.md" and ev.get("no_query") in RETRY_REASONS + ("not_about_records",)
+            and not ev.get("records_gate")):
+        return True
     try:
         tries = int(ev.get("tries") or 0)
     except (TypeError, ValueError):
@@ -246,6 +290,8 @@ async def _note_try(q: Any, reason: str | None, now: datetime) -> bool:
     ev.update(tries=tries, last_tried=now.isoformat(), replaced_draft=q["draft_id"])
     if ev.get("drafted_from") == "SPEC.md" and reason:
         ev["no_query"] = reason
+    if ev.get("drafted_from") == "SPEC.md":
+        ev["records_gate"] = RECORDS_GATE        # tried with stages counted: from here on the usual backoff
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": runs.SYNC_LOCK})
@@ -294,6 +340,7 @@ async def _draft_one(q: Any, kind: str, spec: dict[str, Any] | None, codes: set[
                     "draft": DRAFT_VERSION}
         if got.get("reason"):
             evidence["no_query"] = got["reason"]
+            evidence["records_gate"] = RECORDS_GATE
             if got["reason"] in RETRY_REASONS:
                 evidence.update(tries=0, last_tried=now.isoformat())    # read again after BACKOFF[0]
     if replaces is not None:
@@ -477,7 +524,7 @@ async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, 
         return _none("read_failed", qid, now)
     # Only a planner call spends the budget: a question that is not about records, or has a query already, does not.
     if propose and (any(x["source"] == "proposed" for x in got["queries"]) or got["none"] == "planner_unavailable"
-                    or (got["none"] == "not_about_records" and records_queries.data_tools(nodes))):
+                    or (got["none"] == "not_about_records" and records_queries.reads_records(nodes))):
         rnd["proposals"] -= 1
     queries = [x for x in got["queries"] if x["source"] != "answer_key" or answer_key.enabled()]
     if queries and not ctx["filed"] and not any(x["source"] == "hoistra" for x in queries):
@@ -491,7 +538,7 @@ async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, 
                 reason = "no_question"
             elif not propose:
                 # The budget for a proposal is used: a question the planner would be asked about waits for the next round.
-                if not (nodes and not records_queries.data_tools(nodes)):
+                if not (nodes and not records_queries.reads_records(nodes)):
                     return {"state": "wait"}
                 reason = "not_about_records"
         if reason == "not_about_records" and _called_records(nodes):
@@ -526,6 +573,8 @@ async def _read_values(q: Any, now: datetime, rnd: dict[str, Any]) -> dict[str, 
             recorded = records_queries.recorded_sql(nodes, item.get("tool_id")) if item.get("tool_id") else []
             blocks.append({
                 "source": item["source"], "question": ask, "plan": plan, "found": bool(run.get("found")),
+                # The key's own plan, as written: a later change to the key reads the draft again (_stale_key).
+                **({"key_plan": item["plan"]} if item["source"] == "answer_key" else {}),
                 "unresolved": list(run.get("unresolved") or []), "notes": list(run.get("notes") or []), "facts": facts,
                 "receipts": list(run.get("receipts") or []), "read_at": run.get("read_at"),
                 "sentence": records_values.sentence_of(onto, plan, run, facts),

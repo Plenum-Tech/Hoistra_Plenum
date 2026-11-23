@@ -9,16 +9,28 @@
 //
 //   normal user   role 'user', no access role   → every page (pages null), picks an instance
 //   role user     role 'user', an access role   → only the ticked pages, no instance picker
+//   consultant    role 'user', role consultant  → every page of DATA (pages null), one SCREEN:
+//                                                  Buildings (screens), no instance picker
 //   admin, superadmin                            → every page, whatever the record says
 //
-// A role is a label. It ticks nothing by itself.
+// A role is a label. It ticks nothing by itself - except Consultant (23 Nov 2026, Hussain:
+// "access to buildings page only but u can access the entire data of the platform"), whose
+// screens come with the role. A consultant's chat, sessions and reports read every module for
+// their buildings, so everything here that guards DATA (pagesOf, holdsPage, the loaders, the
+// requests, the buttons) lets them through, and only what decides which page VIEW they stand
+// on (screensOf, viewOffLimits, the navigator in instances.js) holds them to Buildings.
 
 export const ACCESS_ROLES = [
   { key: 'portfolio_management', label: 'Portfolio Management' },
   { key: 'property_manager', label: 'Property Manager' },
   { key: 'general_user', label: 'General User' },
-  { key: 'compliance_officer', label: 'Compliance Officer' }
+  { key: 'compliance_officer', label: 'Compliance Officer' },
+  { key: 'consultant', label: 'Consultant' }
 ];
+
+// The consultant role, and the page it always opens on screen; an administrator may tick more.
+export const CONSULTANT = 'consultant';
+export const CONSULTANT_SCREENS = ['buildings'];
 
 // The pages that can be ticked, named as the navigator names them. Where the space of the
 // same page has another name, it is the hint.
@@ -50,11 +62,31 @@ export function isRoleUser(account) {
   return !!(account && account.role === 'user' && (account.access_role || Array.isArray(account.pages)));
 }
 
+// A consultant: a plain user given the Consultant role. An admin is never one.
+export function isConsultant(account) {
+  return !!(account && account.role === 'user' && String(account.access_role || '').trim().toLowerCase() === CONSULTANT);
+}
+
 // The pages this account holds: null for every page, a list for a role user. Reading fails
 // closed: a role with nothing readable behind it holds nothing; it is never read as every page.
+// A consultant's data is every page's (the server sends pages null for them).
 export function pagesOf(account) {
-  if (!isRoleUser(account)) return null;
+  if (!isRoleUser(account) || isConsultant(account)) return null;
   return cleanPages(account.pages);
+}
+
+// The page views this account may stand on: null for every page. A consultant: Buildings,
+// whatever a screens field says (the role decides); a role user: their pages.
+export function screensOf(account) {
+  // A consultant: Buildings always, and the pages an administrator ticked for them (the server's
+  // screens field), 23 Nov 2026 - their data is every page's whatever is ticked.
+  if (isConsultant(account)) return consultantScreens(account.screens);
+  return pagesOf(account);
+}
+
+// A consultant's screens from what was ticked: Buildings always, known pages only, in page order.
+export function consultantScreens(ticked) {
+  return cleanPages(CONSULTANT_SCREENS.concat(Array.isArray(ticked) ? ticked : []));
 }
 
 // Whether the account's pages have been read yet. A plain user's are not known between the
@@ -130,7 +162,8 @@ export function viewOffLimits(account, view, module, spaceKey) {
   if (!isRoleUser(account)) return false;
   if (view === 'instances') return true;
   const page = view === 'space' ? (SPACE_PAGE[spaceKey] || null) : viewPage(view, module);
-  return !!page && !holdsPage(account, page);
+  const screens = screensOf(account);
+  return !!page && !!screens && screens.indexOf(page) < 0;
 }
 
 // ── loaders ───────────────────────────────────────────────────────────────────────────

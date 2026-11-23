@@ -119,7 +119,10 @@ async def _with_pages(session: AsyncSession, out: Any) -> Any:
         user = out.get("user") if isinstance(out, dict) else None
         if isinstance(user, dict) and user.get("id"):
             role, held = await page_engine.for_user(session, user["id"], user.get("role"))
-            user.update(page_engine.public_fields(role, held))
+            # A consultant's screens are read from the pages ticked for them (pages.screens).
+            stored = (await page_engine.stored_pages(session, user["id"])
+                      if role == page_engine.CONSULTANT else None)
+            user.update(page_engine.public_fields(role, held, stored))
     except Exception as exc:  # noqa: BLE001
         log.warning("auth.signin_pages_unread", error=str(exc)[:200])
     return out
@@ -227,7 +230,8 @@ async def refresh(
         "ok": True,
         # The pages as the principal just read them, so a refresh keeps the client current.
         "user": {**acc.public_user(row),
-                 **page_engine.public_fields(principal.access_role, principal.pages)},
+                 **page_engine.public_fields(principal.access_role, principal.pages,
+                                             principal.screens)},
         "tokens": {
             "access_token": pair.access_token, "refresh_token": pair.refresh_token,
             "token_type": pair.token_type, "expires_in": pair.expires_in,
@@ -341,6 +345,9 @@ async def me(
         None if principal.pages is None
         else [p for p in page_engine.PAGES if p in principal.pages]
     )
+    # The pages the client shows. The same as pages, except for a consultant: Buildings on
+    # screen, every page of data (engines/auth/pages.py).
+    user["screens"] = page_engine.screens(principal.access_role, principal.pages, principal.screens)
     user["access_narrowed_at"] = (
         principal.access_narrowed_at.isoformat() if principal.access_narrowed_at else None)
     # The building they are working in now, if they have chosen one. A client shows this as

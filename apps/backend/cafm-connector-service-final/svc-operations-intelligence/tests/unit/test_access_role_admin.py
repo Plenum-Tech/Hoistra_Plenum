@@ -396,3 +396,70 @@ def test_delete_before_the_migration_names_no_access_column():
     assert r.status_code == 200, r.text
     scrub = [sql for sql, _ in s.calls if "SET status = 'deleted'" in sql][0]
     assert "access_role" not in scrub
+
+
+# ── the consultant (23 Nov 2026) ───────────────────────────────────────────────
+
+def test_invite_a_consultant_stores_buildings_only(invited):
+    r = client_with(ScriptedSession([(COLUMNS, ALL_THREE)])).post(
+        "/api/admin/users/invite", json={**INVITE, "access_role": "consultant", "pages": ["buildings"]})
+    assert r.status_code == 201, r.text
+    assert invited["create"]["access_role"] == "consultant"
+    assert invited["create"]["pages"] == ["buildings"]
+
+
+def test_invite_a_consultant_with_no_tick_is_accepted(invited):
+    r = client_with(ScriptedSession([(COLUMNS, ALL_THREE)])).post(
+        "/api/admin/users/invite", json={**INVITE, "access_role": "consultant"})
+    assert r.status_code == 201, r.text
+    assert invited["create"]["pages"] == ["buildings"]
+
+
+def test_invite_a_consultant_with_more_pages_to_open_keeps_buildings(invited):
+    # 23 Nov 2026, Hussain: Buildings by default, with tick boxes for the other pages.
+    r = client_with(ScriptedSession([(COLUMNS, ALL_THREE)])).post(
+        "/api/admin/users/invite", json={**INVITE, "access_role": "consultant", "pages": ["vendors", "compliance"]})
+    assert r.status_code == 201, r.text
+    assert invited["create"]["pages"] == ["buildings", "compliance", "vendors"]
+
+
+def test_invite_a_consultant_with_an_unknown_page_is_refused(invited):
+    r = client_with(ScriptedSession([(COLUMNS, ALL_THREE)])).post(
+        "/api/admin/users/invite", json={**INVITE, "access_role": "consultant", "pages": ["payroll"]})
+    assert r.status_code == 400, r.text
+    assert detail(r)["reason"] == "unknown_page"
+    assert "create" not in invited
+
+
+def test_ticking_a_page_for_a_consultant_hides_no_history():
+    s = patch_session()
+    r = patch(s, {"access_role": "consultant", "pages": ["buildings", "energy"]})
+    assert r.status_code == 200, r.text
+    sql, params = user_update(s)
+    assert params["ar"] == "consultant" and params["ap"] == ["buildings", "energy"]
+    assert "access_narrowed_at" not in sql
+
+
+def test_patch_a_normal_user_to_consultant_hides_no_history():
+    s = patch_session()
+    r = patch(s, {"access_role": "consultant", "pages": ["buildings"]})
+    assert r.status_code == 200, r.text
+    sql, params = user_update(s)
+    assert params["ar"] == "consultant" and params["ap"] == ["buildings"]
+    assert "access_narrowed_at" not in sql
+
+
+def test_patch_role_only_to_consultant_does_not_carry_the_old_ticks():
+    s = patch_session({"access_role": "compliance_officer", "allowed_pages": ["compliance", "buildings"]})
+    r = patch(s, {"access_role": "consultant"})
+    assert r.status_code == 200, r.text
+    _, params = user_update(s)
+    assert params["ar"] == "consultant" and params["ap"] == ["buildings"]
+
+
+def test_patch_a_consultant_to_an_ordinary_role_stamps_narrowed_at():
+    s = patch_session({"access_role": "consultant", "allowed_pages": ["buildings"]})
+    r = patch(s, {"access_role": "general_user", "pages": ["buildings"]})
+    assert r.status_code == 200, r.text
+    sql, _ = user_update(s)
+    assert "access_narrowed_at = now()" in sql

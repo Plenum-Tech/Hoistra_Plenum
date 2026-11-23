@@ -225,7 +225,9 @@ export function LabelsMatrix({ run, all, data, me, loading, error, saving, onCel
   const [asking, setAsking] = React.useState(null);    // the column whose retirement is being confirmed
   const [modeBusy, setModeBusy] = React.useState(false);
   const [modeError, setModeError] = React.useState('');
-  const canEdit = !!(me && me.all_companies);
+  // A Hoistra consultant (own_only, 23 Nov 2026) adds and edits their own failure modes, which only they see.
+  const canEdit = !!(me && (me.all_companies || me.own_only));
+  const own = !!(me && me.own_only);
 
   if (!run && !all) {
     return (
@@ -307,7 +309,9 @@ export function LabelsMatrix({ run, all, data, me, loading, error, saving, onCel
       {error ? <div role="alert" className="lab-error">{error}</div> : null}
       {modeError ? <div role="alert" className="lab-error">{modeError}</div> : null}
       {!modes.length ? (
-        <Empty title="No failure modes yet">{canEdit
+        <Empty title="No failure modes yet">{own
+          ? 'Add your first failure mode here. Your failure modes are your own: only you see them, as columns beside the questions you asked, and you mark each question positive or negative for each one.'
+          : canEdit
           ? 'Failure modes come from the coding agent’s taxonomy. Add the first one here: it becomes a column in every run, and each reviewer marks every question positive or negative for it.'
           : 'Failure modes come from the coding agent’s taxonomy. The platform team or the consultant adds them here; then you mark each question positive or negative for each one.'}</Empty>
       ) : null}

@@ -10,7 +10,7 @@ export default function Maintenance({ vals }) {
       <UnreachableState show={vals.mxEmptyShow} title={vals.mxEmptyTitle} note={vals.mxEmptyNote} detail={vals.mxEmptyDetail} icon={vals.mxEmptyIcon}
         retryShow={vals.mxLiveRetryShow} onRetry={vals.mxLiveRetry} style={{ marginTop: "32px" }} />
       <div style={{ display: vals.mxBodyShow }}>
-      <div style={{ marginTop: "32px" }}>
+      <div id="mx-decisions" style={{ marginTop: "32px", scrollMarginTop: "80px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "9px", marginBottom: "12px", flexWrap: "wrap" }}>
           <div style={{ fontSize: "11px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", flex: "1", minWidth: "180px" }}>
             {"Decisions · blocked, to raise, deviating"}
@@ -23,6 +23,13 @@ export default function Maintenance({ vals }) {
               </div>
             </React.Fragment>
           ))}
+          {/* The "Statutory among them" card's view (23 Nov 2026): only the statutory decisions, said and undoable here. */}
+          <button type="button" onClick={vals.mxStatClear} title="Show every decision again"
+            style={{ display: vals.mxStatShow, alignItems: "baseline", gap: "6px", fontSize: "11px", padding: "4px 10px", borderRadius: "20px", cursor: "pointer", border: "1px solid var(--color-accent)", color: "var(--color-accent)", background: "var(--color-accent-900)", fontFamily: "var(--font-body)" }}>
+            <span>{"Statutory only"}</span>
+            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", opacity: "0.75" }}>{vals.mxStatN}</span>
+            <i className="ph ph-x" aria-hidden="true" style={{ fontSize: "10px" }}></i>
+          </button>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "10px" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "7px", padding: "3px 10px", borderRadius: "20px", border: "1px solid var(--color-divider)", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
@@ -162,7 +169,7 @@ export default function Maintenance({ vals }) {
           {vals.mxDecEmptyNote}
         </div>
       </div>
-      <div style={{ marginTop: "36px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-md)", borderTop: "3px solid var(--color-accent)", overflow: "hidden" }}>
+      <div id="mx-insp" style={{ marginTop: "36px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-md)", borderTop: "3px solid var(--color-accent)", overflow: "hidden", scrollMarginTop: "80px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: "14px 24px", flexWrap: "wrap", padding: "18px 20px 0" }}>
           <div style={{ width: "40px", height: "40px", borderRadius: "10px", background: "var(--color-accent-900)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: "0" }}>
             <i className="ph ph-file-magnifying-glass" style={{ fontSize: "20px", color: "var(--color-accent)" }}></i>
@@ -233,7 +240,7 @@ export default function Maintenance({ vals }) {
           </div>
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: "10px", marginTop: "36px", flexWrap: "wrap" }}>
+      <div id="mx-ppm" style={{ display: "flex", alignItems: "baseline", gap: "10px", marginTop: "36px", flexWrap: "wrap", scrollMarginTop: "80px" }}>
         <span style={{ fontSize: "11px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
           {"PPM health · year to date"}
         </span>

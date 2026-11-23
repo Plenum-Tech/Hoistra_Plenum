@@ -46,10 +46,11 @@ from .routes_labelling import _call
 router = APIRouter(tags=["Trace Lab runs"])
 
 
-async def _wide(organization_id: str | None = Query(None, max_length=64), principal: Principal = auth.caller,
-                _ready: Any = Depends(db.require_ready)) -> labelling.Member:
-    """The caller, allowed to act for no company: the platform team and a consultant then see every company."""
-    return await labelling.access(principal, organization_id, all_companies_ok=True)
+async def _wide(request: Request, organization_id: str | None = Query(None, max_length=64),
+                principal: Principal = auth.caller, _ready: Any = Depends(db.require_ready)) -> labelling.Member:
+    """The caller, allowed to act for no company: the platform team and a consultant then see every company. A Hoistra
+    consultant reaches only the routes for their own sessions (labelling.require_route)."""
+    return labelling.require_route(await labelling.access(principal, organization_id, all_companies_ok=True), request)
 
 
 class QuestionIn(BaseModel):

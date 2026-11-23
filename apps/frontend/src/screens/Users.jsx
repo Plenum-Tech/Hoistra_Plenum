@@ -82,7 +82,7 @@ export default function Users({ vals }) {
                 <div data-us="pages" style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
                   {(vals.usPageChips || []).map((p, $index) => (
                     <React.Fragment key={$index}>
-                      <div role="checkbox" aria-checked={p.on} title={p.hint} onClick={p.pick} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${p.edge}`, background: p.bg, color: p.fg, cursor: "pointer" }}>
+                      <div role="checkbox" aria-checked={p.on} aria-disabled={p.fixed || undefined} title={p.hint} onClick={p.pick} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${p.edge}`, background: p.bg, color: p.fg, cursor: p.fixed ? "default" : "pointer" }}>
                         <i className={`ph ${p.tick}`} style={{ fontSize: "12px" }}></i>
                         <span>{p.label}</span>
                         {p.hint ? <span style={{ fontSize: "10.5px", opacity: "0.7" }}>{"· "}{p.hint}</span> : null}
@@ -184,7 +184,7 @@ export default function Users({ vals }) {
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
                         {(u.pageChips || []).map((p, $index2) => (
                           <React.Fragment key={$index2}>
-                            <div role="checkbox" aria-checked={p.on} title={p.hint} onClick={p.pick} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${p.edge}`, background: p.on ? p.bg : "transparent", color: p.fg, cursor: "pointer" }}>
+                            <div role="checkbox" aria-checked={p.on} aria-disabled={p.fixed || undefined} title={p.hint} onClick={p.pick} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "5px 11px", borderRadius: "6px", border: `1px solid ${p.edge}`, background: p.on ? p.bg : "transparent", color: p.fg, cursor: p.fixed ? "default" : "pointer" }}>
                               <i className={`ph ${p.tick}`} style={{ fontSize: "12px" }}></i>
                               <span>{p.label}</span>
                               {p.hint ? <span style={{ fontSize: "10.5px", opacity: "0.7" }}>{"· "}{p.hint}</span> : null}

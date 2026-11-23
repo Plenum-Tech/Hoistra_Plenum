@@ -104,7 +104,9 @@ export function shapeLiveUser(u, bldNameById, now) {
   return "access_role" in u || "pages" in u ? Object.assign(row, {
     accessRole: u.access_role || null,
     accessRoleLabel: u.access_role_label || null,
-    pages: Array.isArray(u.pages) ? u.pages : null
+    pages: Array.isArray(u.pages) ? u.pages : null,
+    // What they open on screen: a consultant's are what was ticked for them (accessRoles.js).
+    screens: Array.isArray(u.screens) ? u.screens : null
   }) : row;
 }
 
@@ -224,7 +226,10 @@ export const usersLiveMethods = {
         ingest: !!r.can_ingest, status: "Invited", queries: 0, ingests: 0, last: "—", live: true,
         role: "user",
         // What the server recorded, not what the form held.
-        accessRole: r.access_role || null, accessRoleLabel: null, pages: Array.isArray(r.pages) ? r.pages : null
+        accessRole: r.access_role || null, accessRoleLabel: null,
+        // A consultant's stored pages are their screens; their data is every page's.
+        pages: r.access_role === "consultant" ? null : Array.isArray(r.pages) ? r.pages : null,
+        screens: Array.isArray(r.pages) ? r.pages : null
       };
       this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false, usRole: "", usPages: [] }));
       // accept_url only rides back when the email was not delivered (dry-run/undelivered)
@@ -271,11 +276,15 @@ export const usersLiveMethods = {
       // on its way: if that one is refused, the row must show what the server holds, which
       // is this. Only the newest change clears the unsaved choice and speaks.
       const label = role ? ((ACCESS_ROLES.find((r) => r.key === role) || {}).label || role) : null;
-      this.usSetU(u.id, (x) => ({ ...x, accessRole: role || null, accessRoleLabel: label, pages: role ? body.pages : null }));
+      this.usSetU(u.id, (x) => ({ ...x, accessRole: role || null, accessRoleLabel: label,
+        pages: role && role !== "consultant" ? body.pages : null, screens: role ? body.pages : null }));
       if (seq !== pend.seq) return;
       pend.done = seq;
       this.usAccessDrop(u.id);
-      this.flash(role
+      this.flash(role === "consultant"
+        ? u.name + " is now a consultant: on screen " + body.pages.map((k) => (PAGE_OPTIONS.find((p) => p.key === k) || {}).label || k).join(", ")
+          + ", with every module's data in their chat, sessions and reports."
+        : role
         ? u.name + " now opens only: " + body.pages.map((k) => (PAGE_OPTIONS.find((p) => p.key === k) || {}).label || k).join(", ") + "."
         : u.name + " is a normal user again and opens every page.");
     }).catch((e) => {

@@ -11,13 +11,14 @@ import pytest
 from src.engines.auth import pages as P
 
 
-def test_the_six_pages_and_four_roles_are_exactly_these():
+def test_the_six_pages_and_five_roles_are_exactly_these():
     assert P.PAGES == ("buildings", "compliance", "energy", "vendors", "ops", "assets")
     assert P.ACCESS_ROLES == {
         "portfolio_management": "Portfolio Management",
         "property_manager": "Property Manager",
         "general_user": "General User",
         "compliance_officer": "Compliance Officer",
+        "consultant": "Consultant",
     }
 
 

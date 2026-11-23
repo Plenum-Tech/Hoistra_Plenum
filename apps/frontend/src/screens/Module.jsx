@@ -4,6 +4,18 @@ import React from 'react';
 import Assets from './Assets.jsx';
 import Maintenance from './Maintenance.jsx';
 
+// A card that opens what it counts (23 Nov 2026): a button to the keyboard and to a screen reader, Enter or Space to open.
+// A card with no `click` stays a plain figure.
+export function cardPress(card) {
+  if (!card || typeof card.click !== 'function') return {};
+  return {
+    role: 'button', tabIndex: 0, title: card.clickTitle || ('Open ' + card.l),
+    'aria-label': (card.clickTitle || ('Open ' + card.l)) + ': ' + card.v,
+    onClick: card.click,
+    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); } }
+  };
+}
+
 export default function Module({ vals }) {
   return (
       <div style={{ flex: "1", display: "flex", justifyContent: "center", padding: "0 32px 80px" }}>
@@ -110,8 +122,10 @@ export default function Module({ vals }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "11px", marginTop: "24px" }}>
             {(vals.modMetrics || []).map((m, $index) => (
               <React.Fragment key={$index}>
-                <div style={{ padding: "14px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", position: "relative", overflow: "hidden" }}>
+                {/* Every card opens what it counts (23 Nov 2026, Hussain: "make all the cards clickable"). */}
+                <div {...cardPress(m)} className={m.click ? "hv2" : undefined} style={{ padding: "14px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", position: "relative", overflow: "hidden", cursor: m.click ? "pointer" : "default" }}>
                   <div style={{ position: "absolute", left: "0", top: "0", bottom: "0", width: "2px", background: m.color }}></div>
+                  <i className="ph ph-arrow-up-right" aria-hidden="true" style={{ display: m.click ? "block" : "none", position: "absolute", top: "12px", right: "12px", fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
                   <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>
                     {m.l}
                   </div>
@@ -163,8 +177,9 @@ export default function Module({ vals }) {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: "11px", marginTop: "11px" }}>
                   {(vals.enRatings || []).map((r, $index) => (
                     <React.Fragment key={$index}>
-                      <div style={{ padding: "14px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", position: "relative", overflow: "hidden" }}>
+                      <div {...cardPress(r)} className={r.click ? "hv2" : undefined} style={{ padding: "14px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", position: "relative", overflow: "hidden", cursor: r.click ? "pointer" : "default" }}>
                         <div style={{ position: "absolute", left: "0", top: "0", bottom: "0", width: "2px", background: r.color }}></div>
+                        <i className="ph ph-arrow-up-right" aria-hidden="true" style={{ display: r.click ? "block" : "none", position: "absolute", top: "12px", right: "12px", fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
                         <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>
                           {r.l}
                         </div>
@@ -429,7 +444,7 @@ export default function Module({ vals }) {
           {vals.isMaint ? <Maintenance vals={vals} /> : null}
           {vals.isEnergy ? (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: "9px", marginTop: "32px", flexWrap: "wrap" }}>
+              <div id="mod-list" style={{ display: "flex", alignItems: "center", gap: "9px", marginTop: "32px", flexWrap: "wrap", scrollMarginTop: "80px" }}>
                 <div style={{ fontSize: "11px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", flex: "1", minWidth: "200px" }}>
                   {"Buildings · EUI against their own pack, anomalies beneath"}
                 </div>

@@ -47,6 +47,15 @@ export function navFor(me) {
   return items;
 }
 
+// Who is signed in, as the top bar says it. A Hoistra consultant (/lab/me own_only, 23 Nov 2026: "i need to see everything
+// of the tracelab here but the question should be consultant account specific") has every page, holding only the
+// questions they asked, so the bar names the role and says so; their Trace Lab role underneath is the plain member's.
+export function whoText(user, me) {
+  const email = (user && user.email) || (me && me.email) || '';
+  if (me && me.own_only) return email + ' · Consultant · your questions only';
+  return email + (me && me.role ? ' · ' + (ROLE_TEXT[me.role] || me.role) : '');
+}
+
 // The run (R3) of a question code (R3-12).
 export const runOf = (code) => { const m = /^\s*(R\d+)-\d+\s*$/i.exec(String(code || '')); return m ? m[1].toUpperCase() : null; };
 
@@ -377,7 +386,7 @@ export function Workspace({ user, me, view, onView, onSignOut }) {
             <RunPicker runs={runs} run={run} onRun={pickRun} onSync={sync} syncing={syncing} synced={synced} auto={auto} />
           </div>
           <div className="lab-row lab-bar-right">
-            <span>{(user && user.email) + (me && me.role ? ' · ' + (ROLE_TEXT[me.role] || me.role) : '')}</span>
+            <span>{whoText(user, me)}</span>
             <button type="button" className="lab-btn lab-btn-quiet lab-btn-sm" onClick={onSignOut}>{'Sign out'}</button>
           </div>
         </header>
@@ -480,5 +489,6 @@ export default function LabApp() {
     );
   }
   if (phase === 'waiting') return <Waiting me={me} onSignOut={signOut} onRetry={check} />;
+  // A Hoistra consultant (/lab/me own_only) gets the same workspace; the service narrows every page to their questions.
   return <Workspace user={user} me={me} view={view} onView={setView} onSignOut={signOut} />;
 }

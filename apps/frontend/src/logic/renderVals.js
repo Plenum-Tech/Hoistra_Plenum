@@ -30,6 +30,7 @@ import { accountCanIngest } from './auth.js';
 import { evidencePane } from './vendorsEvidence.js';
 import { evidenceForMonth } from './vendorsLive.js';
 import { scrubInternal } from './publicText.js';
+import { withCardLinks } from './cardLinks.js';
 import { hgAllowed } from './hoistGraph.js';
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
@@ -3765,11 +3766,12 @@ export const renderValsMethods = {
       ] : [],
 
       mod: mod || { name: "", head: [] },
-      modMetrics: !mod ? [] : modKey === "energy"
+      // Every card opens what it counts (cardLinks, 23 Nov 2026).
+      modMetrics: !mod ? [] : withCardLinks(modKey, modKey === "energy"
         ? this.enVals(s).enScopeCards
         : modKey === "assets" ? this.asVals(s).asCards
         : modKey === "ops" ? this.mxVals(s).mxCards
-        : D.answers[mod.answer].metrics.map((m) => ({ ...m, color: t(m.tone).color })),
+        : D.answers[mod.answer].metrics.map((m) => ({ ...m, color: t(m.tone).color })), this),
       modFilters: mod ? mod.filters.map((f) => ({
         label: f,
         border: f === s.filter ? "var(--color-accent)" : "var(--color-divider)",

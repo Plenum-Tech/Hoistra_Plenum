@@ -7,6 +7,12 @@ Who may label (lab_members, migration 0008):
   app's People page, with a Trace Lab role (domain expert, tester, admin or user). Without that they read nothing: a
   plain Hoistra user may be limited to a few buildings, and labelling shows every answer of the company.
 * An active member with the Trace Lab role `admin` also manages people and sees every label.
+* A Hoistra consultant (a plain user with the access role `consultant`, 23 Nov 2026) is in at once, without a company
+  admin turning anything on, and has the workspace a plain member has (Runs, Labels, Progress, Loop, Notes,
+  Learning), with ONLY what they asked in it: the runs holding their questions and only those questions, their own
+  sessions and turns, which they annotate. Only the routes for that are open to them (require_route), and every read
+  they make is narrowed to their own (runs._scope, runs.own_questions, company_view). Not to be confused with Trace
+  Lab's own platform-wide reviewer, also called a consultant (lab_platform_members), who sees every company.
 * A label is on a whole step or on text the person selected in it (a quote); a person may give several per step.
 
 Reads of the chat go through conversations.py on the read-only engine, as the company's admin would see them (an active
@@ -23,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -40,10 +47,19 @@ QUOTE_MAX = 2000
 EXPECTED_MAX = 2000
 GROUP_MIN, GROUP_MAX = 2, 30
 USERS = "plenum_cafm.users"
+log = structlog.get_logger(__name__)
 LIST_MAX = 500
 SNAPSHOT_REASON = "step_labelled"
 LABELLABLE = frozenset({"user", "assistant", "model_call", "tool_call", "tool_result", "db_query", "plan", "step",
                         "system_note"})
+
+#: The Hoistra access role (svc-operations-intelligence engines/auth/pages.py) whose holder sees only their own sessions.
+HOISTRA_CONSULTANT = "consultant"
+#: Their Trace Lab role: the plain member role, so every row they write is one the database already accepts
+#: (step_labels.reviewer_role is checked against the roles). What sets them apart is Member.own_only, never the role:
+#: "consultant" there is the platform-wide reviewer of lab_platform_members, who sees every company.
+OWN_SESSIONS_ROLE = "user"
+OWN_ONLY_TEXT = "As a consultant you can work only on the questions you asked yourself."
 
 PENDING_TEXT = "Your company admin has not given you access to Trace Lab. They can turn it on in Hoistra, under Users & access."
 REMOVED_TEXT = "Your access to Trace Lab was removed by your company admin."
@@ -66,16 +82,56 @@ class Member:
     status: str
     manages: bool
     all_companies: bool = False
+    #: A Hoistra consultant: every read is their own sessions, and only the routes for those are open (require_route).
+    own_only: bool = False
 
     @property
     def active(self) -> bool:
         return self.status == "active"
 
 
+def is_hoistra_consultant(principal: Any) -> bool:
+    """Whether the caller is a Hoistra consultant: a plain user (never an admin) with the access role `consultant`."""
+    return (str(getattr(principal, "role", "") or "") == "user"
+            and str(getattr(principal, "access_role", "") or "").strip().lower() == HOISTRA_CONSULTANT)
+
+
+#: Who holds the Hoistra access role `consultant`, by user id: (read at, holds it). Read from Hoistra's users table on
+#: the read-only engine and kept a minute, as the other services keep /me.
+_CONSULTANT_CACHE: dict[str, tuple[float, bool]] = {}
+CONSULTANT_CACHE_S = 60.0
+
+
+async def hoistra_consultants(user_ids: Any) -> set[str]:
+    """Which of these Hoistra users are consultants (23 Nov 2026: a consultant's failure modes are their own, so nobody
+    else sees them). Read-only; a read that fails (no users table here, the access_role column not there yet, the
+    database down) is "none of them", logged, never raised: everything then shows as it did before."""
+    import time
+
+    now = time.monotonic()
+    ids = sorted({str(u) for u in user_ids or () if u})
+    known = {u for u in ids if u in _CONSULTANT_CACHE and now - _CONSULTANT_CACHE[u][0] < CONSULTANT_CACHE_S}
+    ask = [u for u in ids if u not in known]
+    if ask:
+        try:
+            async with conversations._read() as conn:
+                held = {r[0] for r in (await conn.execute(text(
+                    f"SELECT id::text FROM {USERS} WHERE id = ANY(CAST(:ids AS uuid[])) "
+                    "AND lower(trim(coalesce(access_role, ''))) = :role"),
+                    {"ids": ask, "role": HOISTRA_CONSULTANT})).all()}
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            log.warning("trace_lab.labelling.consultants_unreadable", error=str(exc)[:200])
+            return {u for u in known if _CONSULTANT_CACHE[u][1]}
+        for u in ask:
+            _CONSULTANT_CACHE[u] = (now, u in held)
+    return {u for u in ids if _CONSULTANT_CACHE.get(u, (0.0, False))[1]}
+
+
 def company_view(principal: Any, org: str) -> Any:
     """The principal conversations.py reads with: the company's whole set of answers. A superadmin acting for the company
-    already reads it; anyone else reads it as that company's admin would, which only an active member ever reaches."""
-    if principal.role == auth.SUPERADMIN:
+    already reads it; anyone else reads it as that company's admin would, which only an active member ever reaches.
+    A Hoistra consultant reads as themselves: the chat's own rule then gives them only the turns they asked."""
+    if principal.role == auth.SUPERADMIN or is_hoistra_consultant(principal):
         return principal
     return dataclasses.replace(principal, role="admin", organization_id=uuid.UUID(org), building_ids=None)
 
@@ -111,6 +167,12 @@ async def access(principal: Any, organization_id: str | None, *, register: bool 
                 return Member(principal, None, uid, email, "platform", "active", True, True)
             raise db.http_error(400, "name_a_company", auth.NAME_A_COMPANY)
         return Member(principal, org, uid, email, "platform", "active", True, True)
+    if is_hoistra_consultant(principal):
+        # Before the platform-wide list: the Hoistra role holds them to their own sessions, and a restriction wins.
+        org = auth.acting_org(principal, organization_id)
+        if org is None:
+            raise db.http_error(403, "no_company", "Your account belongs to no company.")
+        return Member(principal, org, uid, email, OWN_SESSIONS_ROLE, "active", False, False, own_only=True)
     consultant = await platform_role(uid)
     if consultant is not None:
         named = auth._named(organization_id) if organization_id else None
@@ -162,6 +224,88 @@ def require_active(m: Member) -> Member:
     return m
 
 
+#: What a Hoistra consultant may call, as (method, route path under the API prefix). 23 Nov 2026, first: who they are,
+#: their own sessions and each turn's trace, and annotating those turns. Then (Hussain: "i need to see everything of
+#: the tracelab here but the question should be consultant account specific") every page of the workspace a plain
+#: member has - Runs, Labels, Progress, Loop, Notes, Learning - each read narrowed to the questions they asked
+#: (runs.own_questions / runs._scope_q, eval_store's own sessions, Notes' own labels, learning.gather's own_uid). The
+#: shared definitions (failure modes, the approved specification) read as every member reads them; what changes them,
+#: makes runs or speaks for the company stays the curators' and the platform team's (their own checks, and not listed
+#: here). Anything else is 403 own_sessions_only, including a route added later: it is open to them only once it is
+#: listed here and reads with runs._scope, runs.own_questions or company_view.
+OWN_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ("GET", "/lab/me"),
+    ("GET", "/lab/sync-status"),
+    # Runs: the runs holding their questions, each with only those questions and sessions; Sync now (their company's
+    # new answers become questions, as the automatic sync does every minute).
+    ("GET", "/lab/runs"),
+    ("POST", "/lab/runs/sync"),
+    ("GET", "/lab/runs/{code}"),
+    ("GET", "/lab/runs/{code}/questions"),
+    ("GET", "/lab/runs/{code}/sessions"),
+    # A question of theirs: its answer, trace, expected answer and failure-mode cells.
+    ("GET", "/lab/q/{code}"),
+    ("GET", "/lab/q/{code}/tree"),
+    ("PUT", "/lab/q/{code}/expected"),
+    ("PUT", "/lab/q/{code}/cells"),
+    ("GET", "/lab/turns/{turn_id}/expected"),
+    ("POST", "/lab/turns/{turn_id}/expected/check"),
+    ("GET", "/lab/turns/{turn_id}/expected/query"),
+    # Labels and Progress over their questions; the failure modes are the shared columns.
+    ("GET", "/lab/labels"),
+    ("GET", "/lab/runs/{code}/labels"),
+    ("GET", "/lab/progress"),
+    ("GET", "/lab/modes"),
+    # Their own failure modes, which only they see (runs.require_mode_writer, loop.visible_modes).
+    ("POST", "/lab/modes"),
+    ("PUT", "/lab/modes/{lineage_id}"),
+    ("DELETE", "/lab/modes/{lineage_id}"),
+    # Notes: a member who manages no one lists only the labels they wrote (_filters).
+    ("GET", "/lab/step-labels"),
+    ("GET", "/lab/step-labels.csv"),
+    # Loop: the modes' progress over their questions, what waits on their questions, the approved specification.
+    ("GET", "/lab/loop"),
+    ("GET", "/lab/proposals"),
+    ("POST", "/lab/proposals/{kind}/{subject_id}"),
+    ("GET", "/lab/spec"),
+    ("GET", "/lab/spec.md"),
+    ("GET", "/eval/run-tags"),
+    ("GET", "/eval/sessions"),
+    ("GET", "/eval/sessions/{session_id}"),
+    ("GET", "/eval/traces/{trace_id}/tree"),
+    ("GET", "/eval/traces/{trace_id}/as-shown"),
+    ("GET", "/eval/traces/{trace_id}/notes"),
+    ("GET", "/eval/traces/{trace_id}/labels"),
+    ("PUT", "/eval/traces/{trace_id}/labels/{mode}"),
+    ("PUT", "/eval/traces/{trace_id}/scores/{level}"),
+    ("GET", "/eval/traces/{trace_id}/expected-flag"),
+    ("PUT", "/eval/traces/{trace_id}/expected-flag"),
+    ("GET", "/lab/turns/{turn_id}/step-labels"),
+    ("PUT", "/lab/turns/{turn_id}/step-labels"),
+    ("DELETE", "/lab/turns/{turn_id}/step-labels"),
+    ("PUT", "/lab/turns/{turn_id}/step-label-groups"),
+    ("DELETE", "/lab/turns/{turn_id}/step-label-groups/{group_id}"),
+})
+_API_PREFIX = "/api/trace-lab"
+
+
+def require_route(m: Member, request: Any) -> Member:
+    """A Hoistra consultant may call only OWN_ONLY_ROUTES; everyone else passes untouched. A request whose route cannot
+    be named is refused, never let through."""
+    if not m.own_only:
+        return m
+    route = (getattr(request, "scope", None) or {}).get("route")
+    path = str(getattr(route, "path", "") or "")
+    if path.startswith(_API_PREFIX):
+        path = path[len(_API_PREFIX):]
+    method = str(getattr(request, "method", "") or "").upper()
+    if method == "HEAD":
+        method = "GET"
+    if (method, path) not in OWN_ONLY_ROUTES:
+        raise db.http_error(403, "own_sessions_only", OWN_ONLY_TEXT)
+    return m
+
+
 def require_manager(m: Member) -> Member:
     require_active(m)
     if not m.manages:
@@ -171,7 +315,7 @@ def require_manager(m: Member) -> Member:
 
 def me_out(m: Member) -> dict[str, Any]:
     return {"user_id": m.user_id, "email": m.email, "organization_id": m.org, "role": m.role, "status": m.status,
-            "manages": m.manages, "all_companies": m.all_companies}
+            "manages": m.manages, "all_companies": m.all_companies, "own_only": m.own_only}
 
 
 async def list_members(m: Member) -> list[dict[str, Any]]:
@@ -344,10 +488,21 @@ async def _turn(m: Member, turn_id: str) -> dict[str, Any]:
         # A turn asked on another machine and copied here is only in the eval store (14 Nov 2026): the chat
         # record, when there is one, is always used first.
         from . import stored_turn
-        out = await stored_turn.get(m.org, turn_id)
+        # A consultant's stored turn must be of a session they ran; the chat's own rule already holds the live one.
+        if not m.own_only or await _ran_by(m, turn_id):
+            out = await stored_turn.get(m.org, turn_id)
     if out is None:
         raise NotFound("turn_not_found")
     return out
+
+
+async def _ran_by(m: Member, turn_id: str) -> bool:
+    """Whether the trace `turn_id` in Trace Lab's store is of a session the caller ran, in their company."""
+    async with db.lab_engine().connect() as conn:
+        return (await conn.execute(text(
+            "SELECT 1 FROM tracelab.traces t JOIN tracelab.sessions s ON s.id = t.session_id WHERE t.id = :tid "
+            "AND t.organization_id = CAST(:org AS uuid) AND s.user_id = CAST(:uid AS uuid) LIMIT 1"),
+            {"tid": turn_id, "org": m.org, "uid": m.user_id})).first() is not None
 
 
 OUTPUT_SUFFIX = "#output"
@@ -377,12 +532,19 @@ def _step_kind(trace: dict[str, Any], step_key: str) -> str:
 
 
 async def labels_for_turn(m: Member, turn_id: str) -> list[dict[str, Any]]:
-    """Everyone's live labels on the steps of one answer: who labelled what is visible to every active member."""
+    """Everyone's live labels on the steps of one answer: who labelled what is visible to every active member. A
+    consultant reads them only on an answer of their own (_turn refuses another's as not found), and only the labels
+    they gave themselves (23 Nov 2026, Hussain: their Trace Lab starts new, with only their own marks)."""
     require_active(m)
+    mine = ""
+    if m.own_only:
+        await _turn(m, turn_id)
+        mine = " AND reviewer_id = CAST(:me AS uuid)"
     async with db.lab_engine().connect() as conn:
         rows = (await conn.execute(text(
             f"SELECT {_LABEL_COLS} FROM tracelab.step_labels WHERE organization_id = CAST(:org AS uuid) AND turn_id = :tid "
-            "AND superseded_by IS NULL AND NOT tombstone ORDER BY created_at"), {"org": m.org, "tid": turn_id})).mappings().all()
+            f"AND superseded_by IS NULL AND NOT tombstone{mine} ORDER BY created_at"),
+            {"org": m.org, "tid": turn_id, "me": m.user_id})).mappings().all()
     return [label_out(r) for r in rows]
 
 

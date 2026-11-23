@@ -92,6 +92,8 @@ async def flags_of(m: labelling.Member, trace_id: str) -> dict[str, Any]:
     flags = [{"comment": r["comment"], "author_id": r["author_id"], "author_email": r["author_email"],
               "author_role": r["author_role"], "at": runs._iso(r["created_at"]),
               "mine": r["author_id"] is not None and r["author_id"] == m.user_id} for r in rows if r["flagged"]]
+    if getattr(m, "own_only", False):
+        flags = [f for f in flags if f["mine"]]     # a Hoistra consultant sees only their own flag (23 Nov 2026)
     flags.sort(key=lambda f: f["at"] or "", reverse=True)
     flags.sort(key=lambda f: not f["mine"])
     return {"trace_id": trace_id, "flagged": bool(flags), "mine": any(f["mine"] for f in flags), "flags": flags}

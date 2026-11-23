@@ -94,7 +94,7 @@ async def test_a_new_live_question_gets_a_draft_from_the_spec(lab_scratch, main_
     assert {r["author_email"] for r in rows} == {agent.AGENT_EMAIL}
     assert rows[0]["evidence"] == {"drafted_from": "SPEC.md", "spec_version": version, "rules": ["S-1", "S-4"],
                                     "draft": auto_expected.DRAFT_VERSION, "no_query": "no_trace", "tries": 0,
-                                    "last_tried": NOW.isoformat()}
+                                    "last_tried": NOW.isoformat(), "records_gate": auto_expected.RECORDS_GATE}
     prompt = asked[0]["prompt"]
     assert "S-1" in prompt and "never report none" in prompt, "the approved rules are in the prompt"
     assert "Which vendors are blocked?" in " ".join(a["prompt"] for a in asked), "each question is in its own prompt"
@@ -1163,6 +1163,9 @@ async def test_at_most_ten_proposals_a_round(lab_scratch, main_scratch, monkeypa
         proposals.append(question)
         return {"queries": [{"source": "proposed", "plan": PLAN_LIST_WOS, "question": question}], "none": None}
     _queries(monkeypatch, answer)
+    # The mock proposes for every question, as if none had a key in the answer key (these do): with a key, a proposal
+    # would be read again from the key (auto_expected._stale_key, 23 Nov 2026), which is not what this counts.
+    monkeypatch.setattr(auto_expected.answer_key, "match", lambda q: None)
     out = await auto_expected.draft_for_live(None, now=NOW)
     assert len(proposals) == 10 and out["drafted"] == 10, "the other two wait for the next round"
     out = await auto_expected.draft_for_live(None, now=NOW)

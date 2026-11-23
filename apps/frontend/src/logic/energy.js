@@ -12,6 +12,7 @@
 // is ingested; all of it is the reference an ingested reading is judged against.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { withRatingLinks } from './cardLinks.js';
 import { PACKS, ENC, EN_ATTRS, ENC_MIXED_AVAIL, ENC_MIXED_HELD, t } from './constants.js';
 import { HOISTRA_EN } from '../data/hoistra-energy.js';
 import { moneyGBP, IMPLEMENTED_RULE_IDS } from './energyLive.js';
@@ -280,7 +281,8 @@ export const energyMethods = {
       enRatingOptions: sc.sel.map((cc) => ({ cc: cc, label: PACKS[cc].flag + " " + PACKS[cc].name })),
       enRatingPick: (e) => this.setState({ enRatingCc: e.target.value }),
       enRatingHint: "country-scoped · " + sc.sel.length + " markets in scope",
-      enRatings: this.enRatingsFromPosition(rcc)
+      // A ratings card asks which buildings it counts (cardLinks, 23 Nov 2026).
+      enRatings: withRatingLinks(this.enRatingsFromPosition(rcc), this)
     };
   },
 

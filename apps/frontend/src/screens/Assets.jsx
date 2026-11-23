@@ -66,7 +66,7 @@ export default function Assets({ vals }) {
           </span>
         </div>
       </div>
-      <div style={{ marginTop: "32px" }}>
+      <div id="mod-list" style={{ marginTop: "32px", scrollMarginTop: "80px" }}>
         <div style={{ minWidth: "0" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "9px", marginBottom: "12px", flexWrap: "wrap" }}>
             <div style={{ fontSize: "11px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", flex: "1", minWidth: "180px" }}>

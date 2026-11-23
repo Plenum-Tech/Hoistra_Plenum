@@ -230,13 +230,15 @@ async def list_users(
         row = dict(u)
         # An admin has no access role whatever the row holds; a role user's pages come back
         # in the order they are ticked. null pages = every page.
-        access_role, held = page_engine.resolve(
-            row.get("role"), row.pop("access_role", None), row.pop("allowed_pages", None))
+        stored = row.pop("allowed_pages", None)
+        access_role, held = page_engine.resolve(row.get("role"), row.pop("access_role", None), stored)
         out.append({
             **row,
             "access_role": access_role,
             "access_role_label": page_engine.label(access_role),
             "pages": None if held is None else [p for p in page_engine.PAGES if p in held],
+            # A consultant's screens are what was ticked for them; anyone else's are their pages.
+            "screens": page_engine.screens(access_role, held, stored),
             "can_ingest": bool(u["can_ingest"]) or admin,
             # An admin is not allocated; they see the company. Said explicitly so the table
             # does not render "0 buildings" against the person who administers all of them.
@@ -343,7 +345,8 @@ async def patch_user(
         wanted_role = body.access_role if "access_role" in sent else held_role
         if "pages" in sent:
             wanted_pages = body.pages
-        elif wanted_role:
+        elif wanted_role and str(wanted_role).strip().lower() != page_engine.CONSULTANT:
+            # A consultant's screens come with the role, so earlier ticks are not carried.
             wanted_pages = [p for p in page_engine.PAGES if p in (before or ())]
         else:
             wanted_pages = None
@@ -358,7 +361,7 @@ async def patch_user(
                 raise _roles_not_set_up()
             access_change = None        # nothing to clear on a database without the columns
         else:
-            after = frozenset(access_change[1]) if access_change[0] else None
+            after = page_engine.data_after(*access_change)
             narrowing = page_engine.narrowed(before, after)
 
     changed: dict = {}

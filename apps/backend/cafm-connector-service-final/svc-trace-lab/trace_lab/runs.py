@@ -109,9 +109,88 @@ def _uuid_or_none(v: Any) -> str | None:
         return None
 
 
+#: The aliases _scope is asked for that name tracelab.sessions, tracelab.traces and tracelab.lab_runs (a run, and the
+#: runs of its live day: _day_scope's g and gm). For a Hoistra consultant each is narrowed to what they asked; any
+#: other alias is nothing for them.
+_SESSION_ALIASES = frozenset({"s", "ss"})
+_TRACE_ALIASES = frozenset({"t"})
+_RUN_ALIASES = frozenset({"r", "g", "gm"})
+
+
+def _own_q_sql(alias: str) -> str:
+    """A question `alias` (tracelab.lab_questions) a Hoistra consultant asked (23 Nov 2026, Hussain: "the question should
+    be consultant account specific"): in their company, and made by them (sync_live files a live answer as its asker's
+    question) or linked to a turn of a session they ran. Needs :scope_org and :scope_uid."""
+    a = alias
+    return (f"({a}.organization_id = CAST(:scope_org AS uuid) AND ({a}.created_by = CAST(:scope_uid AS uuid)"
+            f" OR EXISTS (SELECT 1 FROM tracelab.lab_question_traces {a}_l"
+            f" JOIN tracelab.traces {a}_t ON {a}_t.id = {a}_l.turn_id"
+            f" JOIN tracelab.sessions {a}_s ON {a}_s.id = {a}_t.session_id"
+            f" WHERE {a}_l.question_id = {a}.id AND {a}_s.organization_id = CAST(:scope_org AS uuid)"
+            f" AND {a}_s.user_id = CAST(:scope_uid AS uuid))))")
+
+
+def _own_scope(m: labelling.Member, alias: str) -> tuple[str, dict[str, Any]]:
+    """A Hoistra consultant's scope: their own company's sessions that they ran, the traces of those, and the runs that
+    hold a question they asked (which then show only those questions: own_questions); else FALSE."""
+    p = {"scope_org": m.org, "scope_uid": m.user_id}
+    org = f"{alias}.organization_id = CAST(:scope_org AS uuid)"
+    if alias in _SESSION_ALIASES:
+        return f"({org} AND {alias}.user_id = CAST(:scope_uid AS uuid))", p
+    if alias in _TRACE_ALIASES:
+        return (f"({org} AND EXISTS (SELECT 1 FROM tracelab.sessions own_s WHERE own_s.id = {alias}.session_id "
+                "AND own_s.user_id = CAST(:scope_uid AS uuid)))"), p
+    if alias in _RUN_ALIASES:
+        return (f"({org} AND EXISTS (SELECT 1 FROM tracelab.lab_questions {alias}_q WHERE {alias}_q.run_id = {alias}.id"
+                f" AND {_own_q_sql(alias + '_q')}))"), p
+    return "FALSE", {}
+
+
+def own_questions(m: labelling.Member | None, alias: str = "q") -> tuple[str, dict[str, Any]]:
+    """Which questions of a run the caller sees: every one ("TRUE"), except that a Hoistra consultant sees only the ones
+    they asked (_own_q_sql). Every read of a run's questions, counts and notes adds this beside the run's scope."""
+    if m is None or not getattr(m, "own_only", False):
+        return "TRUE", {}
+    return _own_q_sql(alias), {"scope_org": m.org, "scope_uid": m.user_id}
+
+
+#: Only their own marks (23 Nov 2026, Hussain: a consultant's Trace Lab "should be new"): on the questions they asked, a
+#: Hoistra consultant sees only the notes, failure-mode cells, flags and scores they gave themselves, and of the
+#: expected answers their own and the drafts Trace Lab's agent made for their question - never another person's.
+#: Each is a condition on its row's alias, bound to :scope_uid (always passed with own_questions' parameters).
+def mine_sql(m: labelling.Member | None, col: str) -> str:
+    """'' for everyone else; for a Hoistra consultant " AND <col> = their id" (col: the row's author column)."""
+    if m is None or not getattr(m, "own_only", False):
+        return ""
+    return f" AND {col} = CAST(:scope_uid AS uuid)"
+
+
+def mine_expected_sql(m: labelling.Member | None, alias: str = "e") -> str:
+    """'' for everyone else; for a Hoistra consultant: an expected answer they wrote, or one the agent drafted."""
+    if m is None or not getattr(m, "own_only", False):
+        return ""
+    return f" AND ({alias}.source = 'coding_agent' OR {alias}.created_by = CAST(:scope_uid AS uuid))"
+
+
+def mine_params(m: labelling.Member | None) -> dict[str, Any]:
+    return {"scope_uid": m.user_id} if m is not None and getattr(m, "own_only", False) else {}
+
+
+def _scope_q(m: labelling.Member, run: str = "r", q: str = "q") -> tuple[str, dict[str, Any]]:
+    """The runs the caller may see (_scope, alias `run`) and, within them, the questions they see (own_questions, alias
+    `q`): for a query that reads questions joined to their run."""
+    where, p = _scope(m, run)
+    own, op = own_questions(m, q)
+    return (where if own == "TRUE" else f"{where} AND {own}"), {**p, **op}
+
+
 def _scope(m: labelling.Member, alias: str = "r", company: str | None = None) -> tuple[str, dict[str, Any]]:
     """The runs the caller may see: every company's (and platform-wide synthetic runs) for the platform team and a
-    consultant, optionally narrowed to one company; otherwise only their own company's."""
+    consultant, optionally narrowed to one company; otherwise only their own company's. A Hoistra consultant
+    (labelling.Member.own_only) sees only the sessions they ran, their traces and the runs holding a question they asked
+    (_own_scope); a run's questions are narrowed with own_questions."""
+    if getattr(m, "own_only", False):
+        return _own_scope(m, alias)
     if m.all_companies:
         org = _uuid_or_none(company)
         if org:
@@ -159,23 +238,28 @@ IS_SESSIONS_RUN = (f"(r.kind = 'synthetic' AND r.source = 'sync' AND left(r.titl
                    f"'{_SESSIONS_PREFIX}')")
 
 
-def _stats_sql(runs: str = "= r.id") -> str:
+def _stats_sql(runs: str = "= r.id", own: str = "TRUE") -> str:
     """The counts a run's card shows, over the questions of the runs `runs` names (a condition on q.run_id): the run
-    itself, or every run of its live day (_group_ids)."""
+    itself, or every run of its live day (_group_ids). `own` narrows them to the questions the caller sees
+    (own_questions: a Hoistra consultant's own), and then also to their own marks (mine_sql: their notes, and
+    expected answers of theirs or the agent's)."""
+    keep = KEPT_Q if own == "TRUE" else f"{KEPT_Q} AND {own}"
+    notes_mine = "" if own == "TRUE" else " AND s.reviewer_id = CAST(:scope_uid AS uuid)"
+    expected_mine = "" if own == "TRUE" else " AND (e.source = 'coding_agent' OR e.created_by = CAST(:scope_uid AS uuid))"
     return ("""
-    (SELECT count(*) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS n_questions,
+    (SELECT count(*) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + keep + """) AS n_questions,
     (SELECT count(DISTINCT t.question_id) FROM tracelab.lab_question_traces t
-       JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS n_traced,
+       JOIN tracelab.lab_questions q ON q.id = t.question_id WHERE q.run_id {runs} AND """ + keep + """) AS n_traced,
     (SELECT count(DISTINCT e.question_id) FROM tracelab.lab_expected_answers e
-       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id {runs} AND """ + KEPT_Q + """ AND """ + CURRENT_EXPECTED_WHERE + """) AS n_expected,
+       JOIN tracelab.lab_questions q ON q.id = e.question_id WHERE q.run_id {runs} AND """ + keep + """ AND """ + CURRENT_EXPECTED_WHERE + expected_mine + """) AS n_expected,
     (SELECT count(*) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
-      WHERE q.run_id {runs} AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
+      WHERE q.run_id {runs} AND """ + keep + """ AND s.superseded_by IS NULL AND NOT s.tombstone""" + notes_mine + """) AS n_notes,
     (SELECT count(DISTINCT q.id) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
        JOIN tracelab.lab_questions q ON q.id = t.question_id
-      WHERE q.run_id {runs} AND """ + KEPT_Q + """ AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_reviewed,
-    (SELECT min(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS first_at,
-    (SELECT max(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + KEPT_Q + """) AS last_at""").replace("{runs}", runs)
+      WHERE q.run_id {runs} AND """ + keep + """ AND s.superseded_by IS NULL AND NOT s.tombstone""" + notes_mine + """) AS n_reviewed,
+    (SELECT min(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + keep + """) AS first_at,
+    (SELECT max(q.asked_at) FROM tracelab.lab_questions q WHERE q.run_id {runs} AND """ + keep + """) AS last_at""").replace("{runs}", runs)
 
 
 _RUN_STATS = _stats_sql()
@@ -183,9 +267,10 @@ _RUN_STATS = _stats_sql()
 #: The order of every run list (14 Nov 2026, Hussain): the latest question asked, newest first, whatever the kind - a
 #: sessions run's batch by its sessions' last asked time (bl, from _batches), any other run by its last question's
 #: asked_at; when it was made only when nothing was asked in it. The top-bar picker and the Runs page share it.
-def _run_order(runs: str = "= r.id") -> str:
+def _run_order(runs: str = "= r.id", own: str = "TRUE") -> str:
+    keep = KEPT_Q if own == "TRUE" else f"{KEPT_Q} AND {own}"
     return ("coalesce(bl.last_at, (SELECT max(q.asked_at) FROM tracelab.lab_questions q"
-            f" WHERE q.run_id {runs} AND {KEPT_Q}), r.created_at)")
+            f" WHERE q.run_id {runs} AND {keep}), r.created_at)")
 
 
 RUN_ORDER = _run_order()
@@ -245,6 +330,8 @@ async def with_group(conn: Any, m: labelling.Member, rows: Any, company: str | N
         return out
     ids = [r["id"] for r in out]
     day, p = _day_scope(m, company, "g")
+    # Who asked: only the caller, for a Hoistra consultant (their own questions are all they see of a day).
+    own, op = own_questions(m)
     members = (await conn.execute(text(
         "SELECT r.id::text AS rep, g.id::text AS gid, g.run_no, g.organization_id::text AS org FROM tracelab.lab_runs r "
         f"JOIN tracelab.lab_runs g ON (g.id = r.id OR (r.kind = 'production' AND {day})) "
@@ -254,7 +341,8 @@ async def with_group(conn: Any, m: labelling.Member, rows: Any, company: str | N
         "CASE WHEN g.owner_user_id <> CAST(:co AS uuid) THEN g.owner_email END) AS email "
         "FROM tracelab.lab_runs r JOIN tracelab.lab_runs g ON "
         f"{day} JOIN tracelab.lab_questions q ON q.run_id = g.id WHERE r.id = ANY(CAST(:ids AS uuid[])) "
-        f"AND r.kind = 'production' AND NOT {SCENARIO_Q}"), {**p, "ids": ids, "co": COMPANY_OWNER})).mappings().all()
+        f"AND r.kind = 'production' AND NOT {SCENARIO_Q} AND {own}"),
+        {**p, **op, "ids": ids, "co": COMPANY_OWNER})).mappings().all()
     by: dict[str, dict[str, Any]] = {}
     for x in members:
         got = by.setdefault(x["rep"], {"run_ids": [], "codes": [], "organization_ids": [], "code_orgs": {}})
@@ -293,9 +381,11 @@ async def group_row(conn: Any, m: labelling.Member, code: str) -> dict[str, Any]
     where, p = _scope(m, "r")
     ids, ip = _group_ids(m)
     rep, rp = _is_rep(m)
+    own, op = own_questions(m)
     row = (await conn.execute(text(
-        f"SELECT {_RUN_COLS}, {_stats_sql(f'IN ({ids})')} FROM tracelab.lab_runs r WHERE r.kind = 'production' "
-        f"AND r.run_day = :day AND {where} AND {rep}"), {**p, **ip, **rp, "day": run["run_day"]})).mappings().first()
+        f"SELECT {_RUN_COLS}, {_stats_sql(f'IN ({ids})', own)} FROM tracelab.lab_runs r WHERE r.kind = 'production' "
+        f"AND r.run_day = :day AND {where} AND {rep}"),
+        {**p, **ip, **rp, **op, "day": run["run_day"]})).mappings().first()
     return (await with_group(conn, m, [row or run]))[0]
 
 
@@ -340,11 +430,16 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
     rep, rp = _is_rep(m, company)
     p.update(ip)
     p.update(rp)
+    # A Hoistra consultant's runs count, order and match by their own questions only (own_questions).
+    own, op = own_questions(m)
+    own_x, oxp = own_questions(m, "qx")
+    p.update(op)
+    p.update(oxp)
     runs_in = f"IN ({ids})"
     where += f" AND {rep}"
     if for_page:
         where += (" AND (r.kind <> 'production' OR EXISTS (SELECT 1 FROM tracelab.lab_questions q"
-                  f" WHERE q.run_id {runs_in} AND {KEPT_Q}))")
+                  f" WHERE q.run_id {runs_in} AND {KEPT_Q} AND {own}))")
     if kind == SESSIONS_KIND:
         # The runs made from a run tag's sessions (sync_sessions): the only synthetic runs the sync itself makes.
         where += " AND r.kind = 'synthetic' AND r.source = 'sync'"
@@ -358,7 +453,7 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
         words = "(x.title ILIKE :q OR coalesce(x.owner_email, '') ILIKE :q OR ('R' || x.run_no) ILIKE :q)"
         where += (f" AND ({words.replace('x.', 'r.')} OR (r.kind = 'production' AND EXISTS (SELECT 1 FROM tracelab.lab_runs x"
                   f" WHERE x.id {runs_in} AND ({words} OR EXISTS (SELECT 1 FROM tracelab.lab_questions qx"
-                  " WHERE qx.run_id = x.id AND qx.created_by_email ILIKE :q)))))")
+                  f" WHERE qx.run_id = x.id AND qx.created_by_email ILIKE :q AND {own_x})))))")
         p["q"] = conversations._like(q.strip())
     limit, offset = max(1, min(int(limit), LIST_MAX)), max(0, int(offset))
     scope, sp = _scope(m, "r", company)
@@ -366,8 +461,8 @@ async def list_runs(m: labelling.Member, *, kind: str | None = None, q: str | No
         batches = await _batches(conn, scope, sp)
         total = (await conn.execute(text(f"SELECT count(*) FROM tracelab.lab_runs r WHERE {where}"), p)).scalar_one()
         rows = (await conn.execute(text(
-            f"SELECT {_RUN_COLS}, {_stats_sql(runs_in)} FROM tracelab.lab_runs r {_BATCH_JOIN} WHERE {where} "
-            f"ORDER BY {_run_order(runs_in)} DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
+            f"SELECT {_RUN_COLS}, {_stats_sql(runs_in, own)} FROM tracelab.lab_runs r {_BATCH_JOIN} WHERE {where} "
+            f"ORDER BY {_run_order(runs_in, own)} DESC, r.run_no DESC LIMIT :lim OFFSET :off"),
             {**p, **_batch_order(batches), "lim": limit, "off": offset})).mappings().all()
         rows = await with_group(conn, m, rows, company)
     return {"total": int(total), "runs": [run_out(r, batches.get(r["id"])) for r in rows]}
@@ -493,8 +588,10 @@ async def batch_of(conn: Any, run: Any) -> dict[str, Any] | None:
 async def _run_row(conn: Any, m: labelling.Member, code: str) -> Any:
     no = parse_run_code(code)
     where, p = _scope(m, "r")
-    row = (await conn.execute(text(f"SELECT {_RUN_COLS}, {_RUN_STATS} FROM tracelab.lab_runs r WHERE r.run_no = :no "
-                                   f"AND {where}"), {**p, "no": no})).mappings().first()
+    own, op = own_questions(m)
+    stats = _RUN_STATS if own == "TRUE" else _stats_sql(own=own)
+    row = (await conn.execute(text(f"SELECT {_RUN_COLS}, {stats} FROM tracelab.lab_runs r WHERE r.run_no = :no "
+                                   f"AND {where}"), {**p, **op, "no": no})).mappings().first()
     if row is None:
         raise NotFound("run_not_found", "That run is not in Trace Lab.")
     return row
@@ -1026,15 +1123,21 @@ async def stored_answer(org: str | None, turn_id: str) -> dict[str, Any] | None:
 _Q_COLS = ("q.id::text AS id, q.seq_no, q.question, q.followups, q.role, q.intent, q.scenario_ref, "
            "q.organization_id::text AS organization_id, q.asked_at, q.source, q.created_at")
 
-_Q_STATS = """
+def _q_stats_sql(m: labelling.Member | None = None) -> str:
+    """A question row's answers, current expected answer and note counts; for a Hoistra consultant their own marks only
+    (mine_sql, mine_expected_sql), bound to :scope_uid."""
+    return """
     (SELECT json_agg(t.turn_id ORDER BY t.created_at, t.turn_id) FROM tracelab.lab_question_traces t
       WHERE t.question_id = q.id) AS turn_ids,
-    (SELECT e.expected FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id AND """ + CURRENT_EXPECTED_WHERE + """
+    (SELECT e.expected FROM tracelab.lab_expected_answers e WHERE e.question_id = q.id AND """ + CURRENT_EXPECTED_WHERE + mine_expected_sql(m) + """
       ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS expected,
     (SELECT count(*) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id
-      WHERE t.question_id = q.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_notes,
+      WHERE t.question_id = q.id AND s.superseded_by IS NULL AND NOT s.tombstone""" + mine_sql(m, "s.reviewer_id") + """) AS n_notes,
     (SELECT count(DISTINCT s.reviewer_id) FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t
-       ON t.turn_id = s.turn_id WHERE t.question_id = q.id AND s.superseded_by IS NULL AND NOT s.tombstone) AS n_annotators"""
+       ON t.turn_id = s.turn_id WHERE t.question_id = q.id AND s.superseded_by IS NULL AND NOT s.tombstone""" + mine_sql(m, "s.reviewer_id") + """) AS n_annotators"""
+
+
+_Q_STATS = _q_stats_sql()
 
 
 def _q_order(run: Any) -> str:
@@ -1064,11 +1167,12 @@ async def list_questions(m: labelling.Member, code: str) -> dict[str, Any]:
     async with db.lab_engine().connect() as conn:
         run = await group_row(conn, m, code)
         if run["kind"] == "production":
-            rows = (await label_questions(conn, run))[0]
+            rows = (await label_questions(conn, run, m=m))[0]
             return {"run": run_out(run), "questions": [question_out(r, r["q_run_no"]) for r in rows]}
-        rows = (await conn.execute(text(f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q "
-                                        f"WHERE q.run_id = CAST(:rid AS uuid) ORDER BY {_q_order(run)}"),
-                                   {"rid": run["id"]})).mappings().all()
+        own, op = own_questions(m)
+        rows = (await conn.execute(text(f"SELECT {_Q_COLS}, {_q_stats_sql(m)} FROM tracelab.lab_questions q "
+                                        f"WHERE q.run_id = CAST(:rid AS uuid) AND {own} ORDER BY {_q_order(run)}"),
+                                   {**op, "rid": run["id"]})).mappings().all()
         batch = await batch_of(conn, run)
     return {"run": run_out(run, batch), "questions": [question_out(r, run["run_no"]) for r in rows]}
 
@@ -1076,9 +1180,11 @@ async def list_questions(m: labelling.Member, code: str) -> dict[str, Any]:
 async def _question_row(conn: Any, m: labelling.Member, code: str) -> tuple[Any, Any]:
     run_no, seq = parse_question_code(code)
     run = await _run_row(conn, m, run_code(run_no))
-    row = (await conn.execute(text(f"SELECT {_Q_COLS}, {_Q_STATS} FROM tracelab.lab_questions q "
-                                   "WHERE q.run_id = CAST(:rid AS uuid) AND q.seq_no = :seq"),
-                              {"rid": run["id"], "seq": seq})).mappings().first()
+    # Another person's question of a run a Hoistra consultant may see is not found for them (own_questions).
+    own, op = own_questions(m)
+    row = (await conn.execute(text(f"SELECT {_Q_COLS}, {_q_stats_sql(m)} FROM tracelab.lab_questions q "
+                                   f"WHERE q.run_id = CAST(:rid AS uuid) AND q.seq_no = :seq AND {own}"),
+                              {**op, "rid": run["id"], "seq": seq})).mappings().first()
     if row is None:
         raise NotFound("question_not_found", "That question is not in Trace Lab.")
     return run, row
@@ -1107,8 +1213,8 @@ async def get_question(m: labelling.Member, code: str, *, turn_id: str | None = 
             "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence, e.source, e.author_email, e.created_at, "
             f"{CURRENT_EXPECTED_WHERE} AS counts, EXISTS (SELECT 1 FROM tracelab.lab_reviews v WHERE "
             "v.subject_kind = 'expected_answer' AND v.subject_id = e.id) AS decided "
-            "FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:qid AS uuid) "
-            "ORDER BY e.created_at DESC, e.id DESC"), {"qid": row["id"]})).mappings().all()]
+            f"FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:qid AS uuid){mine_expected_sql(m)} "
+            "ORDER BY e.created_at DESC, e.id DESC"), {**mine_params(m), "qid": row["id"]})).mappings().all()]
         # Newest first (3 Nov 2026): the answer just asked again is the one a reviewer opens on.
         links = [dict(r) for r in (await conn.execute(text(
             "SELECT turn_id, organization_id::text AS organization_id, source, created_by_email, created_at "
@@ -1231,7 +1337,8 @@ async def turn_expected(m: labelling.Member, turn_id: str) -> dict[str, Any]:
     true only for a question of a live day asked by hand: the page shows this on live turns only, never on Codex ones. A
     turn of another company is not found."""
     labelling.require_active(m)
-    where, p = _scope(m, "r")
+    # A Hoistra consultant: only a turn of a question they asked (_scope_q); another's is not found.
+    where, p = _scope_q(m)
     empty = {"question": None, "expected": None, "draft": False, "from_draft": False, "decision": None,
              "spec_version": None, "rules": [], "live": False, "kind": None, "company": None, "text": None}
     pick = ("SELECT q.id::text AS id, q.seq_no, q.question AS text, q.organization_id::text AS org, r.run_no, r.kind, "
@@ -1246,10 +1353,11 @@ async def turn_expected(m: labelling.Member, turn_id: str) -> dict[str, Any]:
             if (await conn.execute(text(pick + order), {"t": turn_id})).first() is not None:
                 raise NotFound("turn_not_found", "That turn is not in Trace Lab.")
             return empty
+        # A Hoistra consultant: their own version or the agent's draft, never another person's (mine_expected_sql).
         e = (await conn.execute(text(
             "SELECT e.id::text AS id, e.expected, e.expected_id, e.evidence, e.source, e.author_email, e.created_at"
-            " FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:q AS uuid)"
-            " ORDER BY e.created_at DESC, e.id DESC LIMIT 1"), {"q": row["id"]})).mappings().first()
+            f" FROM tracelab.lab_expected_answers e WHERE e.question_id = CAST(:q AS uuid){mine_expected_sql(m)}"
+            " ORDER BY e.created_at DESC, e.id DESC LIMIT 1"), {**mine_params(m), "q": row["id"]})).mappings().first()
         decision = (await conn.execute(text(
             "SELECT v.decision FROM tracelab.lab_reviews v WHERE v.subject_kind = 'expected_answer'"
             " AND v.subject_id = CAST(:e AS uuid) ORDER BY v.created_at DESC LIMIT 1"),
@@ -1492,31 +1600,52 @@ def mode_out(r: Any) -> dict[str, Any]:
             "by": r.get("created_by_email"), "at": _iso(r.get("created_at")), "since": _iso(r.get("first_at"))}
 
 
-async def _live_modes(conn: Any) -> list[dict[str, Any]]:
+async def _live_modes(conn: Any, m: labelling.Member | None = None) -> list[dict[str, Any]]:
     """The confirmed failure modes (agents/loop.resolve_modes): written by a person, or a coding agent's that a person
     approved. A coding agent's mode that nobody has decided is a proposal, never a column (3 Nov 2026)."""
     from . import loop
 
-    return await loop.live_modes(conn)
+    modes = await loop.live_modes(conn)
+    # The caller's own view (23 Nov 2026): a Hoistra consultant's modes are theirs alone (loop.visible_modes).
+    return modes if m is None else await loop.visible_modes(conn, m, modes)
+
+
+async def _hidden_modes(conn: Any, visible: list[dict[str, Any]]) -> set[str]:
+    """The live failure modes the caller does not see (another's private ones, loop.visible_modes): their cells are left
+    out of the caller's grids and counts. Empty for anyone while no Hoistra consultant has made a mode."""
+    from . import loop
+
+    seen = {x["lineage_id"] for x in visible}
+    return {x["lineage_id"] for x in await loop.live_modes(conn) if x["lineage_id"] not in seen}
 
 
 async def list_modes(m: labelling.Member) -> list[dict[str, Any]]:
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
-        return await _live_modes(conn)
+        return await _live_modes(conn, m)
+
+
+def require_mode_writer(m: labelling.Member) -> None:
+    """Who adds, changes and retires failure modes: the platform team and the consultant (require_taxonomist); and a
+    Hoistra consultant, their own only (23 Nov 2026) - _live_modes(conn, m) holds only theirs, so another's is not found."""
+    if getattr(m, "own_only", False):
+        labelling.require_active(m)
+        return
+    require_taxonomist(m)
 
 
 async def save_mode(m: labelling.Member, *, name: str, definition: str | None = None,
                     lineage_id: str | None = None) -> dict[str, Any]:
-    """Add a failure mode (a new column in every run's labels view), or change one's name or definition."""
-    require_taxonomist(m)
+    """Add a failure mode (a new column in every run's labels view), or change one's name or definition. A Hoistra
+    consultant's is a column of their own labels view only (require_mode_writer)."""
+    require_mode_writer(m)
     name = _text(name, MODE_NAME_MAX, "name", "Name the failure mode.")
     definition = _opt(definition, DEFINITION_MAX, "definition")
     lin = _uuid_or_none(lineage_id) if lineage_id else None
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SYNC_LOCK + 1})
-        live = await _live_modes(conn)
+        live = await _live_modes(conn, m)
         if lineage_id and not any(x["lineage_id"] == lin for x in live):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         if any(x["name"].strip().lower() == name.lower() and x["lineage_id"] != lin for x in live):
@@ -1530,11 +1659,11 @@ async def save_mode(m: labelling.Member, *, name: str, definition: str | None = 
 
 
 async def retire_mode(m: labelling.Member, lineage_id: str) -> dict[str, Any]:
-    require_taxonomist(m)
+    require_mode_writer(m)
     lin = _uuid_or_none(lineage_id)
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
-        live = await _live_modes(conn)
+        live = await _live_modes(conn, m)
         if not any(x["lineage_id"] == lin for x in live):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         await conn.execute(text(
@@ -1544,25 +1673,39 @@ async def retire_mode(m: labelling.Member, lineage_id: str) -> dict[str, Any]:
 
 
 #: Each person's newest value per cell of the questions named (:qids, the rows label_questions gives a run).
-_CELLS_SQL = """
+_CELLS_TEMPLATE = """
     SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
            c.question_id::text AS question_id, c.mode_lineage_id::text AS mode, c.value, c.author_id::text AS author_id,
            c.author_email, c.author_role, c.source, c.created_at
       FROM tracelab.lab_label_cells c
-     WHERE c.question_id = ANY(CAST(:qids AS uuid[]))
+     WHERE c.question_id = ANY(CAST(:qids AS uuid[])){mine}
      ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email), c.created_at DESC, c.id DESC"""
 
 #: Per failure mode, how many of the questions named (:qids) a person marked positive (their newest value; agents'
 #: suggestions never count).
-_POSITIVES_SQL = """
+_POSITIVES_TEMPLATE = """
     SELECT mode, count(DISTINCT question_id) FILTER (WHERE value = 'positive') AS positives
       FROM (SELECT DISTINCT ON (c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email))
                    c.mode_lineage_id::text AS mode, c.question_id, c.value
               FROM tracelab.lab_label_cells c
-             WHERE c.question_id = ANY(CAST(:qids AS uuid[])) AND c.source = 'manual'
+             WHERE c.question_id = ANY(CAST(:qids AS uuid[])) AND c.source = 'manual'{mine}
              ORDER BY c.question_id, c.mode_lineage_id, coalesce(c.author_id::text, c.author_email),
                       c.created_at DESC, c.id DESC) x
      GROUP BY mode"""
+
+_CELLS_SQL = _CELLS_TEMPLATE.format(mine="")
+_POSITIVES_SQL = _POSITIVES_TEMPLATE.format(mine="")
+
+
+def _cells_sql(m: labelling.Member | None) -> str:
+    """_CELLS_SQL; for a Hoistra consultant only the cells they set (mine_sql), bound to :scope_uid."""
+    return _CELLS_TEMPLATE.format(mine=mine_sql(m, "c.author_id"))
+
+
+def _positives_sql(m: labelling.Member | None) -> str:
+    """_POSITIVES_SQL; for a Hoistra consultant only the positives they set (mine_sql), bound to :scope_uid."""
+    return _POSITIVES_TEMPLATE.format(mine=mine_sql(m, "c.author_id"))
+
 
 #: A Codex batch's questions: the turns of its sessions (the latest attempt of each scenario, as run_sessions lists
 #: them), wherever each turn is a question, in the order they were asked. Each row names its own session and turn
@@ -1598,7 +1741,7 @@ _UNSET: Any = object()
 
 
 async def label_questions(conn: Any, run: Any, *, limit: int | None = None,
-                          batch: Any = _UNSET) -> tuple[list[Any], int]:
+                          batch: Any = _UNSET, m: labelling.Member | None = None) -> tuple[list[Any], int]:
     """The questions a run's Labels and Progress show and count, and how many there are (14 Nov 2026, Hussain: one
     Labels page, the run picked in the top bar). The same rows the run opens on the Runs page:
 
@@ -1609,10 +1752,14 @@ async def label_questions(conn: Any, run: Any, *, limit: int | None = None,
       * a run typed on the page or imported: its own questions, in order.
 
     Each row has q_run_no, the run number its code is made from, and a batch's rows their session and turn.
-    `batch` is the run's batch when the caller has read it already (None: not a batch)."""
+    `batch` is the run's batch when the caller has read it already (None: not a batch). `m`, the caller: a Hoistra
+    consultant gets only the questions they asked (own_questions), and no Codex batch's rows (they ask none)."""
     lim = "" if limit is None else f" LIMIT {int(limit)}"
+    own, op = own_questions(m)
     if batch is _UNSET:
         batch = await batch_of(conn, run)
+    if batch is not None and own != "TRUE":
+        return [], 0
     if batch is not None:
         rows = (await conn.execute(text(_BATCH_Q_SQL + lim), {
             "tag": batch["run_tag"], "org": run["organization_id"], "since": batch["since"],
@@ -1620,18 +1767,20 @@ async def label_questions(conn: Any, run: Any, *, limit: int | None = None,
     else:
         live = run["kind"] == "production"
         keep = f" AND NOT {SCENARIO_Q}" if live else ""
+        if own != "TRUE":
+            keep += f" AND {own}"
         # A live day (19 Nov 2026): the questions of every run the day is shown as (with_group), each named by its own
         # run's code, newest first across them.
         rids = [str(i) for i in (run.get("run_ids") or [])] if live else []
         rids = rids or [run["id"]]
         order = _q_order(run) if len(rids) == 1 else "q.asked_at DESC NULLS LAST, rr.run_no DESC, q.seq_no DESC"
         rows = (await conn.execute(text(
-            f"SELECT {_Q_COLS}, {_Q_STATS}, rr.run_no AS q_run_no, count(*) OVER () AS n_all,"
+            f"SELECT {_Q_COLS}, {_q_stats_sql(m)}, rr.run_no AS q_run_no, count(*) OVER () AS n_all,"
             " NULL::text AS session_id, NULL::text AS turn_id, NULL::text AS scenario_id, NULL::int AS turn_no,"
             " NULL::int AS session_turns"
             " FROM tracelab.lab_questions q JOIN tracelab.lab_runs rr ON rr.id = q.run_id"
             f" WHERE q.run_id = ANY(CAST(:rids AS uuid[])){keep} ORDER BY {order}{lim}"),
-            {"rids": rids})).mappings().all()
+            {**op, "rids": rids})).mappings().all()
     return list(rows), int(rows[0]["n_all"]) if rows else 0
 
 
@@ -1645,9 +1794,13 @@ def label_row(q: Any) -> dict[str, Any]:
     return out
 
 
-async def _grid_cells(conn: Any, m: labelling.Member, qids: list[str]) -> tuple[dict[str, Any], Any]:
-    """Each person's newest value per cell of these questions, by question and mode, and when the newest was set."""
-    cells = (await conn.execute(text(_CELLS_SQL), {"qids": qids})).mappings().all() if qids else []
+async def _grid_cells(conn: Any, m: labelling.Member, qids: list[str],
+                      hidden: set[str] | None = None) -> tuple[dict[str, Any], Any]:
+    """Each person's newest value per cell of these questions, by question and mode, and when the newest was set. Cells of
+    the `hidden` modes (another's private ones: _hidden_modes) are left out."""
+    cells = (await conn.execute(text(_cells_sql(m)), {**mine_params(m), "qids": qids})).mappings().all() if qids else []
+    if hidden:
+        cells = [c for c in cells if c["mode"] not in hidden]
     # Each person's newest cell is kept, so the newest of those is the newest cell of all (a clearing one included).
     last = max((c["created_at"] for c in cells), default=None)
     by: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -1666,9 +1819,9 @@ async def matrix(m: labelling.Member, code: str) -> dict[str, Any]:
     labelling.require_active(m)
     async with db.lab_engine().connect() as conn:
         run = await group_row(conn, m, code)
-        questions, total = await label_questions(conn, run, limit=MATRIX_MAX)
-        modes = await _live_modes(conn)
-        by, last = await _grid_cells(conn, m, [q["id"] for q in questions])
+        questions, total = await label_questions(conn, run, limit=MATRIX_MAX, m=m)
+        modes = await _live_modes(conn, m)
+        by, last = await _grid_cells(conn, m, [q["id"] for q in questions], await _hidden_modes(conn, modes))
     return {"run": run_out(run), "questions": [label_row(q) for q in questions], "modes": modes,
             "cells": by, "last_updated": _iso(last), "me": m.user_id, "total": total, "more": total > len(questions)}
 
@@ -1687,14 +1840,15 @@ async def matrix_all(m: labelling.Member) -> dict[str, Any]:
             batches.update(await _batches(conn, "r.organization_id = CAST(:b_org AS uuid)", {"b_org": org}))
         for r in listed:
             room = max(MATRIX_MAX - shown, 0)
-            rows, n = await label_questions(conn, r, limit=max(room, 1), batch=batches.get(r["id"]))
+            rows, n = await label_questions(conn, r, limit=max(room, 1), batch=batches.get(r["id"]), m=m)
             total += n
             rows = rows[:room]
             if rows:
                 shown += len(rows)
                 groups.append({"run": r, "questions": [label_row(q) for q in rows]})
-        modes = await _live_modes(conn)
-        by, last = await _grid_cells(conn, m, [q["id"] for g in groups for q in g["questions"]])
+        modes = await _live_modes(conn, m)
+        by, last = await _grid_cells(conn, m, [q["id"] for g in groups for q in g["questions"]],
+                                     await _hidden_modes(conn, modes))
     return {"runs": groups, "modes": modes, "cells": by, "last_updated": _iso(last), "me": m.user_id,
             "total": total, "more": total > shown}
 
@@ -1708,7 +1862,7 @@ async def set_cell(m: labelling.Member, code: str, *, mode: str, value: str | No
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         _run, q = await _question_row(conn, m, code)
-        live = await _live_modes(conn)
+        live = await _live_modes(conn, m)
         if not any(x["lineage_id"] == lin for x in live):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         row = (await conn.execute(text(
@@ -1737,28 +1891,29 @@ async def progress(m: labelling.Member, code: str | None = None) -> dict[str, An
             if newest is None:
                 return {"run": None, "tiles": None, "modes": [], "runs": []}
             run = await group_row(conn, m, run_code(newest["run_no"]))
-        modes = await _live_modes(conn)
+        modes = await _live_modes(conn, m)
         # The same questions as the run's Labels (label_questions, 14 Nov 2026): a Codex batch counts its sessions' turns.
-        questions, n_q = await label_questions(conn, run)
+        questions, n_q = await label_questions(conn, run, m=m)
         qids = [q["id"] for q in questions]
         # People's values only: a coding agent's label is a suggestion until a person sets it (3 Nov 2026).
-        cells = [c for c in (await conn.execute(text(_CELLS_SQL), {"qids": qids})).mappings().all()
-                 if c["value"] and c["source"] == "manual"] if qids else []
+        hidden = await _hidden_modes(conn, modes)
+        cells = [c for c in (await conn.execute(text(_cells_sql(m)), {**mine_params(m), "qids": qids})).mappings().all()
+                 if c["value"] and c["source"] == "manual" and c["mode"] not in hidden] if qids else []
         recent = await with_group(conn, m, (await conn.execute(text(
             f"SELECT {_RUN_COLS} FROM tracelab.lab_runs r WHERE {where} AND {rep} AND r.run_no <= :top "
             "ORDER BY r.run_no DESC LIMIT :n"), {**p, **rp, "top": run["run_no"], "n": TREND_RUNS})).mappings().all())
         trend: dict[tuple[str, str], int] = {}
         for r in recent:
-            ids = qids if r["id"] == run["id"] else [q["id"] for q in (await label_questions(conn, r))[0]]
+            ids = qids if r["id"] == run["id"] else [q["id"] for q in (await label_questions(conn, r, m=m))[0]]
             if ids:
-                for t in (await conn.execute(text(_POSITIVES_SQL), {"qids": ids})).mappings().all():
+                for t in (await conn.execute(text(_positives_sql(m)), {**mine_params(m), "qids": ids})).mappings().all():
                     trend[(r["id"], t["mode"])] = int(t["positives"] or 0)
         notes = (await conn.execute(text(
             "SELECT t.question_id::text AS question_id, s.note, s.reviewer_email, s.created_at "
             "FROM tracelab.step_labels s JOIN tracelab.lab_question_traces t ON t.turn_id = s.turn_id "
             "WHERE t.question_id = ANY(CAST(:qids AS uuid[])) "
-            "AND s.superseded_by IS NULL AND NOT s.tombstone AND s.note IS NOT NULL ORDER BY s.created_at DESC"),
-            {"qids": qids})).mappings().all() if qids else []
+            f"AND s.superseded_by IS NULL AND NOT s.tombstone AND s.note IS NOT NULL{mine_sql(m, 's.reviewer_id')} "
+            "ORDER BY s.created_at DESC"), {**mine_params(m), "qids": qids})).mappings().all() if qids else []
     filled = {(c["question_id"], c["mode"]) for c in cells}
     noted = {n["question_id"] for n in notes}
     reviewed = noted | {c["question_id"] for c in cells}

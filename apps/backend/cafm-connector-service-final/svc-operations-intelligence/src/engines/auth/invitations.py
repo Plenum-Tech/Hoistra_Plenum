@@ -194,7 +194,7 @@ async def create(
         # A re-invitation replaces whatever role the row held, including with none. It is
         # stamped as a narrowing only when an account that already existed loses a page: a
         # new account has no earlier history to hide.
-        after = frozenset(pages or ()) if access_role else None
+        after = page_engine.data_after(access_role, pages)
         before = (
             page_engine.resolve(existing["platform_role"], existing["access_role"],
                                 existing["allowed_pages"])[1]

@@ -26,7 +26,7 @@
 // The pure shapers here are tested in test/instances.test.mjs; the methods are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { setActiveSpace } from '../api/client.js';
-import { isRoleUser, roleHome, roleLabel, roleReports } from './accessRoles.js';
+import { isConsultant, isRoleUser, roleHome, roleLabel, roleReports, screensOf } from './accessRoles.js';
 import { money } from './homeLive.js';
 import { t } from './constants.js';
 
@@ -375,6 +375,20 @@ export const instancesMethods = {
     // A user with an access role: the chip names the role and switches nothing, and the
     // navigator lists the pages they were given. Home stays the full platform's, drawn from
     // the same pages (renderVals), not one of the three instance homes.
+    // A consultant (23 Nov 2026): the chip names the role, the navigator lists Buildings only
+    // and the spaces of other pages are left out, as for a role user. Everything else - Home,
+    // sessions, reports, the queue - is the full platform's, because their data is every page's.
+    if (isConsultant(a)) {
+      const screens = screensOf(a);
+      out.instShow = true;
+      out.instName = roleLabel(a) || '';
+      out.instLine = out.instName;
+      out.instStatic = true;
+      out.instSwitch = () => {};
+      out.navSections = (vals.navSections || []).filter((n) => screens.indexOf(NAV_REPORT[n.key]) > -1);
+      out.navSpaces = (vals.navSpaces || []).filter((sp) => !SPACE_REPORT[sp.key] || screens.indexOf(SPACE_REPORT[sp.key]) > -1);
+      return out;
+    }
     const mine = roleReports(a);
     if (mine) {
       out.instShow = true;

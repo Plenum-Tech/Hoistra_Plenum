@@ -572,6 +572,8 @@ export const authMethods = {
             access_role_label: u.access_role_label === undefined ? p.account.access_role_label : (u.access_role_label || null),
             pages: u.pages === undefined ? p.account.pages : (Array.isArray(u.pages) ? u.pages : null),
             pages_known: u.pages === undefined ? p.account.pages_known : true,
+            // The page views they open: the same as pages, except a consultant's (Buildings).
+            screens: u.screens === undefined ? p.account.screens : (Array.isArray(u.screens) ? u.screens : null),
             // When the person's access was last narrowed: conversations from before it are not
             // listed for them (accessRoles.js sessionVisible), as the server does not list them.
             access_narrowed_at: u.access_narrowed_at === undefined ? p.account.access_narrowed_at : (u.access_narrowed_at || null)

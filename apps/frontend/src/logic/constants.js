@@ -575,7 +575,7 @@ const MODULES = {
     head: [],
     tableFoot: "",
     sideTitle: "", sideFoot: "",
-    filters: ["All", "Threat", "Watch", "In control", "Not scored", "Open work order"],
+    filters: ["All", "Threat", "Watch", "In control", "Value at risk", "Not scored", "Open work order"],
     asks: ["Which assets should I inspect before winter?", "What is the work order backlog on threat assets?", "Which assets have never been scored?"]
   },
   ops: {

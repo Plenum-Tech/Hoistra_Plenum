@@ -125,6 +125,7 @@ async def propose_from_notes(m: labelling.Member, *, run: str | None = None) -> 
                                   AND COALESCE(c.source, 'manual') <> 'coding_agent')
              ORDER BY s.created_at DESC LIMIT :lim"""), {**p, "days": NOTE_WINDOW_DAYS, "lim": MAX_NOTES})).mappings().all()]
         live, proposed = await loop.resolve_modes(conn)
+        live, proposed = await loop.visible_modes(conn, m, live), await loop.visible_modes(conn, m, proposed)
     if not notes:
         return {"proposed_modes": [], "labels": 0, "notes_read": 0, "run": run_code,
                 "message": ("No new notes on unlabelled questions of " + run_code + "." if run_code
@@ -483,7 +484,7 @@ async def draft_fix(m: labelling.Member, lineage_id: str, *, authorization: str 
     runs.require_taxonomist(m)
     lin = loop._uuid(lineage_id)
     async with db.lab_engine().connect() as conn:
-        modes = {md["lineage_id"]: md for md in await loop.live_modes(conn)}
+        modes = {md["lineage_id"]: md for md in await loop.visible_modes(conn, m, await loop.live_modes(conn))}
         if lin not in modes:
             raise NotFound("mode_not_found", "That failure mode is not confirmed in Trace Lab.")
         spec = await loop.approved_spec(conn)

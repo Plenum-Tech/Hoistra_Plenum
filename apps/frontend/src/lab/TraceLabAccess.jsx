@@ -11,11 +11,15 @@ const NOTE = { fontSize: '11.5px', color: 'var(--color-neutral-500)' };
 const SELECT = { fontSize: '12.5px', padding: '6px 9px', borderRadius: '7px', border: '1px solid var(--color-divider)',
   background: 'var(--color-surface)', color: 'var(--color-text)', fontFamily: 'var(--font-body)' };
 
-export function AccessView({ admin, member, loading, saving, error, onChange, inputId }) {
+// A Hoistra consultant (Users & access role, 23 Nov 2026) is let into Trace Lab by the service itself, with every page
+// holding only the questions they asked, so their row says so instead of offering the choice.
+export const CONSULTANT_NOTE = 'Consultants always have Trace Lab access, to their own questions only: every Trace Lab page shows the questions they asked, and nobody else\u2019s.';
+
+export function AccessView({ admin, consultant, member, loading, saving, error, onChange, inputId }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }} onClick={(e) => e.stopPropagation()}>
       <div style={LABEL}>{'Trace Lab access'}</div>
-      {admin ? <div style={NOTE}>{'Company admins always have Trace Lab access.'}</div> : (
+      {admin ? <div style={NOTE}>{'Company admins always have Trace Lab access.'}</div> : consultant ? <div style={NOTE}>{CONSULTANT_NOTE}</div> : (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
           <label htmlFor={inputId} style={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>{'Trace Lab access'}</label>
           <select id={inputId} style={SELECT} value={accessValue(member)} disabled={loading || saving} onChange={(e) => onChange(e.target.value)}>
@@ -36,14 +40,15 @@ export default function TraceLabAccess({ user }) {
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
   const admin = !!user && (user.role === 'admin' || user.role === 'superadmin');
+  const consultant = !admin && !!user && String(user.accessRole || '').toLowerCase() === 'consultant';
 
   React.useEffect(() => {
-    if (!user || admin) { setLoading(false); return undefined; }
+    if (!user || admin || consultant) { setLoading(false); return undefined; }
     let alive = true;
     labApi.member(user.id).then((out) => { if (alive) { setMember((out && out.member) || null); setLoading(false); } })
       .catch((e) => { if (alive) { setError('Trace Lab could not be reached: ' + errText(e)); setLoading(false); } });
     return () => { alive = false; };
-  }, [user && user.id, admin]);
+  }, [user && user.id, admin, consultant]);
 
   const onChange = async (value) => {
     const on = !!value;
@@ -61,6 +66,6 @@ export default function TraceLabAccess({ user }) {
   };
 
   if (!user) return null;
-  return <AccessView admin={admin} member={member} loading={loading} saving={saving} error={error} onChange={onChange}
+  return <AccessView admin={admin} consultant={consultant} member={member} loading={loading} saving={saving} error={error} onChange={onChange}
     inputId={'tl-access-' + user.id} />;
 }

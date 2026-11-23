@@ -688,6 +688,12 @@ async def list_sessions(m: labelling.Member, *, run_tag: str | None = None, type
             "SELECT t.session_id, t.id FROM tracelab.traces t WHERE t.session_id = ANY(CAST(:ids AS text[]))"
             " ORDER BY t.session_id, t.turn_index"), {"ids": ids})).all() if ids else []
         current = await scores.current_scores(conn, [t[1] for t in traces])
+        if getattr(m, "own_only", False):
+            # A Hoistra consultant's verdicts are from their own scores only (scores.mine_only).
+            tids = [t[1] for t in traces]
+            flags = await expected_flags.flagged_traces(conn, tids)
+            mine = {t for t, f in flags.items() if str(m.user_id) in [str(x) for x in (f.get("people") or [])]}
+            current = scores.mine_only(await scores.history(conn, tids), m.email, mine)[0]
         of: dict[str, list[dict[str, Any]]] = {}
         for sid, tid in traces:
             of.setdefault(sid, []).append(current[tid])
@@ -775,12 +781,14 @@ async def run_sessions(m: labelling.Member, code: str, *, all_attempts: bool = F
             return {"run": out_run, "mode": mode, "sessions": [], "waiting": [], "elsewhere": [], "companies": [],
                     "next": None}
         rids = [str(i) for i in (run.get("run_ids") or [])] if mode == "live" else []
+        # A Hoistra consultant: only the questions they asked, so a day never lists another person's waiting question.
+        own, op = runs.own_questions(m)
         qs = (await conn.execute(text(
             "SELECT q.seq_no, q.question, q.asked_at, q.created_at AS known_since, l.turn_id, r.run_no,"
             " r.organization_id::text AS org, q.created_by_email, r.owner_user_id::text AS owner, r.owner_email FROM tracelab.lab_questions q"
             " JOIN tracelab.lab_question_traces l ON l.question_id = q.id JOIN tracelab.lab_runs r ON r.id = q.run_id"
-            " WHERE q.run_id = ANY(CAST(:rids AS uuid[])) ORDER BY r.run_no, q.seq_no, l.created_at, l.turn_id"),
-            {"rids": rids or [run["id"]]})).mappings().all()
+            f" WHERE q.run_id = ANY(CAST(:rids AS uuid[])) AND {own} ORDER BY r.run_no, q.seq_no, l.created_at, l.turn_id"),
+            {**op, "rids": rids or [run["id"]]})).mappings().all()
         org = run["organization_id"]
         in_org = {r[0]: (r[1], r[2]) for r in (await conn.execute(text(
             "SELECT t.id, t.session_id, t.organization_id::text FROM tracelab.traces t WHERE t.id = ANY(CAST(:ids AS text[]))"),
@@ -1004,6 +1012,11 @@ async def get_session(m: labelling.Member, session_id: str) -> dict[str, Any]:
         ids = [t["id"] for t in traces]
         current, past = await scores.current_scores(conn, ids), await scores.history(conn, ids)
         flags = await expected_flags.flagged_traces(conn, ids)
+        if getattr(m, "own_only", False):
+            # A Hoistra consultant sees only their own scores and flags (23 Nov 2026: their Trace Lab starts new).
+            mine = {t for t, f in flags.items() if str(m.user_id) in [str(x) for x in (f.get("people") or [])]}
+            current, past = scores.mine_only(past, m.email, mine)
+            flags = {t: {"count": 1, "people": [str(m.user_id)]} for t in mine}
         for t in traces:
             t["scores"], t["score_history"] = current[t["id"]], past[t["id"]]
             f = flags.get(t["id"]) or {}

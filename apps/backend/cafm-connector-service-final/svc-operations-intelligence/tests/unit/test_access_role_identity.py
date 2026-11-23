@@ -307,6 +307,34 @@ def test_roles_lists_the_access_roles_and_pages(client):
         {"key": "property_manager", "label": "Property Manager"},
         {"key": "general_user", "label": "General User"},
         {"key": "compliance_officer", "label": "Compliance Officer"},
+        {"key": "consultant", "label": "Consultant"},
     ]
     assert body["pages"] == ["buildings", "compliance", "energy", "vendors", "ops", "assets"]
     assert "roles" in body and "default" in body          # what it returned before, kept
+
+
+# ── the consultant (23 Nov 2026) ───────────────────────────────────────────────
+
+def test_a_consultant_principal_reads_every_page_and_is_never_narrowed():
+    p, _ = principal_for(user_row(
+        access_role="consultant", allowed_pages=["buildings"], access_narrowed_at=NARROWED))
+    assert p.access_role == "consultant"
+    assert p.pages is None
+    # Data is every page's, so no earlier chat turn is hidden from them.
+    assert p.access_narrowed_at is None
+
+
+def test_me_reports_a_consultant_with_every_page_of_data_and_one_screen(client):
+    as_(principal(pages=None, access_role="consultant"))
+    user = client.get("/api/auth/me").json()["user"]
+    assert user["access_role"] == "consultant"
+    assert user["access_role_label"] == "Consultant"
+    assert user["pages"] is None
+    assert user["screens"] == ["buildings"]
+
+
+def test_me_reports_screens_equal_to_pages_for_everyone_else(client):
+    as_(principal())
+    assert client.get("/api/auth/me").json()["user"]["screens"] is None
+    as_(principal(pages=frozenset({"energy", "buildings"}), access_role="general_user"))
+    assert client.get("/api/auth/me").json()["user"]["screens"] == ["buildings", "energy"]

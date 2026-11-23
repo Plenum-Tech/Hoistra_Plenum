@@ -208,6 +208,19 @@ def data_tools(nodes: list | None) -> list[str]:
     return out
 
 
+#: The kinds of step that READ the company's records themselves, with no tool call (23 Nov 2026): the compliance agent's
+#: fetch reads them as one "linked records: N queries" span of kind "db". Before this, such a turn was taken as "not
+#: about records", so its live question got SPEC.md's wording and never the values (Hussain: "the expected ans is not
+#: available properly", on "Which buildings put me at risk this month?").
+RECORDS_STAGE_KINDS = frozenset({"db"})
+
+
+def reads_records(nodes: list | None) -> bool:
+    """Whether this turn read the company's records: it called a data tool (data_tools), or one of its stages read them
+    itself (RECORDS_STAGE_KINDS). Such a question is about records, and the planner may propose a query for it."""
+    return bool(data_tools(nodes)) or any(n.get("kind") in RECORDS_STAGE_KINDS for n in _nodes(nodes))
+
+
 def recorded_sql(nodes: list | None, tool_id: Any) -> list[dict]:
     """The SQL statements Hoistra's trace recorded under one records-tool call, in the order they ran:
     [{"label", "row_count"}], the shape records_values.changed_since reads as what Hoistra read then.
@@ -237,8 +250,8 @@ async def queries_for(nodes: list | None, question: str, *, propose: bool) -> di
     "tool_id" of the records call it came from (recorded_sql finds that call's SQL). With no query, `none` says why:
     None when no proposal was asked for, "not_about_records" (the turn called no data tool, or the planner says there is
     no plan for it), "no_map" (Hoistra's map of the records is not built) or "planner_unavailable" (the planner or
-    the map failed otherwise). The planner runs only for propose=True, only when the turn called a data tool, and
-    never when Hoistra's own or the answer key's query is known."""
+    the map failed otherwise). The planner runs only for propose=True, only when the turn read records (reads_records:
+    a data tool, or a stage that read them itself), and never when Hoistra's own or the answer key's query is known."""
     got = extract_queries(nodes)
     if got:
         return {"queries": [{"source": "hoistra", "plan": q["plan"], "question": q["question"] or question,
@@ -249,7 +262,7 @@ async def queries_for(nodes: list | None, question: str, *, propose: bool) -> di
         return {"queries": [{"source": "answer_key", "plan": key.plan(params), "question": question}], "none": None}
     if not propose:
         return {"queries": [], "none": None}
-    if not data_tools(nodes):
+    if not reads_records(nodes):
         return {"queries": [], "none": "not_about_records"}
     try:
         onto = await records_run.load_map()

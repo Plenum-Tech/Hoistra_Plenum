@@ -49,12 +49,16 @@ async def labels_of(m: labelling.Member, trace_id: str) -> dict[str, Any]:
     labelling.require_active(m)
     async with conversations._lab_read() as conn:
         await _trace(conn, m, trace_id)
-        modes = await runs._live_modes(conn)
+        modes = await runs._live_modes(conn, m)
         rows = (await conn.execute(text(_NEWEST), {"tid": trace_id})).mappings().all()
     live = {x["lineage_id"] for x in modes}
+    # A Hoistra consultant sees only the values they set themselves (23 Nov 2026: their Trace Lab starts new).
+    own_only = getattr(m, "own_only", False)
     cells: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         if r["value"] is None or r["mode"] not in live:
+            continue
+        if own_only and r["author_id"] != m.user_id:
             continue
         cells.setdefault(r["mode"], []).append({
             "value": r["value"], "author_id": r["author_id"], "author_email": r["author_email"],
@@ -77,7 +81,7 @@ async def set_label(m: labelling.Member, trace_id: str, *, mode: str, value: str
     async with db.lab_engine().begin() as conn:
         await _limits(conn)
         trace = await _trace(conn, m, trace_id)
-        if lineage is None or not any(x["lineage_id"] == lineage for x in await runs._live_modes(conn)):
+        if lineage is None or not any(x["lineage_id"] == lineage for x in await runs._live_modes(conn, m)):
             raise NotFound("mode_not_found", "That failure mode is not in Trace Lab.")
         row = (await conn.execute(text(
             "INSERT INTO tracelab.trace_label_cells (trace_id, organization_id, mode_lineage_id, value, author_id,"

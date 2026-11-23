@@ -84,6 +84,25 @@ async def current_scores(conn: Any, trace_ids: Sequence[str]) -> dict[str, dict[
     return out
 
 
+def mine_only(past: Mapping[str, list[dict[str, Any]]], email: str | None,
+              flagged_by_me: set[str]) -> tuple[dict[str, dict[str, dict[str, Any] | None]], dict[str, list[dict[str, Any]]]]:
+    """A Hoistra consultant's scores (23 Nov 2026, Hussain: their Trace Lab "should be new", only their own marks):
+    from each trace's history (newest first), only the scores they gave; the newest per level is current, unless they
+    flag the turn's expected outcome. Returns (current, history) shaped as current_scores and history."""
+    me = (email or "").strip().lower()
+    hist = {t: [s for s in rows if s.get("source") == "ANNOTATION" and (s.get("author_email") or "").strip().lower() == me]
+            for t, rows in past.items()}
+    current: dict[str, dict[str, dict[str, Any] | None]] = {}
+    for t, rows in hist.items():
+        cur: dict[str, dict[str, Any] | None] = {level: None for level in LEVELS}
+        if t not in flagged_by_me:
+            for s in rows:
+                if s["name"] in LEVELS and cur[s["name"]] is None:
+                    cur[s["name"]] = s
+        current[t] = cur
+    return current, hist
+
+
 def session_verdict(per_trace: Sequence[Mapping[str, Any] | None]) -> str:
     """A session's verdict at one level from its traces' current scores, one entry per trace (None = not scored)."""
     verdicts = [(s or {}).get("verdict") for s in per_trace]

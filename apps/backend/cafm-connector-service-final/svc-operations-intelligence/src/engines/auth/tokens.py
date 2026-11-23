@@ -77,6 +77,10 @@ class Principal:
     #: superadmin. An EMPTY set is a real answer: a role with no page behind it sees nothing.
     access_role: str | None = None
     pages: frozenset[str] | None = None
+    #: The pages a client shows this person (pages.screens): their pages, except a
+    #: consultant's, which are Buildings and what was ticked for them, though their data
+    #: (``pages``) is every page's. None: every page.
+    screens: tuple[str, ...] | None = None
     #: When this person's pages last got narrower. Chat turns and report runs made before it
     #: may hold data from a page they no longer have, and are not shown to them.
     access_narrowed_at: datetime | None = None
@@ -308,8 +312,14 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         building_ids=building_ids,
         access_role=access_role,
         pages=held,
+        screens=_screens(access_role, held, row.get("allowed_pages") if has_pages else None),
         access_narrowed_at=narrowed_at,
     )
+
+
+def _screens(access_role: str | None, held: frozenset[str] | None, stored: Any) -> tuple[str, ...] | None:
+    out = page_engine.screens(access_role, held, stored)
+    return None if out is None else tuple(out)
 
 
 async def open_session(

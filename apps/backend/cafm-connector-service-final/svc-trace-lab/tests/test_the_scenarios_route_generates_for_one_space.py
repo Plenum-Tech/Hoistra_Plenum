@@ -86,10 +86,11 @@ def test_asking_the_questions_does_demand_one():
 
 
 def test_no_route_is_open():
-    """Whichever gate each one takes, none of them is ungated."""
+    """Whichever gate each one takes, none of them is ungated. The Learning draft's `learner` (23 Nov 2026) is the
+    reviewer's gate, or a Hoistra consultant held to the questions they asked."""
     for route in rs.router.routes:
         calls = [getattr(sub.call, "__name__", "") for sub in route.dependant.dependencies]
-        assert "reader" in calls or "reviewer" in calls, getattr(route, "path", route)
+        assert "reader" in calls or "reviewer" in calls or "learner" in calls, getattr(route, "path", route)
 
 
 def test_the_router_is_mounted():

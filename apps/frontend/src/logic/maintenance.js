@@ -28,7 +28,7 @@ export const maintenanceMethods = {
 
     // ── the four cards across the top ──
     const mxCards = m.cards.map((c) => ({
-      l: c.l,
+      k: c.k, l: c.l,
       v: !c.answerable ? "—" : c.v === null ? "—" : String(c.v) + (c.unit || ""),
       // The sub-line is the backend's own caption; an unanswerable card says why instead.
       s: !c.answerable ? (c.reason || "this database cannot answer that") : (c.s || "no figure on record"),
@@ -62,7 +62,12 @@ export const maintenanceMethods = {
       open: () => this.setState({ detail: this.mxDecisionDetail(d) })
     });
 
-    const groups = (m.groups || []).map((g, i) => {
+    // The "Statutory among them" card's view (cardLinks, 23 Nov 2026): only the decisions marked statutory, read from
+    // the rows on screen, never sent to the server (the route's filter takes a state or a source, not this).
+    const statOnly = !!s.mxStatutory;
+    const keepRow = (d) => !statOnly || !!d.statutory;
+    const statN = (m.decisions || []).filter((d) => d && d.statutory).length;
+    const groups = (m.groups || []).filter((g) => !statOnly || (g.items || []).some(keepRow)).map((g, i) => {
       const open = s.mxOpenG ? s.mxOpenG.indexOf(g.name) > -1 : i === 0;
       const gtone = gk === "State" ? (STATE_TONE[g.name] || "ok")
         : (g.blocked || g.deviating) ? "risk" : "warn";
@@ -85,11 +90,14 @@ export const maintenanceMethods = {
         // No bulk action: there is no route that decides a decision, so a button here would
         // be a button that does nothing to the record it names.
         bulkShow: "none", bulk: "",
-        items: (g.items || []).map(row)
+        items: (g.items || []).filter(keepRow).map(row)
       };
-    });
+    }).map((g) => (!statOnly ? g : Object.assign({}, g, {
+      // The group's count and total are the server's, for the whole group: in this view they would not match the rows.
+      n: String(g.items.length), total: "—", totalColor: "var(--color-neutral-500)", totalNote: "statutory only"
+    })));
     // Ungrouped (the group_by read failed but the flat list answered) still renders the rows.
-    const flat = m.decisions.map(row);
+    const flat = m.decisions.filter(keepRow).map(row);
 
     const gOpt = (label) => ({
       label: label, on: gk === label,
@@ -175,6 +183,9 @@ export const maintenanceMethods = {
       mxGroupOpts: ["State", "Source", "Building", "Vendor"].map(gOpt),
       mxFilterOpts: mxFilterOpts,
       mxCards: mxCards,
+      mxStatShow: statOnly ? "inline-flex" : "none",
+      mxStatN: String(statN),
+      mxStatClear: () => this.setState({ mxStatutory: false }),
       mxDecisions: flat,
       mxDecEmpty: (groups.length || flat.length) ? "none" : "block",
       // Three sentences, never two: nothing loaded, nothing you may see, and nothing owed

@@ -7,7 +7,14 @@ and the API.
 
     normal user   platform role ``user``, no access role   → every page (``pages is None``)
     role user     platform role ``user``, an access role   → only the ticked pages
+    consultant    platform role ``user``, role consultant  → every page of DATA (``pages is
+                                                              None``), one SCREEN: Buildings
     admin / superadmin                                      → every page, whatever the row says
+
+A consultant (23 Nov 2026) is the one role whose screens and data differ: they open only the
+Buildings page, yet the chat, their sessions and their reports read every module, inside the
+buildings an administrator allocates to them. ``pages`` (data) is what every service enforces;
+``screens`` is what a client shows. For every other kind of person the two are the same.
 
 Two rules run through everything here, and each exists because of how this goes wrong:
 
@@ -40,7 +47,15 @@ ACCESS_ROLES: dict[str, str] = {
     "property_manager": "Property Manager",
     "general_user": "General User",
     "compliance_officer": "Compliance Officer",
+    "consultant": "Consultant",
 }
+
+#: The consultant role's key, and the screen it always opens. An administrator may tick more
+#: pages for them to open on screen (23 Nov 2026, Hussain: "by default ... only see buildings
+#: page ... but give the vendor and maintenance and asset and energy and compliance page tick
+#: box"); their data is every page's whatever is ticked (``resolve`` reads it as None).
+CONSULTANT = "consultant"
+CONSULTANT_SCREENS: tuple[str, ...] = ("buildings",)
 
 #: Tags a route can carry that are not a page. ``shared`` is open to every signed-in caller,
 #: ``ingest`` is governed by the can-ingest switch, ``admin`` is already administrator-only,
@@ -83,7 +98,37 @@ def resolve(
         # Pages on a row with no role - a row somebody edited by hand - still restrict. Only
         # a row with neither is a normal user: a restriction is never lost to a missing label.
         return (None, clean_pages(allowed_pages)) if allowed_pages is not None else (None, None)
+    if role == CONSULTANT:
+        # Every page of data, whatever the row's pages say: what they may open on screen is
+        # ``screens``, which only a client reads.
+        return role, None
     return role, clean_pages(allowed_pages)
+
+
+def consultant_screens(stored: Any) -> list[str]:
+    """A consultant's screens, in page order: Buildings always, and every known page an
+    administrator ticked for them (``stored``, the row's allowed_pages)."""
+    got = clean_pages(stored) | frozenset(CONSULTANT_SCREENS)
+    return [p for p in PAGES if p in got]
+
+
+def screens(access_role: str | None, held: frozenset[str] | None,
+            stored: Any = None) -> list[str] | None:
+    """The pages a client shows this person, in page order, or None for every page.
+
+    A consultant: Buildings and the pages ticked for them (``stored``), though their data
+    (``held``) is every page's. Anyone else: the same as their pages."""
+    if str(access_role or "").strip().lower() == CONSULTANT:
+        return consultant_screens(stored)
+    return None if held is None else [p for p in PAGES if p in held]
+
+
+def data_after(access_role: str | None, pages: list[str] | None) -> frozenset[str] | None:
+    """The pages of data an assignment ``validate_assignment`` returned leaves a person with:
+    None (every page) for no role and for a consultant, else the pages. Decides ``narrowed``."""
+    if not access_role or str(access_role).strip().lower() == CONSULTANT:
+        return None
+    return frozenset(pages or ())
 
 
 def label(access_role: str | None) -> str | None:
@@ -116,6 +161,15 @@ def validate_assignment(
         raise AccessRoleError(
             "role_needs_plain_user",
             "An administrator sees every page, so a role cannot be given to one.")
+    if role == CONSULTANT:
+        # Buildings always, ticked or not, and any other page ticked for them to open on
+        # screen. An unknown page is refused rather than dropped, so an admin is never told a
+        # page was given that was not.
+        unknown = [p for p in wanted if p not in _PAGE_SET]
+        if unknown:
+            raise AccessRoleError(
+                "unknown_page", "Unknown page: " + ", ".join(sorted(set(unknown))) + ".")
+        return role, consultant_screens(wanted)
     unknown = [p for p in wanted if p not in _PAGE_SET]
     if unknown:
         raise AccessRoleError(
@@ -139,13 +193,16 @@ def narrowed(before: frozenset[str] | None, after: frozenset[str] | None) -> boo
     return bool(before - after)
 
 
-def public_fields(access_role: str | None, held: frozenset[str] | None) -> dict[str, Any]:
+def public_fields(access_role: str | None, held: frozenset[str] | None,
+                  stored: Any = None) -> dict[str, Any]:
     """What a client is told about a caller's pages: the role, its label, and the pages in the
-    order they are ticked (null = every page). ``pages_known`` says this is the authority."""
+    order they are ticked (null = every page). ``pages_known`` says this is the authority.
+    ``stored``: the row's allowed_pages, which only a consultant's screens are read from."""
     return {
         "access_role": access_role,
         "access_role_label": label(access_role),
         "pages": None if held is None else [p for p in PAGES if p in held],
+        "screens": screens(access_role, held, stored),
         "pages_known": True,
     }
 
@@ -172,6 +229,20 @@ async def for_user(
     if row is None:
         return None, None
     return resolve(platform_role, row["access_role"], row["allowed_pages"])
+
+
+async def stored_pages(session: Any, user_id: Any) -> list[str] | None:
+    """One account's allowed_pages as stored (a consultant's screens are read from them), or
+    None when there is no row or no column yet."""
+    if not await columns_ready(session):
+        return None
+    from . import keys
+
+    row = (await session.execute(
+        text("SELECT allowed_pages FROM plenum_cafm.users WHERE id = :i"),
+        {"i": await keys.user_key(session, user_id)},
+    )).mappings().first()
+    return list(row["allowed_pages"] or []) if row is not None else None
 
 
 # ── are the columns there yet? ────────────────────────────────────────────────────────

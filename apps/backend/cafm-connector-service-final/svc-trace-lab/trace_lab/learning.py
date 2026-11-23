@@ -177,19 +177,40 @@ def by_skill(found: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
+def _own_turns_sql() -> str:
+    """The turns a Hoistra consultant may draw from (23 Nov 2026): the answers to the questions they asked, and the
+    turns of the sessions they ran. Needs :scope_org and :scope_uid."""
+    from .runs import _own_q_sql
+
+    return ("(SELECT ol.turn_id FROM tracelab.lab_question_traces ol JOIN tracelab.lab_questions oq ON oq.id = ol.question_id"
+            f" WHERE {_own_q_sql('oq')}"
+            " UNION SELECT ot.id FROM tracelab.traces ot JOIN tracelab.sessions os ON os.id = ot.session_id"
+            " WHERE os.organization_id = CAST(:scope_org AS uuid) AND os.user_id = CAST(:scope_uid AS uuid))")
+
+
+async def gather(org: str, *, run_code: str | None = None, own_uid: str | None = None) -> dict[str, Any]:
     """Everything reviewers have left that a draft can be built from, newest first.
 
     `run_code` narrows all three sources to one run, not just the expected answers. A draft headed
     "R32" that carried every note the company has ever written would be read as what R32 showed.
     A note reaches its run through the turn its step belongs to: step_labels knows the turn,
     lab_question_traces knows which question that turn answered, and the question knows its run.
+
+    `own_uid` is a Hoistra consultant (23 Nov 2026, Hussain: "the question should be consultant account specific"):
+    the draft is then built only from what was left on the questions they asked and the sessions they ran.
     """
+    from .runs import _own_q_sql
+
     rn = _run_no(run_code) if run_code else None
     in_run = (
         " AND turn_id IN (SELECT t.turn_id FROM tracelab.lab_question_traces t"
         "   JOIN tracelab.lab_questions q ON q.id = t.question_id"
         "   JOIN tracelab.lab_runs r ON r.id = q.run_id WHERE r.run_no = :rn)")
+    own = {"scope_org": org, "scope_uid": own_uid} if own_uid else {}
+    own_turn = f" AND turn_id IN {_own_turns_sql()}" if own_uid else ""
+    # ...and of those, only the marks they made themselves: their notes, and expected answers of theirs or the agent's.
+    own_notes = " AND reviewer_id = CAST(:scope_uid AS uuid)" if own_uid else ""
+    own_expected = (" AND (e.source = 'coding_agent' OR e.created_by = CAST(:scope_uid AS uuid))" if own_uid else "")
     async with db.lab_engine().connect() as conn:
         notes = [dict(r) for r in (await conn.execute(text(
             "SELECT turn_id, step_kind, step_title, question, label, note, reviewer_email,"
@@ -197,9 +218,9 @@ async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
             " FROM tracelab.step_labels"
             " WHERE organization_id = CAST(:org AS uuid) AND NOT tombstone AND superseded_by IS NULL"
             "   AND note IS NOT NULL"
-            + (in_run if rn is not None else "") +
+            + (in_run if rn is not None else "") + own_turn + own_notes +
             " ORDER BY created_at DESC LIMIT :lim"),
-            {"org": org, "lim": MAX_PER_SOURCE,
+            {"org": org, "lim": MAX_PER_SOURCE, **own,
              **({"rn": rn} if rn is not None else {})})).mappings().all()]
 
         expected = [dict(r) for r in (await conn.execute(text(
@@ -208,9 +229,10 @@ async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
             " JOIN tracelab.lab_questions q ON q.id = e.question_id"
             " JOIN tracelab.lab_runs r ON r.id = q.run_id"
             " WHERE q.organization_id = CAST(:org AS uuid)"
-            + (" AND r.run_no = :rn" if run_code else "") +
+            + (" AND r.run_no = :rn" if run_code else "")
+            + (f" AND {_own_q_sql('q')}{own_expected}" if own_uid else "") +
             " ORDER BY e.created_at DESC LIMIT :lim"),
-            {"org": org, "lim": MAX_PER_SOURCE,
+            {"org": org, "lim": MAX_PER_SOURCE, **own,
              **({"rn": _run_no(run_code)} if run_code else {})})).mappings().all()]
 
         # The gate verdicts live in the 0012 tables, which a person applies and which are not
@@ -227,9 +249,10 @@ async def gather(org: str, *, run_code: str | None = None) -> dict[str, Any]:
             + (" AND s.turn_id IN (SELECT t.turn_id FROM tracelab.lab_question_traces t"
                "   JOIN tracelab.lab_questions q ON q.id = t.question_id"
                "   JOIN tracelab.lab_runs r2 ON r2.id = q.run_id WHERE r2.run_no = :rn)"
-               if rn is not None else "") +
+               if rn is not None else "")
+            + (f" AND s.turn_id IN {_own_turns_sql()}" if own_uid else "") +
             " ORDER BY s.asked_at DESC LIMIT :lim"),
-            {"org": org, "lim": MAX_PER_SOURCE,
+            {"org": org, "lim": MAX_PER_SOURCE, **own,
              **({"rn": rn} if rn is not None else {})})).mappings().all()] if has_scenarios else []
 
     return {"notes": notes, "expected": expected, "gates": gates, "run_code": run_code,

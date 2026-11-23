@@ -5,7 +5,7 @@
 // revert-on-error); a pure-seed row keeps the local-only behaviour so the demo still
 // works offline. Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { plainFailure } from './plainErrors.js';
-import { ACCESS_ROLES, PAGE_OPTIONS, cleanPages, togglePage } from './accessRoles.js';
+import { ACCESS_ROLES, CONSULTANT, CONSULTANT_SCREENS, PAGE_OPTIONS, cleanPages, consultantScreens, togglePage } from './accessRoles.js';
 
 // A chip, drawn the way the building chips are.
 const chipLook = (on) => ({
@@ -20,9 +20,20 @@ const NEEDS_A_PAGE = "Tick at least one page for this role.";
 const roleChips = (current, pick) => [{ key: "", label: NO_ROLE }].concat(ACCESS_ROLES).map((r) => Object.assign(
   { key: r.key, label: r.label, on: (current || "") === r.key, pick: () => pick(r.key) }, chipLook((current || "") === r.key)));
 // The six pages, named as the navigator names them, with the space's name where it differs.
-const pageChips = (ticked, pick) => PAGE_OPTIONS.map((p) => Object.assign(
-  { key: p.key, label: p.label, hint: p.hint || "", on: ticked.indexOf(p.key) > -1, pick: () => pick(p.key) },
-  chipLook(ticked.indexOf(p.key) > -1)));
+// A consultant (23 Nov 2026): Buildings ticked and fixed, the other five offered as tick boxes -
+// what they open on screen; their chat, sessions and reports read every page's data anyway.
+const pageChips = (ticked, pick, role) => PAGE_OPTIONS.map((p) => {
+  const fixed = role === CONSULTANT && CONSULTANT_SCREENS.indexOf(p.key) > -1;
+  const on = fixed || ticked.indexOf(p.key) > -1;
+  return Object.assign({ key: p.key, label: p.label, hint: fixed ? "" : (p.hint || ""), on: on, fixed: fixed,
+    pick: fixed ? () => {} : () => pick(p.key) }, chipLook(on));
+});
+// What a consultant is, said wherever the role is chosen (23 Nov 2026, Hussain).
+const CONSULTANT_NOTE = "A consultant always opens the Buildings page, and any other page ticked here; their chat, "
+  + "sessions and reports read every module's data for the buildings above, whatever is ticked. In Trace Lab every page "
+  + "shows only the questions they asked.";
+// A role's pages as they are stored: a consultant's are Buildings and what was ticked for them.
+const rolePages = (role, pages) => (role === CONSULTANT ? consultantScreens(pages) : role ? cleanPages(pages) : []);
 
 export const usersMethods = {
   usSetU(id, fn) {
@@ -49,7 +60,7 @@ export const usersMethods = {
   // pages, so it waits until one page is ticked - a role with no page would let the person
   // open nothing, and the server refuses it. Until then the choice is kept here, unsaved.
   usAccessSet(u, role, pages) {
-    const next = { role: role || "", pages: role ? cleanPages(pages) : [] };
+    const next = { role: role || "", pages: rolePages(role, pages) };
     this.setState((p) => ({ usAccess: Object.assign({}, p.usAccess, { [u.id]: next }) }));
     if (!next.role) {
       // Pages with no role restrict as well (accessRoles.js isRoleUser), so No role lifts them too.
@@ -131,9 +142,10 @@ export const usersMethods = {
       // The role, and the pages that go with it. No role is a normal user, who opens every
       // page. Choosing a role shows the six pages with none ticked: the admin ticks each one.
       usRoleOn: !!s.usRole,
-      usRoleChips: roleChips(s.usRole, (key) => this.setState({ usRole: key, usPages: [] })),
-      usPageChips: pageChips(s.usPages || [], (key) => this.setState((p) => ({ usPages: togglePage(p.usPages, key) }))),
+      usRoleChips: roleChips(s.usRole, (key) => this.setState({ usRole: key, usPages: rolePages(key, []) })),
+      usPageChips: pageChips(s.usPages || [], (key) => this.setState((p) => ({ usPages: togglePage(p.usPages, key) })), s.usRole),
       usRoleNote: !s.usRole ? "A normal user opens every page, for the buildings above."
+        : s.usRole === CONSULTANT ? CONSULTANT_NOTE
         : (s.usPages || []).length ? "This user will open only the ticked pages, and only their data — in the app and in the chat."
         : NEEDS_A_PAGE,
       usSendOff: !!s.usRole && !(s.usPages || []).length,
@@ -166,7 +178,9 @@ export const usersMethods = {
         // row has no server behind it to save to.
         const draft = (s.usAccess || {})[u.id];
         const accRole = draft ? draft.role : (u.accessRole || "");
-        const accPages = draft ? draft.pages : cleanPages(u.pages);
+        // A consultant's ticks are their screens; their pages of data are every page (null).
+        const accPages = draft ? draft.pages
+          : accRole === CONSULTANT ? consultantScreens(u.screens) : cleanPages(u.pages);
         const accEditable = !!u.live && !u.allB && u.role !== "admin" && u.role !== "superadmin";
         const roleName = (ACCESS_ROLES.find((r) => r.key === u.accessRole) || {}).label || u.accessRoleLabel || u.accessRole || "";
         return {
@@ -174,16 +188,18 @@ export const usersMethods = {
           name: u.name, email: u.email, title: u.title, isMe,
           roleTag: accEditable ? roleName : "", roleTagShow: accEditable && roleName ? "inline-block" : "none",
           accessShow: accEditable ? "flex" : "none",
-          roleChips: roleChips(accRole, (key) => this.usAccessSet(u, key, key ? accPages : [])),
-          pageChips: pageChips(accPages, (key) => this.usAccessSet(u, accRole, togglePage(accPages, key))),
+          // Becoming a consultant starts from Buildings alone; the other roles keep the ticks.
+          roleChips: roleChips(accRole, (key) => this.usAccessSet(u, key, key && key !== CONSULTANT ? accPages : [])),
+          pageChips: pageChips(accPages, (key) => this.usAccessSet(u, accRole, togglePage(accPages, key)), accRole),
           pagesShow: accRole ? "flex" : "none",
           accessNote: !accRole && !draft && Array.isArray(u.pages)
             ? u.name + " has no role but is held to: " + (cleanPages(u.pages).map((k) => (PAGE_OPTIONS.find((p) => p.key === k) || {}).label || k).join(", ") || "no page")
               + ". Choose a role to set the pages, or No role to lift the restriction."
             : !accRole ? u.name + " is a normal user and opens every page."
+            : accRole === CONSULTANT ? CONSULTANT_NOTE
             : accPages.length ? u.name + " opens only the ticked pages, and only their data — in the app and in the chat."
             : NEEDS_A_PAGE + " Nothing is saved until then.",
-          labUser: u.live && !isMe ? { id: u.id, email: u.email, role: u.role } : null,
+          labUser: u.live && !isMe ? { id: u.id, email: u.email, role: u.role, accessRole: u.accessRole || null } : null,
           // An admin row (live) carries buildings [] BY DESIGN — all_buildings rides along
           // so it does not render as "0 buildings" against the person who administers them.
           nB: u.allB ? "All buildings" : u.buildings.length + (u.buildings.length === 1 ? " building" : " buildings"),
