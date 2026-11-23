@@ -117,7 +117,7 @@ def active_provider_snapshot() -> dict[str, Any]:
 
 
 # Reasoning-tier models reject any temperature but the default (1); sending 0 is a hard 400.
-_NO_TEMPERATURE_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+_NO_TEMPERATURE_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
 
 
 def _supports_temperature(model_name: str) -> bool:
@@ -129,7 +129,7 @@ def _supports_temperature(model_name: str) -> bool:
 # "Unsupported parameter ... use 'max_completion_tokens' instead", which is a 400 and not a
 # warning. Kept as its own list rather than reusing the temperature one — they happen to
 # match today, and treating two rules as one is how the next divergence becomes a bug.
-_MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+_MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
 
 
 def _token_limit_param(model_name: str) -> str:
@@ -158,7 +158,12 @@ def token_limit_kwargs(model_name: str, limit: int) -> dict[str, int]:
 # So the rule cannot be "every reasoning-tier model": gpt-5, gpt-5-mini and o4-mini reject
 # "none" outright and are fine with the field omitted. Widening this to all of gpt-5*/o*
 # breaks them.
-_NEEDS_NO_REASONING_PREFIXES = ("gpt-5.6",)
+#
+# gpt-6.1-terra replaced gpt-5.6-terra as OPENAI_MODEL (23 Nov 2026) and is treated as the
+# gpt-5.6 family is: default temperature only, max_completion_tokens, reasoning_effort="none"
+# with tools. Before this the name matched none of these prefixes, so every call would have
+# sent temperature=0 and max_tokens. tests/test_gpt61_terra_params.py holds the rule.
+_NEEDS_NO_REASONING_PREFIXES = ("gpt-5.6", "gpt-6")
 
 
 def _needs_explicit_no_reasoning(model_name: str) -> bool:

@@ -36,6 +36,9 @@ PRICES: dict[str, dict[str, float]] = {
     "gpt-5.6-sol": {"input": 4.00, "output": 20.00, "cache_read": 0.40, "cache_write": 5.00},
     "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cache_read": 0.20, "cache_write": 2.50},
     "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cache_read": 0.02, "cache_write": 0.25},
+    # OPENAI_MODEL since 23 Nov 2026. Standard tier up to 272K input tokens; cache_write is the
+    # 30-minute rate. Published third-party listings of the OpenAI price page, Nov 2026.
+    "gpt-6.1-terra": {"input": 1.00, "output": 5.00, "cache_read": 0.05, "cache_write": 1.25},
     "gpt-5.4": {"input": 2.50, "output": 15.00, "cache_read": 0.25, "cache_write": 0.0},
     "gpt-5.4-mini": {"input": 0.75, "output": 4.50, "cache_read": 0.075, "cache_write": 0.0},
     "gpt-5.4-nano": {"input": 0.20, "output": 1.25, "cache_read": 0.02, "cache_write": 0.0},

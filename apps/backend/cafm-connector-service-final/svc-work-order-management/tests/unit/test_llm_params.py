@@ -23,3 +23,9 @@ def test_older_models_keep_max_tokens_and_their_temperature():
     assert completion_kwargs("gpt-4o-mini", 120, temperature=0) == {"max_tokens": 120, "temperature": 0}
     assert completion_kwargs("gpt-4o", 2048) == {"max_tokens": 2048}
     assert completion_kwargs(None, 10) == {"max_tokens": 10}
+
+
+def test_gpt_6_1_terra_the_model_that_replaced_gpt_5_6_terra_gets_the_same_parameters():
+    """OPENAI_MODEL=gpt-6.1-terra since 23 Nov 2026; the name matched none of the prefixes before."""
+    assert completion_kwargs("gpt-6.1-terra", 1024, temperature=0.2) == {
+        "max_completion_tokens": 1024, "reasoning_effort": "none"}

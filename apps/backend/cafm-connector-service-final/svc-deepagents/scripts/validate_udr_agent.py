@@ -38,7 +38,7 @@ for candidate in (HERE / ".env", ROOT / ".env"):
                 os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 os.environ.setdefault("UDR_BASE_URL", "http://127.0.0.1:8006")
 os.environ.setdefault("ORCHESTRATOR_LLM_ROUTING", "1")
-MODEL = os.environ.setdefault("OPENAI_MODEL", "gpt-5.6-terra")
+MODEL = os.environ.setdefault("OPENAI_MODEL", "gpt-6.1-terra")
 for var in ("DB_URL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
     if not os.environ.get(var):
         sys.exit(f"{var} is not set")

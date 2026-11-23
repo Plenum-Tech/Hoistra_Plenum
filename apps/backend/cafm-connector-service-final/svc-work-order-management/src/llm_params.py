@@ -14,11 +14,11 @@ from typing import Any
 
 #: Families that renamed the output ceiling to max_completion_tokens and take only the
 #: default temperature.
-_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+_REASONING_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
 #: The one family that needs reasoning_effort="none" (with tools it is required; without, it
 #: stops a reasoning pass spending the whole ceiling before any output). gpt-5 and gpt-5-mini
 #: reject "none" and take "minimal"; o4-mini takes neither, so the field is left out for it.
-_NONE_PREFIXES = ("gpt-5.6",)
+_NONE_PREFIXES = ("gpt-5.6", "gpt-6")  # gpt-6.1-terra replaced gpt-5.6-terra, 23 Nov 2026
 _MINIMAL_PREFIXES = ("gpt-5-mini", "gpt-5-nano")
 
 
