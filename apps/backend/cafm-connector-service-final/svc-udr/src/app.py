@@ -18,7 +18,7 @@ from fastapi import Depends
 
 from .core.logging import configure_logging, get_logger
 from .api.routes import agent, catalog, tables, runs, spaces
-from .services.principal import current_principal, require_admin
+from .services.principal import current_principal, require_admin, require_reader
 from .services.page_access import PageNotAllowed, page_gate, page_not_allowed_handler
 from .api.schemas.database import ErrorDetail, ErrorResponse
 from .db import ensure_udr_tables
@@ -177,11 +177,16 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 # which column holds the company, and that is only knowable once the table is. The saved
 # spaces and run history have a fixed shape and a real organization_id, so they are scoped
 # to the caller's company instead (see services.principal.organization_for).
+#
+# A consultant (24 Nov 2026) is let through the table router too, so their chat can read every
+# register of the buildings they hold: require_reader admits them, the reads are narrowed by
+# services/scope.py to their company and buildings, and every route that writes or runs
+# caller-supplied SQL adds require_admin of its own (api/routes/tables.py).
 app.include_router(catalog.router, prefix="/api/catalog", tags=["Table catalogue"])
 app.include_router(agent.router,  prefix="/api/agent",  tags=["Agent"],
                    dependencies=[Depends(require_admin)])
 app.include_router(tables.router, prefix="/api/tables", tags=["Tables", "CRUD"],
-                   dependencies=[Depends(require_admin)])
+                   dependencies=[Depends(require_reader)])
 # The run history keeps the rows each run returned, from whichever table that was, so a
 # caller held to some pages is held out of it (services/page_access.py). The gate does
 # nothing for a caller with every page.

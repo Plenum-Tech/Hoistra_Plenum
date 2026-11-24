@@ -1387,7 +1387,23 @@ async def search_locations(query: str | None = None) -> list[dict]:
                 query, _read,
                 lambda r: [r.get("name"), " ".join(str(x) for x in (r.get("building"), r.get("name")) if x)],
                 lambda r: str(r.get("location_id") or id(r)), _LOCATION_KIND_WORDS)
-            return _noted(rows, query, top)
+            rows = _noted(rows, query, top)
+            if not rows:
+                # 24 Nov 2026 (Q15): a question naming a building ("Colmore Lantern") sent this
+                # tool, and plenum_cafm.locations has 0 rows for every building on this
+                # portfolio - so the bare [] it returned read as "this building is not in the
+                # records," when the building plainly is (it is in plenum_cafm.buildings). A
+                # location is a sub-area INSIDE a building (a plant room, a riser), never the
+                # building itself. Said so, rather than leaving a plain [], so the model tries
+                # the building directly instead of telling the user it is missing.
+                return [{"error": "zero_results", "asked_for": query,
+                        "guidance": "No location record matches '" + str(query) + "'. Locations are "
+                                    "sub-areas inside a building (a plant room, a riser), never the "
+                                    "building itself, and this register holds none on this portfolio. "
+                                    "This does NOT mean '" + str(query) + "' is missing from the "
+                                    "records - look it up as a building directly instead, by its own "
+                                    "name or code."}]
+            return rows
         resp = await _request(
             "GET", settings.wo_management_base_url, "/api/locations",
             service=_SERVICE, timeout=_TIMEOUT, params=params,

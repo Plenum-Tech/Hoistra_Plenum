@@ -502,7 +502,7 @@ class _TaskRunner:
         their pages own, built once per set of pages. None when nothing of it is left - an
         engine whose page they do not hold, or the table and document-index agents, whose
         tools can read anything - and for an agent nobody registered."""
-        key = (agent, page_access.pages_key(page_access.current()))
+        key = (agent, page_access.pages_key(page_access.current()), page_access.role_key())
         if not page_access.allows_engine(page_access.SUBAGENT_ENGINE.get(agent)):
             # An engine whose page they do not hold is not run at all, even on the shared and
             # ingest tools its list also carries.
@@ -545,8 +545,10 @@ class _TaskRunner:
         runner = self._agents.get(agent)
         selection: dict[str, Any] | None = None
         # A caller held to some pages runs the sub-agent over only their tools, or not at all
-        # (agents/page_access.py). A caller with every page takes the path below unchanged.
-        held_to_pages = page_access.current() is not None
+        # (agents/page_access.py). So does a non-admin whom the database service refuses some
+        # routes (a consultant, 24 Nov 2026): the shared agent would hand them tools that only
+        # come back refused. An admin with every page takes the path below unchanged.
+        held_to_pages = page_access.narrows_tools()
         if held_to_pages and runner is not None:
             runner = self._runner_for_pages(agent)
             if runner is None:

@@ -255,9 +255,84 @@ def tool_tags(tool: Any) -> tuple[str, ...] | None:
     return _MODULE_TAGS.get(_module_of(tool))
 
 
+#: Tools whose svc-udr route is an administrator's only (require_admin): caller-supplied SQL,
+#: the natural-language agent, and the writes.
+_UDR_ADMIN_ONLY = frozenset({"udr_execute_select", "udr_agent_query", "udr_create_record",
+                             "udr_update_record", "udr_delete_record"})
+#: Tools whose svc-udr route reads, for an administrator or a consultant (require_reader).
+_UDR_READERS = frozenset({"udr_list_tables", "udr_describe_table", "find_tables", "table_card",
+                          "udr_read_records", "udr_get_record", "udr_search_records"})
+
+
+def _caller() -> Any:
+    from ..services.principal import caller_principal  # local: keeps this module import-light
+
+    try:
+        return caller_principal.get()
+    except LookupError:          # pragma: no cover
+        return None
+
+
+def _udr_role_allows(tool: Any) -> bool:
+    """Whether svc-udr would serve this caller the route behind this tool (24 Nov 2026).
+
+    It refused a plain user or a consultant with 403, and the answer then said "you do not have
+    access" over data the caller holds. No caller (a background job) and an administrator are
+    handed every tool, as before; a consultant gets the reads; any other user gets neither."""
+    name = str(getattr(tool, "name", "") or "")
+    if name not in _UDR_ADMIN_ONLY and name not in _UDR_READERS:
+        return True
+    p = _caller()
+    if p is None or getattr(p, "is_admin", False):
+        return True
+    if name in _UDR_ADMIN_ONLY:
+        return False
+    return str(getattr(p, "access_role", "") or "").strip().lower() == "consultant"
+
+
+def _role_narrows() -> bool:
+    """Whether the caller is someone _udr_role_allows may withhold a tool from."""
+    p = _caller()
+    return p is not None and not getattr(p, "is_admin", False)
+
+
+def narrows_tools() -> bool:
+    """Whether this caller is handed fewer tools than everyone: held to pages, or a non-admin
+    whom the database service refuses some routes. A sub-agent is then built over their tools
+    (agents/meta_tools._runner_for_pages) instead of the shared one over all of them."""
+    return current() is not None or _role_narrows()
+
+
+def role_key() -> str | None:
+    """The part of the caller's role that changes which tools they are handed, for caching a
+    sub-agent built for it: None for an admin or no caller, else 'consultant' or 'user'."""
+    if not _role_narrows():
+        return None
+    p = _caller()
+    return "consultant" if str(getattr(p, "access_role", "") or "").strip().lower() == "consultant" else "user"
+
+
+def role_refusal_payload(tool: Any) -> dict[str, Any]:
+    """What a database tool the service would refuse this caller answers, reached some other way.
+
+    Guidance for the model, not a refusal for the user: the records are theirs and another tool
+    reads them. Shaped as a routed_elsewhere failure (agents/evidence.py), so the answer never
+    tells the user a page or access is missing - 24 Nov 2026, a consultant was told their asset
+    register was "outside the pages you have access to"."""
+    name = str(getattr(tool, "name", "") or "")
+    return {"ok": False, "status": "tool_failed", "category": "routed_elsewhere", "user_actionable": False,
+            "message": "This part is answered from another source.", "next_step": "Nothing for the user to do.",
+            "guidance": (name + " is not offered for this account. Read the same records with "
+                         "answer_from_records (it follows the links between records), or with "
+                         "udr_read_records / udr_search_records on the table, instead.")}
+
+
 def tool_allowed(tool: Any) -> bool:
     """Whether the caller may be handed this tool. A tool nothing here has tagged is withheld
-    from a caller held to pages: a forgotten tag must fail closed."""
+    from a caller held to pages: a forgotten tag must fail closed. A database tool whose route
+    the database service would refuse this caller is withheld whatever their pages."""
+    if not _udr_role_allows(tool):
+        return False
     pages = current()
     if pages is None:
         return True
@@ -273,8 +348,9 @@ def tool_allowed(tool: Any) -> bool:
 
 
 def filter_tools(tools: list[Any]) -> list[Any]:
-    """The tools the caller may be handed. The same list object for a caller with every page."""
-    if current() is None:
+    """The tools the caller may be handed. The same list object for a caller with every page
+    who is an administrator, or for no caller at all."""
+    if current() is None and not _role_narrows():
         return tools
     return [t for t in tools if tool_allowed(t)]
 
@@ -313,6 +389,8 @@ def guard_tools(tools: list[Any]) -> list[Any]:
 def _guarded_async(tool: Any, inner: Any) -> Any:
     @functools.wraps(inner)
     async def run(*args: Any, **kwargs: Any) -> Any:
+        if not _udr_role_allows(tool):
+            return role_refusal_payload(tool)
         if not tool_allowed(tool):
             return refusal_payload()
         return await inner(*args, **kwargs)
@@ -323,6 +401,8 @@ def _guarded_async(tool: Any, inner: Any) -> Any:
 def _guarded_sync(tool: Any, inner: Any) -> Any:
     @functools.wraps(inner)
     def run(*args: Any, **kwargs: Any) -> Any:
+        if not _udr_role_allows(tool):
+            return role_refusal_payload(tool)
         if not tool_allowed(tool):
             return refusal_payload()
         return inner(*args, **kwargs)

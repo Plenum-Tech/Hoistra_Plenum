@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...services.database_service import DatabaseService, WriteRefused
-from ...services.principal import Principal, _detail, require_admin
+from ...services.principal import Principal, _detail, require_admin, require_reader
 from ...core.exceptions import (
     TableNotFoundError,
     ColumnNotFoundError,
@@ -34,13 +34,25 @@ log = get_logger(__name__)
 
 def _svc(
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_reader),
 ) -> DatabaseService:
-    """The engine, bound to whoever is asking.
+    """The engine, bound to whoever is asking, for the routes that only read.
 
-    The router already depends on require_admin, so this does not add a gate — it makes the
+    The router already depends on require_reader, so this does not add a gate — it makes the
     caller available to the query builder. Without it every route here ran unfiltered: the role
     decided whether you got in, and nothing decided which rows you got."""
+    return DatabaseService(session, principal)
+
+
+def _admin_svc(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_admin),
+) -> DatabaseService:
+    """The engine for the routes that write or run caller-supplied SQL: an administrator's.
+
+    The router admits a consultant to read (24 Nov 2026); these stay closed to them. A write is
+    not a read, and caller-supplied SELECT runs against plenum_scoped, where the views over the
+    tables with no company or building column are unfiltered."""
     return DatabaseService(session, principal)
 
 
@@ -154,7 +166,7 @@ async def get_record(
 async def create_record(
     table: str,
     body: CreateRecordRequest,
-    svc: DatabaseService = Depends(_svc),
+    svc: DatabaseService = Depends(_admin_svc),
 ) -> dict:
     log.info("route.create_record", table=table, columns=list(body.data.keys()))
     try:
@@ -170,7 +182,7 @@ async def update_record(
     table: str,
     record_id: str,
     body: UpdateRecordRequest,
-    svc: DatabaseService = Depends(_svc),
+    svc: DatabaseService = Depends(_admin_svc),
 ) -> dict:
     log.info(
         "route.update_record",
@@ -196,7 +208,7 @@ async def delete_record(
     table: str,
     record_id: str,
     id_column: str = "id",
-    svc: DatabaseService = Depends(_svc),
+    svc: DatabaseService = Depends(_admin_svc),
 ) -> DeleteRecordResponse:
     log.info("route.delete_record", table=table, record_id=record_id, id_column=id_column)
     try:
@@ -215,7 +227,7 @@ async def delete_record(
 @router.post("/query/select", summary="Execute a custom SELECT query")
 async def execute_select(
     body: ExecuteSelectRequest,
-    svc: DatabaseService = Depends(_svc),
+    svc: DatabaseService = Depends(_admin_svc),
 ) -> dict:
     log.info(
         "route.execute_select",

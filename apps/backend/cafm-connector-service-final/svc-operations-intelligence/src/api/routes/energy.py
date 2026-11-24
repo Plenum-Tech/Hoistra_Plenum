@@ -211,6 +211,7 @@ async def list_meter_readings(
 @router.get("/buildings/{building_id}/meter-summary")
 async def building_meter_summary(
     building_id: UUID,
+    month: str | None = Query(None, description="Scope readings to this calendar month, 'YYYY-MM'"),
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
@@ -219,9 +220,10 @@ async def building_meter_summary(
 
     Answers "how many half-hourly readings does this building have, on which MPAN, and how
     much" in one call. The alternative was three chained calls and several thousand reading
-    rows to add up, so the sum is computed where the rows are.
+    rows to add up, so the sum is computed where the rows are. `month` ('YYYY-MM') scopes the
+    totals to one calendar month.
     """
-    return await meter_svc.building_meter_summary(session, building_id=building_id)
+    return await meter_svc.building_meter_summary(session, building_id=building_id, month=month)
 
 
 @router.get("/gaps")

@@ -1045,8 +1045,26 @@ async def list_gaps(
     ]
 
 
+def _month_window(month: str | None) -> tuple[str, str] | None:
+    """A 'YYYY-MM' string → the half-open range [first of that month, first of the next),
+    or None when nothing parseable was given. A range, never a word in the SQL, so a
+    half-hourly reading at 23:30 on the last day is counted and the next month's is not."""
+    import re as _re
+    from datetime import date as _date
+
+    m = _re.match(r"^\s*(\d{4})-(\d{1,2})\s*$", str(month or ""))
+    if not m:
+        return None
+    y, mo = int(m.group(1)), int(m.group(2))
+    if not 1 <= mo <= 12:
+        return None
+    start = _date(y, mo, 1)
+    end = _date(y + 1, 1, 1) if mo == 12 else _date(y, mo + 1, 1)
+    return start.isoformat(), end.isoformat()
+
+
 async def building_meter_summary(
-    session: AsyncSession, *, building_id: UUID | str
+    session: AsyncSession, *, building_id: UUID | str, month: str | None = None
 ) -> dict[str, Any]:
     """Every meter on one building, with its readings counted and totalled.
 
@@ -1054,13 +1072,23 @@ async def building_meter_summary(
     over a thousand rows per meter, and the question is almost always how many, over what
     window, and how much — not what each one was.
 
+    ``month`` ('YYYY-MM') scopes the readings to that calendar month (24 Nov 2026): without it
+    every per-meter total was all-time, so "total main electricity in October 2026" could only
+    be answered with a cumulative figure over the whole range. The meter rows are always
+    listed, even in a month they have no readings, so the register still reads in full.
+
     energy_meters.building_id carries the building. Readings hang off energy_meters, while the
     building's own register (plenum_cafm.meters, keyed on building_id) is what the building
     graph draws — so a meter can be on the register with no readings, and that is reported
     rather than left to look like an absence of meters.
     """
     bid = str(building_id)
-    meters_sql = """
+    window = _month_window(month)
+    # The window is applied inside the LEFT JOIN's ON, not a WHERE, so a meter with no reading
+    # in the month still appears (with 0), rather than dropping off the register for that month.
+    on_window = (" AND r.reading_at >= CAST(:w_from AS date) AND r.reading_at < CAST(:w_to AS date)"
+                 if window else "")
+    meters_sql = f"""
         SELECT em.id::text                       AS meter_id,
                COALESCE(em.mpan, em.mprn)        AS meter_ref,
                em.mpan,
@@ -1076,13 +1104,16 @@ async def building_meter_summary(
                    WHERE r.quality_flag IS DISTINCT FROM 'ok'
                )                                 AS estimated_readings
           FROM plenum_cafm.energy_meters em
-          LEFT JOIN plenum_cafm.meter_readings r ON r.meter_id = em.id
+          LEFT JOIN plenum_cafm.meter_readings r ON r.meter_id = em.id{on_window}
          WHERE em.building_id = CAST(:b AS uuid)
          GROUP BY em.id, em.mpan, em.mprn, em.meter_type, em.is_sub_meter, em.active
          ORDER BY COALESCE(em.mpan, em.mprn)
     """
+    params = {"b": bid}
+    if window:
+        params["w_from"], params["w_to"] = window
     rows = [dict(r) for r in (
-        await session.execute(text(meters_sql), {"b": bid})
+        await session.execute(text(meters_sql), params)
     ).mappings().all()]
     for r in rows:
         r["total_kwh"] = float(r["total_kwh"]) if r.get("total_kwh") is not None else 0.0
@@ -1124,6 +1155,9 @@ async def building_meter_summary(
     return {
         "ok": True,
         "building_id": bid,
+        # The window these totals cover: null means all-time, else the month asked for. Stated
+        # so the reader is never left to assume a cumulative figure is the month they asked about.
+        "window": ({"month": month, "from": window[0], "to": window[1]} if window else None),
         "meters": rows,
         "meter_count": len(rows),
         "readings_total": sum(int(r["readings"] or 0) for r in rows),

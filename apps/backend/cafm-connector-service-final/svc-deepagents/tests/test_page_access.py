@@ -19,9 +19,15 @@ COMPLIANCE = frozenset({"compliance", "buildings"})
 
 @pytest.fixture(autouse=True)
 def _no_pages_between_tests():
+    from src.services.principal import caller_principal
+
     token = PA.active_pages.set(None)
     space = spaces.active_space.set(None)
+    # No signed-in caller left over from another test: the tool filter also reads the
+    # caller's role (svc-udr's routes are an admin's or a consultant's, 24 Nov 2026).
+    who = caller_principal.set(None)
     yield
+    caller_principal.reset(who)
     PA.active_pages.reset(token)
     spaces.active_space.reset(space)
 

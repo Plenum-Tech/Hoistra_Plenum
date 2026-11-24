@@ -858,6 +858,73 @@ async def list_contract_parameters(
                 # never cost the reader the contract list.
                 pass
 
+    # The commercial value, from plenum_cafm.vendor_contracts (24 Nov 2026). The SLA terms
+    # extracted here have none of their own - contract_value/annual_value_gbp live on the
+    # separate vendor_contracts row the workbook or document ingest wrote - so "list the
+    # vendor contracts at <building> with their contract value" answered from this list alone
+    # and found every rate card blank, though the value was on record all along.
+    #
+    # Matched by contract_id where it resolved (the document → contract link, B1); where it
+    # did not, by vendor_id, but ONLY when that vendor has exactly one contract on record -
+    # several vendors here (Bishopsgate's, re-run 29 Sep-3 Oct) hold more than one row under
+    # the same name, and guessing which one a bare vendor_id means would misattribute a value
+    # rather than leave it unplaced.
+    for d in out:
+        for f in ("contract_value", "annual_value_gbp", "currency", "contract_name",
+                  "contract_start", "contract_end"):
+            d.setdefault(f, None)
+    cids = sorted({str(d["contract_id"]) for d in out if d.get("contract_id")})
+    vids = sorted({str(d["vendor_id"]) for d in out if d.get("vendor_id")})
+    if cids or vids:
+        try:
+            from sqlalchemy import text as _text
+
+            by_contract: dict[str, dict] = {}
+            if cids:
+                res = await session.execute(
+                    _text(
+                        "SELECT id::text AS id, contract_value, annual_value_gbp, currency, "
+                        "contract_name, contract_start, contract_end FROM "
+                        "plenum_cafm.vendor_contracts WHERE id::text = ANY(:ids)"
+                    ),
+                    {"ids": cids},
+                )
+                by_contract = {r.id: dict(r._mapping) for r in res}
+            by_vendor: dict[str, dict] = {}
+            if vids:
+                res = await session.execute(
+                    _text(
+                        "SELECT vendor_id::text AS vid, id::text AS cid, contract_value, "
+                        "annual_value_gbp, currency, contract_name, contract_start, "
+                        "contract_end, count(*) OVER (PARTITION BY vendor_id) AS n FROM "
+                        "plenum_cafm.vendor_contracts WHERE vendor_id::text = ANY(:ids)"
+                    ),
+                    {"ids": vids},
+                )
+                for r in res:
+                    m = dict(r._mapping)
+                    if int(m.pop("n")) == 1:               # exactly one contract: not a guess
+                        by_vendor[m.pop("vid")] = m
+                    else:
+                        by_vendor.pop(m["vid"], None)       # more than one: leave unplaced
+            for d in out:
+                row = (by_contract.get(str(d.get("contract_id") or ""))
+                       or by_vendor.get(str(d.get("vendor_id") or "")))
+                if row:
+                    d["contract_value"] = (float(row["contract_value"])
+                                           if row.get("contract_value") is not None else None)
+                    d["annual_value_gbp"] = (float(row["annual_value_gbp"])
+                                             if row.get("annual_value_gbp") is not None else None)
+                    d["currency"] = row.get("currency")
+                    d["contract_name"] = row.get("contract_name")
+                    d["contract_start"] = (row["contract_start"].isoformat()
+                                           if row.get("contract_start") else None)
+                    d["contract_end"] = (row["contract_end"].isoformat()
+                                         if row.get("contract_end") else None)
+        except Exception:  # noqa: BLE001 — the value is an enrichment; losing it must
+            # never cost the reader the contract list.
+            pass
+
     # The same treatment for whoever confirmed each set. A uuid is not an answer to "who
     # decided these numbers are binding?", and this is the only place the reader can be told.
     # One query for the page, and only when something on it is actually confirmed.

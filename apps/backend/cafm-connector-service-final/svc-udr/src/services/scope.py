@@ -82,6 +82,61 @@ UNSCOPED_WITH_FK_ROUTE: dict[str, tuple[str, str, str]] = {
     "work_order_businesses":  ("vendor_id", "vendors", ORG_COLUMN),
 }
 
+#: Tables that HAVE a building_id but leave it empty, whose building is their parent's.
+#: table -> (local column, parent table); the parent's ``id`` is matched and its building_id
+#: decides. Found 24 Nov 2026: every one of 623,617 readings and 182 maintenance plans written
+#: by the workbook ingest that day had no building_id of its own, so a building-restricted
+#: caller (a consultant) saw none of their buildings' energy readings or planned maintenance.
+#: A row that carries its own building_id is judged by it, as before.
+#: Must match the same map in udr_scoped_views.sql — tests/unit/test_consultant_reads.py
+#: fails if the two disagree.
+BUILDING_VIA_PARENT: dict[str, tuple[str, str]] = {
+    "meter_readings":    ("meter_id", "energy_meters"),
+    "maintenance_plans": ("asset_id", "assets"),
+}
+
+#: Tables with a company but NO building_id, whose building is their parent's (24 Nov 2026).
+#: table -> (local column, parent table, parent key). They were narrowed to the company only, so
+#: a building-restricted caller read every building's rows: a consultant's chat answered about
+#: Bishopsgate's planned visits, a building they do not hold. For a building-restricted caller a
+#: row is kept only when its parent is in one of their buildings; a row with no parent is not
+#: attributable to any of them and is not kept. Compared as text: the link columns are uuid in
+#: some tables and text in others. Must match udr_scoped_views.sql (test_consultant_reads.py).
+BUILDING_ONLY_VIA_PARENT: dict[str, tuple[str, str, str]] = {
+    "ppm_visits":              ("asset_id", "assets", "id"),
+    "inspections":             ("asset_id", "assets", "id"),
+    "asset_readings":          ("asset_id", "assets", "id"),
+    "asset_reading_bands":     ("asset_id", "assets", "id"),
+    "asset_criticality":       ("asset_id", "assets", "id"),
+    "invoice_lines":           ("work_order_id", "work_orders", "id"),
+    "vendor_wo_scores":        ("work_order_id", "work_orders", "id"),
+    "shared_work_orders":      ("work_order_id", "work_orders", "id"),
+    "contract_sla_parameters": ("contract_id", "vendor_contracts", "id"),
+    "invoice_verifications":   ("document_id", "documents", "document_id"),
+    "meter_reading_units":     ("meter_id", "energy_meters", "id"),
+}
+
+#: Tables only an administrator reads through this service, whatever columns they have: who the
+#: users are, what people asked the chat, audit trails, platform internals (24 Nov 2026). Opening
+#: the table routes to a consultant must not open these - a company column would have narrowed
+#: them to the company, not to the buildings, and they are not building data at all.
+ADMIN_ONLY_TABLES: frozenset[str] = frozenset({
+    "users", "user_buildings", "invitations", "files", "reports", "report_cards",
+    "approvals_queue_items", "compliance_risk_snapshots", "compliance_scan_runs",
+    "audit_logs", "workbook_extras_runs", "memory_pages", "platform_usage_events",
+})
+ADMIN_ONLY_PREFIXES: tuple[str, ...] = (
+    "auth_", "agent_trace", "chat_", "ops_", "udr_", "migration_", "hoist_cron", "skill_lab",
+    "activity_log", "ingestion_", "saved_space", "rag_", "prompt_", "claude_", "fiix_",
+    "schema_mapping", "checkpoint", "orchestration_", "query_audit", "report_card",
+)
+
+
+def admin_only(table: str) -> bool:
+    """Whether only an administrator reads this table through this service."""
+    t = (table or "").strip().lower()
+    return t in ADMIN_ONLY_TABLES or t.startswith(ADMIN_ONLY_PREFIXES)
+
 #: Never readable or writable through this service, by anyone, superadmin included.
 #:
 #: These are not "unscoped tables we have not got to yet" — scoping them is the wrong frame.
@@ -146,6 +201,7 @@ async def scope_columns(session: AsyncSession, table: str) -> frozenset[str]:
 def predicate_for(
     columns: frozenset[str],
     principal: Principal | None,
+    table: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """``(sql_fragment, params)`` restricting a table with these columns to this caller.
 
@@ -176,7 +232,25 @@ def predicate_for(
             return "FALSE", {}
         keys = [f"scope_b{i}" for i in range(len(principal.building_ids))]
         placeholders = ", ".join(f":{k}" for k in keys)
-        parts.append(f'"{BUILDING_COLUMN}"::text IN ({placeholders})')
+        own = f'"{BUILDING_COLUMN}"::text IN ({placeholders})'
+        via = BUILDING_VIA_PARENT.get((table or "").strip().lower())
+        if via:
+            # A row with no building of its own is its parent's: the meter's, the asset's.
+            local, parent = via
+            own = (f'({own} OR ("{BUILDING_COLUMN}" IS NULL AND "{local}" IN ('
+                   f'SELECT p.id FROM {SCHEMA}."{parent}" p '
+                   f'WHERE p.{BUILDING_COLUMN}::text IN ({placeholders}))))')
+        parts.append(own)
+        params.update({k: str(b) for k, b in zip(keys, principal.building_ids)})
+    elif principal.building_ids is not None and (table or "").strip().lower() in BUILDING_ONLY_VIA_PARENT:
+        # No building of its own at all: the row is its parent's (see BUILDING_ONLY_VIA_PARENT).
+        if not principal.building_ids:
+            return "FALSE", {}
+        local, parent, pkey = BUILDING_ONLY_VIA_PARENT[(table or "").strip().lower()]
+        keys = [f"scope_b{i}" for i in range(len(principal.building_ids))]
+        placeholders = ", ".join(f":{k}" for k in keys)
+        parts.append(f'"{local}"::text IN (SELECT p.{pkey}::text FROM {SCHEMA}."{parent}" p '
+                     f'WHERE p.{BUILDING_COLUMN}::text IN ({placeholders}))')
         params.update({k: str(b) for k, b in zip(keys, principal.building_ids)})
 
     return (" AND ".join(parts), params) if parts else ("", {})
@@ -188,7 +262,7 @@ async def predicate(
     principal: Principal | None,
 ) -> tuple[str, dict[str, Any]]:
     """``predicate_for`` against the live schema for ``table``."""
-    return predicate_for(await scope_columns(session, table), principal)
+    return predicate_for(await scope_columns(session, table), principal, table=table)
 
 
 def combine(where_clause: str, fragment: str) -> str:

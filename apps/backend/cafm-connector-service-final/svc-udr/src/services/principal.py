@@ -56,6 +56,8 @@ _cache: dict[str, tuple[float, "Principal"]] = {}
 
 ADMIN_ROLES = ("admin", "superadmin", "owner")
 SUPERADMIN_ROLES = ("superadmin", "owner")
+#: The access role whose chat reads every register of its buildings (engines/auth/pages.py).
+CONSULTANT = "consultant"
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,9 @@ class Principal:
     #: The pages this caller may open, or None for every page (services/page_access.py).
     #: An empty set is a real answer: held to no page at all.
     pages: "frozenset[str] | None" = None
+    #: The access role the identity service resolved (svc-operations-intelligence
+    #: engines/auth/pages.py), or None. Only ``consultant`` changes anything here.
+    access_role: "str | None" = None
 
     def allows_page(self, page: str) -> bool:
         return self.pages is None or page in self.pages
@@ -82,6 +87,14 @@ class Principal:
     @property
     def is_admin(self) -> bool:
         return (self.role or "").lower() in ADMIN_ROLES
+
+    @property
+    def is_consultant(self) -> bool:
+        """A plain user whose data is every page of the buildings they hold (23 Nov 2026).
+
+        Their chat reads through this service, so they get the read routes — scoped to their
+        company and buildings like anyone's — and nothing that writes or runs free SQL."""
+        return not self.is_admin and (self.access_role or "").strip().lower() == CONSULTANT
 
     @property
     def is_superadmin(self) -> bool:
@@ -147,6 +160,7 @@ def _from_me(payload: dict[str, Any]) -> Principal:
         role=str(user.get("platform_role") or user.get("role") or "user"),
         building_ids=building_ids,
         pages=_pages_from(user),
+        access_role=str(user["access_role"]).strip().lower() if user.get("access_role") else None,
     )
 
 
@@ -222,6 +236,23 @@ async def require_admin(principal: Principal = Depends(current_principal)) -> Pr
     of a predicate.
     """
     if not principal.is_admin:
+        raise _forbidden(
+            "Only an administrator can read and write arbitrary tables through the "
+            "Universal Database Reader.", "admin_required", your_role=principal.role,
+        )
+    return principal
+
+
+async def require_reader(principal: Principal = Depends(current_principal)) -> Principal:
+    """FastAPI dependency: an administrator, or a consultant — or 403, as require_admin.
+
+    For the routes that only read a table the request names, and the catalogue. A consultant
+    reads them so their chat can answer about every register of the buildings they hold
+    (24 Nov 2026); what they get is narrowed by services/scope.py exactly as an admin's is,
+    plus their buildings, and a table nothing can narrow is refused to them in
+    database_service. Every other plain user is refused here as before.
+    """
+    if not (principal.is_admin or principal.is_consultant):
         raise _forbidden(
             "Only an administrator can read and write arbitrary tables through the "
             "Universal Database Reader.", "admin_required", your_role=principal.role,

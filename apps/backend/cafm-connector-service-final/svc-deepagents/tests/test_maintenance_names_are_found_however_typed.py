@@ -237,6 +237,18 @@ def test_no_query_still_lists_every_location(routes):
     assert len(rows) == len(LOCATIONS) and routes.calls == [("/api/locations", {})]
 
 
+def test_a_meaningful_name_with_no_location_record_says_so_rather_than_bare_empty(routes):
+    """24 Nov 2026 (Q15): "Colmore Lantern" names a real building, but plenum_cafm.locations has
+    no row for it (or for any building, on this portfolio). A bare [] read as "this building is
+    not in the records" and the chat told the user so. It must say plainly that a location is
+    not a building and point back to the building register, so the model does not conclude that."""
+    rows = _run(wo.search_locations, query="Colmore Lantern")
+    assert rows and rows[0]["error"] == "zero_results" and rows[0]["asked_for"] == "Colmore Lantern"
+    g = rows[0]["guidance"].lower()
+    assert "not" in g and "missing" in g and "building" in g
+    assert routes.calls and routes.calls[0][0] == "/api/locations"
+
+
 # ── list_work_orders(asset=...) ──────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("typed,ids", [

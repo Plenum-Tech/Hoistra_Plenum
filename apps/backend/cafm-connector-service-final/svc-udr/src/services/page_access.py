@@ -8,7 +8,10 @@ service.
 This service reads whatever table it is asked for, so most of it is not any one page's:
 
   * the catalogue, the agent and the table routes are administrator-only already, and a
-    caller with an access role is always a plain user;
+    caller with an access role is always a plain user — except a consultant, whose pages are
+    every page (pages is None, so this gate never looks at them) and who reads the catalogue
+    and the table routes, never the agent, the writes or caller-supplied SQL (24 Nov 2026,
+    services/principal.require_reader);
   * the saved spaces are names and kinds — no rows of anybody's register;
   * the saved run history keeps a snapshot of the rows each run returned, from whichever
     table that was. It cannot be given in part, so a caller held to some pages needs every

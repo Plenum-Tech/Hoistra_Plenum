@@ -32,6 +32,14 @@
 -- not attributable to any building they hold. services/scope.py applies the same rule, and the
 -- two must agree or the same question answers differently through two routes.
 --
+-- Except where the row's building is its parent's (24 Nov 2026). The workbook ingest writes
+-- meter_readings and maintenance_plans with an empty building_id — 623,617 readings and 182
+-- plans that day — so a building-restricted caller (a consultant) saw none of their buildings'
+-- readings or planned maintenance. For the tables in the VALUES list below, a row with no
+-- building_id is judged by its parent's: the reading by its meter, the plan by its asset. A
+-- row that carries its own building_id is judged by it, as before. svc-udr's scope.py holds
+-- the same map (BUILDING_VIA_PARENT); tests/unit/test_consultant_reads.py fails on drift.
+--
 -- Tables with neither column are exposed unfiltered, by decision: most are reference data
 -- (countries, currencies, regulation_packs) or per-user rows. Some are audit logs, and those
 -- stay readable. Narrowing them needs a join route per table and is separate work.
@@ -73,6 +81,11 @@ DECLARE
     fp          text;
     vid         oid;
     tid         oid;
+    via_col     text;
+    via_parent  text;
+    only_col    text;
+    only_parent text;
+    only_key    text;
 BEGIN
     FOR r IN
         SELECT table_name
@@ -100,11 +113,57 @@ BEGIN
                 't.organization_id::text = current_setting(''app.udr_org'', true)'];
         END IF;
 
-        IF has_bld THEN
+        -- A table whose empty building_id is its parent's (see the header). No row: both NULL.
+        SELECT v.col, v.parent INTO via_col, via_parent
+          FROM (VALUES ('meter_readings', 'meter_id', 'energy_meters'),
+                       ('maintenance_plans', 'asset_id', 'assets')) AS v(tbl, col, parent)
+         WHERE v.tbl = r.table_name;
+
+        IF has_bld AND via_col IS NULL THEN
             conds := conds || ARRAY[
                 '(coalesce(current_setting(''app.udr_buildings'', true), '''') = '''' OR '
                 || 't.building_id::text = ANY(string_to_array('
                 || 'current_setting(''app.udr_buildings'', true), '','')))'];
+        ELSIF has_bld THEN
+            conds := conds || ARRAY[
+                '(coalesce(current_setting(''app.udr_buildings'', true), '''') = '''' OR '
+                || 't.building_id::text = ANY(string_to_array('
+                || 'current_setting(''app.udr_buildings'', true), '','')) OR '
+                || '(t.building_id IS NULL AND t.' || quote_ident(via_col) || ' IN ('
+                || 'SELECT p.id FROM plenum_cafm.' || quote_ident(via_parent) || ' p '
+                || 'WHERE p.building_id::text = ANY(string_to_array('
+                || 'current_setting(''app.udr_buildings'', true), '','')))))'];
+        END IF;
+
+        -- A table with a company but NO building_id, whose rows are their parent's building's
+        -- (24 Nov 2026): narrowed to the company only, a building-restricted caller read every
+        -- building's planned visits, inspections, readings and invoice lines. For such a caller a
+        -- row is kept only when its parent is in one of their buildings. Compared as text: the
+        -- link columns are uuid in some tables, text in others. svc-udr's scope.py holds the same
+        -- map (BUILDING_ONLY_VIA_PARENT). No row: all three NULL.
+        SELECT v.col, v.parent, v.pkey INTO only_col, only_parent, only_key
+          FROM (VALUES ('ppm_visits', 'asset_id', 'assets', 'id'),
+                       ('inspections', 'asset_id', 'assets', 'id'),
+                       ('asset_readings', 'asset_id', 'assets', 'id'),
+                       ('asset_reading_bands', 'asset_id', 'assets', 'id'),
+                       ('asset_criticality', 'asset_id', 'assets', 'id'),
+                       ('invoice_lines', 'work_order_id', 'work_orders', 'id'),
+                       ('vendor_wo_scores', 'work_order_id', 'work_orders', 'id'),
+                       ('shared_work_orders', 'work_order_id', 'work_orders', 'id'),
+                       ('contract_sla_parameters', 'contract_id', 'vendor_contracts', 'id'),
+                       ('invoice_verifications', 'document_id', 'documents', 'document_id'),
+                       ('meter_reading_units', 'meter_id', 'energy_meters', 'id'))
+               AS v(tbl, col, parent, pkey)
+         WHERE v.tbl = r.table_name;
+
+        IF NOT has_bld AND only_col IS NOT NULL THEN
+            conds := conds || ARRAY[
+                '(coalesce(current_setting(''app.udr_buildings'', true), '''') = '''' OR '
+                || 't.' || quote_ident(only_col) || '::text IN ('
+                || 'SELECT p.' || quote_ident(only_key) || '::text FROM plenum_cafm.'
+                || quote_ident(only_parent) || ' p '
+                || 'WHERE p.building_id::text = ANY(string_to_array('
+                || 'current_setting(''app.udr_buildings'', true), '',''))))'];
         END IF;
 
         IF array_length(conds, 1) IS NULL THEN

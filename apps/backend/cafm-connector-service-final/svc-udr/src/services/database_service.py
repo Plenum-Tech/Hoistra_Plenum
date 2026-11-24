@@ -75,6 +75,18 @@ class VendorWriteRefused(WriteRefused):
     retired vendor."""
 
 
+class ReadRefused(WriteRefused):
+    """A read this service will not make for this caller. A WriteRefused by type so the routes
+    answer it with its own status and reason, the same way."""
+
+
+#: What a consultant is told for a table that nothing can narrow to their buildings.
+_NOT_SCOPED_FOR_READER = (
+    "That table is not building data that can be narrowed to the buildings you hold, so it is "
+    "not read for this account. Read the building records it relates to instead."
+)
+
+
 def _vendor_status(value: Any) -> str:
     # NULL is live and case is ignored: the same test as operations-intelligence's
     # live_vendor_sql (shared/vendor_identity.py), the source of truth.
@@ -173,8 +185,18 @@ class DatabaseService:
         self._principal = principal
 
     async def _scope(self, table: str) -> tuple[str, dict[str, Any]]:
-        """The row restriction for this caller on this table: ``(fragment, params)``."""
-        return await scope.predicate(self._db, table, self._principal)
+        """The row restriction for this caller on this table: ``(fragment, params)``.
+
+        A caller who is not an administrator (a consultant, 24 Nov 2026) is refused a table
+        with neither a company nor a building column: no predicate can narrow it, so reading it
+        would read every company's rows. An administrator reads it as before."""
+        columns = await scope.scope_columns(self._db, table)
+        principal = self._principal
+        if principal is not None and not principal.is_admin and (
+                scope.admin_only(table) or not (columns & {scope.ORG_COLUMN, scope.BUILDING_COLUMN})):
+            log.warning("db.read.not_scoped_for_reader", table=table)
+            raise ReadRefused(403, "not_scoped_for_reader", _NOT_SCOPED_FOR_READER)
+        return scope.predicate_for(columns, principal, table=table)
 
     async def _scoped_views_exist(self) -> bool:
         """Whether the filtered views are in place. Checked once per process, and only ever

@@ -736,6 +736,7 @@ def _ambiguous(asked: str, candidates: list[dict], reason) -> dict:
 async def list_building_meter_readings(
     building_name: str | None = None,
     building_id: str | None = None,
+    month: str | None = None,
 ) -> dict:
     """C — Every meter on one building, with its readings counted and totalled.
 
@@ -743,10 +744,16 @@ async def list_building_meter_readings(
     counts, consumption totals or reading coverage** — "how many readings does Riverside
     Court have", "which MPAN", "how much kWh", "is there a gap in the data".
 
-    Pass `building_name` as the user said it. Returns per meter: `meter_ref` (the MPAN or
-    MPRN), `meter_type`, `readings`, `total_kwh`, `first_reading_at`, `last_reading_at` and
-    `estimated_readings` (readings filled in by gap retry rather than metered), plus
-    `readings_total` and `kwh_total` across the building and any `gaps` on record.
+    Pass `building_name` as the user said it. For a question about ONE month — "how much
+    electricity in October 2026", "which meter used most last month" — pass that month as
+    `month` ('YYYY-MM'); the per-meter `total_kwh`/`readings` then cover only that month and
+    `window` says which. Without `month` the totals are all-time, so NEVER quote an all-time
+    cumulative figure as a month's answer — pass the month instead.
+
+    Returns per meter: `meter_ref` (the MPAN or MPRN), `meter_type`, `readings`, `total_kwh`,
+    `first_reading_at`, `last_reading_at` and `estimated_readings` (readings filled in by gap
+    retry rather than metered), plus `readings_total` and `kwh_total` across the building and
+    any `gaps` on record. A meter with no reading in the month is still listed, with 0.
 
     `registered_without_readings` lists meters on the building's register that have no
     readings at all. Report those as metered-but-unread; they are NOT an absence of meters.
@@ -761,6 +768,7 @@ async def list_building_meter_readings(
             f"/api/energy/buildings/{bid}/meter-summary",
             service=_SERVICE,
             timeout=_TIMEOUT,
+            params=({"month": month} if month and str(month).strip() else {}),
         )
         return resp.json()
     except Exception as exc:

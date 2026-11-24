@@ -1023,6 +1023,70 @@ class Ontology:
             frontier = nxt
         raise OntologyError("No automatic path from " + a + " to " + b + ". Give 'via' explicitly" + self._via_hint(a, b))
 
+    #: How many equally short routes auto_paths returns at most: each is one EXISTS in the query.
+    MAX_ALT_PATHS = 12
+
+    def auto_paths(self, a, b):
+        """Every shortest path a -> b, as [(hops, reqs)], in the order auto_path would meet them,
+        so the first is auto_path's own. Same turning rule as auto_path. A path through a link that
+        is empty on every row (fill 0) is left out unless no other path exists - the rule
+        auto_path follows by trying the fullest link first.
+
+        For a constraint that several routes reach (24 Nov 2026): a vendor is at a building through
+        its work orders, assets, certificates, contracts, plans or planned visits, and auto_path's
+        one route answered "vendors at Aire Mill Court" with the 11 that had planned visits there,
+        leaving out 4 - one of them Blocked."""
+        if a == b:
+            return [([], [])]
+        edges = defaultdict(list)
+        for r in sorted(self.relations.values(), key=lambda r: -r.fill):
+            edges[r.from_].append(([r.name], r.to, [self._direction((r, True))]))
+            edges[r.to].append(([r.name], r.from_, [self._direction((r, False))]))
+        for dr in self.derived.values():
+            if not dr.states:
+                edges[dr.from_].append(([dr.name], dr.to, ["peer"]))
+                edges[dr.to].append(([dr.name], dr.from_, ["peer"]))
+        start = (a, False)
+        seen, frontier = {start}, [(start, [])]
+        for _depth in range(MAX_PATH_HOPS):
+            nxt, found, layer = [], [], set()
+            for (concept, went_up), via in frontier:
+                for names, other, dirs in edges[concept]:
+                    up, ok = went_up, True
+                    for d in dirs:
+                        if d == "down" and up:
+                            if not self.concepts[concept].hub:
+                                ok = False
+                            up = False
+                        up = up or d == "up"
+                    if not ok:
+                        continue
+                    ns = (other, up)
+                    if ns in seen:
+                        continue
+                    if other == b:
+                        found.append(via + names)
+                    elif len(nxt) < 200:
+                        layer.add(ns)
+                        nxt.append((ns, via + names))
+            if found:
+                def empty(v):
+                    return any(n in self.relations and self.relations[n].fill <= 0 for n in v)
+                kept = [v for v in found if not empty(v)] or found[:1]
+                out, keys = [], set()
+                for v in kept:
+                    if tuple(v) in keys:
+                        continue
+                    keys.add(tuple(v))
+                    hops, reqs, _ = self.expand(a, v)
+                    out.append((hops, reqs))
+                    if len(out) >= self.MAX_ALT_PATHS:
+                        break
+                return out
+            seen |= layer
+            frontier = nxt
+        raise OntologyError("No automatic path from " + a + " to " + b + ". Give 'via' explicitly" + self._via_hint(a, b))
+
     def _via_hint(self, a, b):
         hints = [n for n, d in self.derived.items() if {d.from_, d.to} == {a, b}]
         hints += [n for n, r in self.relations.items() if {r.from_, r.to} == {a, b}]
@@ -2440,6 +2504,29 @@ def scope_through_rules(onto, plan):
     return out
 
 
+def _any_route(onto, plan, focus_name, c):
+    """The equally short routes from the focus to a constraint, when a record should match
+    through any of them; else None and the constraint is joined along auto_path's one route.
+
+    Only for a constraint with no route given, reached by two or more routes of two hops or more
+    - a vendor at a building through its work orders, assets, certificates, contracts, plans or
+    visits (24 Nov 2026). A one-hop tie is two columns joining the same two tables, where the
+    fullest is the link and an empty one is noise, so it keeps auto_path's choice. A breakdown by
+    the constrained concept needs it joined, so it keeps the join too."""
+    if c.get("via"):
+        return None
+    for g in ((plan.get("aggregate") or {}).get("count_by") or []):
+        if g.get("concept") == c["concept"]:
+            return None
+    try:
+        alts = onto.auto_paths(focus_name, c["concept"])
+    except OntologyError:
+        return None
+    if len(alts) < 2 or len(alts[0][0]) < 2:
+        return None
+    return alts
+
+
 def build_main(onto, plan, p: Params):
     qb = QueryBuilder(onto, plan["focus"]["concept"])
     focus = qb.focus
@@ -2499,6 +2586,34 @@ def build_main(onto, plan, p: Params):
             where.append("(" + " OR ".join(options) + ")")
             paths_used.append(focus.name + " restricted to " + concept.name + " = " + ", ".join(map(str, c.get("labels") or []))
                               + ": " + " OR ".join(txt))
+            continue
+        alts = _any_route(onto, plan, focus.name, c)
+        if alts:
+            # Several equally short routes reach the constraint: a record matches through any of
+            # them (see _any_route). Matched with EXISTS, not joined, so no route multiplies rows.
+            concept = onto.concepts[c["concept"]]
+            options, labels = [], []
+            for ai, (ahops, areqs) in enumerate(alts):
+                def at_nodes(idx, a, cn, prm, n_last=len(ahops), areqs=areqs, c=c, concept=concept):
+                    conds = []
+                    if idx == n_last:
+                        if c.get("keys"):
+                            conds.append(key_condition(a, concept.key, c["keys"], prm))
+                        st = compile_states(onto, concept, a, c["states"], prm)
+                        if st is not None:
+                            conds.append(st)
+                        for flt in c["filters"]:
+                            conds.append(compile_filter(onto, concept, a, flt, prm))
+                    for i2, _cn, sts in areqs:
+                        if i2 == idx:
+                            st = compile_states(onto, cn, a, sts, prm)
+                            if st is not None:
+                                conds.append(st)
+                    return conds
+                options.append(exists_path(onto, "f", focus.name, ahops, p, "a" + str(ci) + "_" + str(ai) + "_", at_nodes))
+                labels.append(" > ".join(r.name for r, _ in ahops))
+            where.append("(" + " OR ".join(options) + ")")
+            paths_used.append(focus.name + " -> " + concept.name + " via any of: " + " OR ".join(labels))
             continue
         hops, reqs = onto.resolve_path(focus.name, c["concept"], c["via"])
         nodes = qb.add_path(hops)
