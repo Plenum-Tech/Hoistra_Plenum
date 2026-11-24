@@ -124,3 +124,14 @@ def test_the_prompt_asks_for_the_vendor_and_period_in_the_ask():
 
 def test_the_step_budget_allows_a_question_with_three_parts():
     assert MAX_STEPS >= 3
+
+
+def test_the_prompt_defines_working_at_a_building_as_any_link_not_work_orders_alone():
+    """24 Nov 2026: "which vendors work at both Aire Mill Court and Brunel Wharf House" was planned
+    as "vendors with work orders at both", narrowing a vendor's link to the building down to work
+    orders — a vendor present only through a certificate or contract would be missed. The planner is
+    told "works at" means any link."""
+    p = planner.PLAN_PROMPT.lower()
+    assert "works at" in p and "any of its records" in p
+    assert "never work orders alone" in p
+    assert "certificate" in p and "contract" in p

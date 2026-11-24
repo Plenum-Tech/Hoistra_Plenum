@@ -266,6 +266,12 @@ Rules:
   which / how many VENDORS are blocked (barred from new work), company-wide or at one building ->
   list_blocked_vendors {{"building_name": "..."}} (leave building_name out for the whole company) - not work_order_blockers,
   which is about work orders;
+  a vendor "works at" / "is at" / "serves" / "is linked to" a building through ANY of its records there -
+  a work order, an asset it maintains, a certificate filed for it, a contract, or a planned maintenance
+  visit - NEVER work orders alone. For "which vendors at <building>" or "vendors at both <A> and <B>",
+  ask answer_from_records for the vendors linked to the building(s), letting it use every link, and do
+  not narrow the `ask` to "work orders" - a vendor present only through certificates or a contract would
+  be missed (24 Nov 2026);
   lapsed / expired certificates: write the step in the person's words ("lapsed certificates") - lapsed is read from
   the status AND the expiry date, so never write it as a stored value ("status is exactly 'Lapsed'");
   repurchase / reorder / restock / replace / end of life / write off -> replacement_candidates {{"building_name": "...", "period": "..."}};
