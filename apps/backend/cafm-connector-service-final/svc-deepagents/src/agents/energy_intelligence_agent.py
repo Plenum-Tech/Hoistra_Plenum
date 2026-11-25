@@ -609,6 +609,8 @@ async def _resolve_building(
         replies = []
         for params in attempts:
             body = await _ask_resolver(params)
+            if body.get("reason") == "no_buildings":
+                return None, no_buildings_visible(asked)
             replies.append(body)
             if body.get("reason") in _EXACT_REASONS and body.get("outcome") == "resolved" and body.get("building_id"):
                 return str(body["building_id"]), None
@@ -720,6 +722,21 @@ def _unique(cands: list[dict]) -> list[dict]:
 def _not_resolved(asked: str, outcome, reason, candidates: list, guidance: str) -> dict:
     return {"error": "building_not_resolved", "outcome": outcome, "reason": reason, "asked_for": asked,
             "candidates": candidates, "guidance": guidance}
+
+
+def no_buildings_visible(asked: str) -> dict:
+    """The resolver read no building at all for this caller (its reason "no_buildings": the company
+    asked about holds none, or the user is allocated to none). Not a missing name (25 Nov 2026): on
+    12 Nov "Bishopsgate Tower" and "Ashgrove Court" came back so for a superadmin asking with no
+    company named - their own company holds no buildings - and the answer read "no building matched
+    that name"; the resolver was then asked five more times, each answer as empty as the first."""
+    return _not_resolved(
+        asked, "unmatched", "no_buildings", [],
+        "No building at all is visible to this user in the company being asked about: the register "
+        "reads empty for them (the company holds no buildings, or the user is allocated to none). "
+        f"That is not evidence that '{asked}' does not exist. Do NOT say it does not exist and do NOT "
+        "substitute another building: say that no buildings are visible here, and that a building of "
+        "another company is reached by working in that company (a superadmin: view as that company).")
 
 
 def _ambiguous(asked: str, candidates: list[dict], reason) -> dict:

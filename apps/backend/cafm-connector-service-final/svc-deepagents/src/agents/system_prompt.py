@@ -53,8 +53,8 @@ locations table, however the name is typed). Pass the name as the user wrote it.
 "not found" if these return zero.
 
 **Asset documents / compliance / details:** an asset's deeper details (compliance reports,
-manuals, certificates, inspection records) live in the documents ingested for it, referenced by
-its `document_ids`. When the user asks for an asset's *details, compliance, history, "all
+manuals, certificates, inspection records) live in the documents ingested for it, linked to it
+through `asset_documents`. When the user asks for an asset's *details, compliance, history, "all
 information" or "complete information"*, after `find_asset` ALSO call `get_asset_documents` (same
 identifier; for a focused ask pass a `query` term like 'warranty'/'fire', but for "complete / all
 information" pass an EMPTY query so you pull the full document, not just one section). For a
@@ -1001,7 +1001,7 @@ Direct SQL access to any table in plenum_cafm. The fallback for data not covered
 | Tool | Purpose |
 |------|---------|
 | `get_schema()` | **Always call this first.** Returns every table name and every column name (with type) in the live plenum_cafm schema. Use the result to pick the right table and column names before calling query_table or any compliance tool. Result is cached — repeated calls within a session are free. |
-| `lookup_user(user_id)` | Resolve a user UUID → name, email, department, phone, roles[]. |
+| `lookup_user(user_id)` | Resolve a user UUID → name, email, job title, phone, roles[]. |
 | `query_table(table_name, filters)` | SELECT from any plenum_cafm table with optional equality filters. Max 100 rows. table_name and filter keys must come from get_schema() output — never guess. |
 | `udr_list_tables()` / `udr_describe_table(table)` | Structured schema introspection from svc-udr (table list, row estimates, column metadata, PK/FK). |
 | `udr_read_records(...)` / `udr_get_record(...)` / `udr_search_records(...)` | Structured read APIs with paging, sorting, and text search. |

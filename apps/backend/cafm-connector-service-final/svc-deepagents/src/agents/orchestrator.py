@@ -49,7 +49,7 @@ from ..config import (
     DEFAULT_CONTRACT_ANALYST_MODEL,
     settings,
 )
-from ..llm_factory import create_chat_model, friendly_openai_error
+from ..llm_factory import create_chat_model, friendly_openai_error, token_limit_kwargs
 from ..http_client import turn_catalogue_via_task as _turn_catalogue_via_task
 from ..http_client import turn_page_engines as _turn_page_engines
 from contextvars import ContextVar as _ContextVar
@@ -3268,6 +3268,12 @@ class DeepAgentOrchestrator:
                 return out
         raise ValueError("planner JSON unrecoverable")
 
+    #: The compliance planner's output ceiling (25 Nov 2026). The call named none, so the endpoint's
+    #: applied: on 28 Oct a plan stopped at 200 output tokens inside its second sub-question ("planner
+    #: JSON unrecoverable") and the turn read the whole register. Five parts with four filters each run
+    #: to about 950 tokens; the ceiling is a limit, not a target, so it is set well clear of that.
+    _PLANNER_MAX_TOKENS = 4000
+
     async def _plan_compliance_query(self, user_message: str) -> dict[str, Any]:
         """Decide what this question needs BEFORE any tool runs.
 
@@ -3334,7 +3340,13 @@ class DeepAgentOrchestrator:
                                                  "user_message": planner_question(text[:1200])},
         )
         try:
-            resp = await self._llm.ainvoke(
+            # Its own ceiling, under the name this model takes (llm_factory.token_limit_kwargs).
+            planner_llm = self._llm
+            if hasattr(planner_llm, "bind"):
+                planner_llm = planner_llm.bind(
+                    **token_limit_kwargs(_plan_model, self._PLANNER_MAX_TOKENS)
+                )
+            resp = await planner_llm.ainvoke(
                 [system, HumanMessage(content=planner_question(text[:1200]))]
             )
             # Every other stage of this pipeline records to the llm_cost ledger; the planner
@@ -3971,7 +3983,7 @@ class DeepAgentOrchestrator:
                 raise RuntimeError("work_orders has no company column to scope by")
             sql = _sql(
                 f"""
-                SELECT id::text, work_order_id, title, status, priority, scheduled_date,
+                SELECT id::text, wo_code AS work_order_id, title, status, priority, scheduled_date,
                        vendor_id::text AS vendor_id,
                        COALESCE(assigned_vendor, vendor) AS vendor_name,
                        asset, location, site_id::text AS site_id
@@ -4895,6 +4907,9 @@ class DeepAgentOrchestrator:
         code_findings: list[str],
         rows: list[dict[str, Any]] | None = None,
         tool_results: list[dict[str, Any]] | None = None,
+        _attempt: int = 1,
+        _effort: str | None = None,
+        _max_tokens: int | None = None,
     ) -> dict[str, Any] | None:
         """Second opinion before the answer ships. Returns None if unavailable.
 
@@ -4913,6 +4928,10 @@ class DeepAgentOrchestrator:
         holding only the pack counts, it reported real vendor names and real expiry dates as
         unsupported — a reviewer that cannot see the evidence rejects the evidence, and its
         corrections then damage a correct answer.
+
+        A reply that ran out of room is asked for once more, thinking less with twice the room
+        (25 Nov 2026: on 9 Nov all 4,000 output tokens went on thinking, the reply was "", and the
+        answer shipped unreviewed). Any other unreadable reply still means no review.
         """
         api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
         if not api_key:
@@ -4966,10 +4985,11 @@ class DeepAgentOrchestrator:
                 k for k in ("kpis", "groups", "certificates", "actions", "insights")
                 if analysis.get(k)
             ]
-            review_effort = (
+            review_effort = _effort or (
                 "low" if not zones
                 else (getattr(settings, "compliance_review_effort", "") or "medium").strip()
             )
+            review_max_tokens = _max_tokens or 4000
             _t0 = time.perf_counter()
             activity_log.fire(
                 agent="compliance", stage="review", direction="input", model=model,
@@ -4984,12 +5004,13 @@ class DeepAgentOrchestrator:
                         "code_findings": code_findings,
                         "answer_under_review": answer_text,
                     },
-                    "params": {"effort": review_effort, "max_tokens": 4000, "schema": "review"},
+                    "params": {"effort": review_effort, "max_tokens": review_max_tokens,
+                               "schema": "review", "attempt": _attempt},
                 },
             )
             message = await client.messages.create(
                 model=model,
-                max_tokens=4000,
+                max_tokens=review_max_tokens,
                 output_config={
                     "effort": review_effort,
                     "format": {"type": "json_schema", "schema": self._REVIEW_SCHEMA},
@@ -5036,12 +5057,20 @@ class DeepAgentOrchestrator:
         try:
             review = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
-            log.warning("compliance.review.unparsable", error=str(exc)[:200])
+            stop = str(getattr(message, "stop_reason", "") or "")
+            log.warning("compliance.review.unparsable", error=str(exc)[:200], stop_reason=stop,
+                        attempt=_attempt, max_tokens=review_max_tokens, effort=review_effort)
             activity_log.fire(
                 agent="compliance", stage="review", direction="error",
                 summary="unparsable review", ok=False, error=str(exc), model=model,
-                payload={"raw": raw},
+                payload={"raw": raw, "stop_reason": stop, "attempt": _attempt},
             )
+            if stop == "max_tokens" and _attempt == 1:
+                return await self._review_compliance_answer(
+                    user_message, analysis, pack_facts, code_findings, rows=rows,
+                    tool_results=tool_results, _attempt=2, _effort="low",
+                    _max_tokens=review_max_tokens * 2,
+                )
             return None
         activity_log.fire(
             agent="compliance", stage="review", direction="output",
@@ -5281,6 +5310,30 @@ class DeepAgentOrchestrator:
         log.warning("compliance.revision_failed.facts_fallback", lapsed=len(lapsed), rows=len(rows))
         return out
 
+    @classmethod
+    def _salvage_cut_analysis(cls, *raws: str) -> dict[str, Any] | None:
+        """The zones a reply cut off by max_tokens finished, or None (25 Nov 2026).
+
+        13 analyst answers were lost between 27 Oct and 16 Nov, most cut deep inside the JSON
+        ("Unterminated string starting at: line 1 column 9684") after the narrative and the tiles
+        had been written in full. Each zone that closed is kept, read by the same _ZoneStreamer
+        the UI paints from; the zone being written when the room ran out is left out, never
+        completed (agents/lenient_json.py: guessing the rest would invent an answer). Without a
+        finished narrative there is no answer to keep. Of several replies, the one that finished
+        the most zones wins; the first given wins a tie.
+        """
+        keys = set(cls._COMPLIANCE_RESPONSE_SCHEMA["properties"])
+        best: dict[str, Any] | None = None
+        for raw in raws:
+            if not raw:
+                continue
+            zones = {k: v for k, v, final in _ZoneStreamer(keys).feed(raw) if final}
+            if not str(zones.get("narrative") or "").strip():
+                continue
+            if best is None or len(zones) > len(best):
+                best = zones
+        return best
+
     async def _claude_analyse_compliance(
         self,
         user_message: str,
@@ -5294,6 +5347,7 @@ class DeepAgentOrchestrator:
         _attempt: int = 1,
         _effort: str | None = None,
         _max_tokens: int | None = None,
+        _cut: str = "",
     ) -> dict[str, Any] | None:
         """Reasoning pass: returns the typed compliance response object, or None.
 
@@ -5306,6 +5360,8 @@ class DeepAgentOrchestrator:
         A reply that cannot be read is asked for once more (2 Nov 2026: 6,000 of 6,000 output
         tokens spent thinking over 152,918 input tokens left no text, and the answer lost its
         cards). When the reply ran out of room, the second ask thinks less and has twice the room.
+        When that is cut as well, the zones either cut reply finished are kept
+        (_salvage_cut_analysis, 25 Nov 2026); `_cut` carries the first reply to the second ask.
         """
         api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
         if not api_key:
@@ -5425,14 +5481,30 @@ class DeepAgentOrchestrator:
                 summary="unparsable analyst response", ok=False, error=str(exc), model=model,
                 payload={"raw": raw, "stop_reason": stop, "attempt": _attempt},
             )
-            if _attempt > 1:
-                return None
             out_of_room = stop == "max_tokens"
+            if _attempt > 1:
+                # Only a reply cut short by the room is read for what it finished.
+                salvaged = self._salvage_cut_analysis(raw if out_of_room else "", _cut)
+                if salvaged is None:
+                    return None
+                log.warning("compliance.analyst.salvaged", zones=sorted(salvaged),
+                            attempt=_attempt, max_tokens=max_tokens, effort=effort)
+                activity_log.fire(
+                    agent="compliance", stage=role, direction="output",
+                    summary=str(salvaged.get("narrative") or "")[:300], model=model,
+                    latency_ms=(time.perf_counter() - _t0) * 1000,
+                    input_tokens=getattr(message.usage, "input_tokens", None),
+                    output_tokens=getattr(message.usage, "output_tokens", None),
+                    payload={"response": salvaged, "effort": effort, "taxonomy": taxonomy,
+                             "salvaged_from_cut_reply": True},
+                )
+                return salvaged
             return await self._claude_analyse_compliance(
                 user_message, data_json, on_zone=on_zone, sub_questions=sub_questions,
                 query_notes=query_notes, taxonomy=taxonomy, role=role, facts=facts, _attempt=2,
                 _effort="low" if out_of_room else effort,
                 _max_tokens=max_tokens * 2 if out_of_room else max_tokens,
+                _cut=raw if out_of_room else "",
             )
 
         activity_log.fire(

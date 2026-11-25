@@ -80,10 +80,10 @@ Resolve every named entity **before** you filter on it.
 
 | The user named | Resolve with | You get back |
 |----------------|--------------|--------------|
-| An asset — any code, name, barcode, serial | `find_asset(identifier)` | the asset row incl. `id`, `asset_code`, `site_id`, `document_ids` |
+| An asset — any code, name, barcode, serial | `find_asset(identifier)` | the asset row incl. `id`, `asset_code`, `building_id` |
 | A site / building / location | `find_location(identifier)` | the site or location row incl. its key |
 | A vendor / contractor / company | `query_table("vendors", {...})` or a `LIKE` select on `vendor_name` | `vendors.id`, `vendor_name`, `block_state` |
-| A user / approver / engineer | `lookup_user(user_id)` | name, email, department, roles |
+| A user / approver / engineer | `lookup_user(user_id)` | name, email, job title, roles |
 | A work order | `get_work_order(work_order_id)` / `list_work_orders(...)` | the WO row |
 
 Rules:
@@ -101,7 +101,12 @@ Rules:
 
 ## Step 2 — LOCATE: read the live schema, never the model file
 
-**Call `find_tables(question)` first when the table is not certain.** It searches a catalogue of every table's purpose, the questions it answers, its keys and links and sample values — by meaning, not by name — and returns the best candidates with the joins available between them. `table_card(table)` then gives one table's columns with sample values before you write SQL.
+**If your tools include `answer_from_records`, ask it first** for any question about particular
+records — lists, counts, "which vendors work at X", what is linked to a named asset or building.
+It plans from the ontology, follows every link and reads inside the caller's scope. LOCATE and
+your own SQL are for what it returned `ok: false` on, or a shape it cannot plan.
+
+**Then call `find_tables(question)` first when the table is not certain.** It searches a catalogue of every table's purpose, the questions it answers, its keys and links and sample values — by meaning, not by name — and returns the best candidates with the joins available between them. `table_card(table)` then gives one table's columns with sample values before you write SQL.
 
 **Call `get_schema()` once per session before your first query.** It returns every table and
 every column that exists *right now*. That is the only source of truth.
@@ -111,12 +116,12 @@ not match the SQLAlchemy models.** Real differences you will hit:
 
 | You would assume | Live schema actually has |
 |------------------|--------------------------|
-| `assets.id UUID` | `assets.id varchar(50)` |
-| `assets.location_id UUID` | `assets.site_id varchar(50)` **and** `location_id integer` |
-| `organization_id UUID` | `organization_id integer` |
-| a `sites` table keyed on `id UUID` | `sites` keyed on `site_id varchar(50)` |
+| `buildings.id` | `buildings.building_id` (uuid; there is no `id`) |
+| `assets.site_id` joins `sites` | `assets.site_id` is a uuid; `sites` is keyed on `site_id varchar(50)` — the join returns nothing. Assets key on `building_id` |
 | `spare_parts.stock_on_hand` | `spare_parts.stock_quantity` |
-| `assets` has no document link | `assets.document_ids jsonb` |
+| `assets.document_ids` | no such column: an asset's documents are rows of `asset_documents(asset_id, document_id)` |
+| `vendors.specialty` | no such column: `trade`, `primary_discipline` |
+| `users.department` | no such column: `job_title` |
 
 So:
 
@@ -175,19 +180,20 @@ across data that a domain tool owns, or your figures will disagree with the dash
 | From | Key | To |
 |------|-----|-----|
 | `assets.id` | `asset_id` | `work_orders`, `maintenance_plans`, `asset_readings`, `work_order_parts`, `asset_criticality`, `asset_condition_scores`, `energy_meters`, `energy_anomalies`, `compliance_certificates` |
-| `assets.site_id` | site key | `sites.site_id`, `energy_meters.site_id`, `building_energy_profiles.site_id` |
-| `assets.document_ids[]` | document id | `ingestion_documents.id` → `document_chunks.document_id` |
+| `buildings.building_id` | `building_id` | `assets`, `work_orders`, `compliance_certificates`, `energy_meters`, `eui_snapshots`, `building_energy_profiles` |
+| `assets.id` | `asset_id` → `document_id` | `asset_documents` → `ingestion_documents.id` → `document_chunks.ingestion_id` |
 | `vendors.id` | `vendor_id` | `vendor_contracts`, `compliance_certificates`, `contract_sla_parameters`, `vendor_wo_scores`, `vendor_monthly_scorecards`, `invoice_verifications`, `invoice_lines`, `ppm_visits`, `resource_skills` |
 | `work_orders.id` | `work_order_id` | `work_order_tasks`, `work_order_parts`, `work_order_history`, `vendor_wo_scores`, `ppm_visits`, `invoice_lines` |
 | `energy_meters.id` | `meter_id` | `meter_readings`, `meter_reading_gaps`, `energy_anomalies` |
 | `spare_parts.id` | `part_id` | `work_order_parts`, `inventory_transactions` |
-| `ingestion_documents.id` | `document_id` | `document_chunks`, `compliance_certificates.document_id`, `contract_documents.document_id` |
+| `ingestion_documents.id` | `document_id` | `document_chunks.ingestion_id`, `asset_documents.document_id`, `compliance_certificates.document_id`, `contract_documents.document_id` |
 
 ### Two site-key traps — read before joining on a site
 
-1. Phase 2 tables (`compliance_certificates`, `energy_meters`, `eui_snapshots`,
-   `building_energy_profiles`) declare `site_id` as **UUID**, but the live `sites` table is
-   keyed on **`site_id varchar(50)`**. A UUID-to-varchar join silently returns nothing.
+1. `compliance_certificates.site_id` and `assets.site_id` are **UUID**, but the live `sites`
+   table is keyed on **`site_id varchar(50)`**. A UUID-to-varchar join silently returns nothing.
+   (`energy_meters.site_id` is varchar and does join `sites`; `eui_snapshots` and
+   `building_energy_profiles` have no `site_id` — they key on `building_id`.)
 2. Because of that, `compliance_certificates` carries **`site_ref varchar(120)`** for the
    varchar-keyed case, and `building_name` for certificates that name a building no site row
    matches. To group compliance by building, bucket on

@@ -39,8 +39,12 @@ table are not yours — those belong to `udr` or the owning engine.
 
 | Table | Grain | Key columns |
 |-------|-------|-------------|
-| `ingestion_documents` | one document | `id`, `file_name`, `mime_type`, `document_type`, `blob_url`, `checksum`, `status`, `num_pages` |
-| `document_chunks` | one passage | `document_id`, `page_start`, `page_end`, `chunk_index`, `block_type`, `section_label`, `text_content`, `embedding_model`, `source_table`, `row_pk` |
+| `ingestion_documents` | one document | `id`, `original_filename`, `mime_type`, `document_type`, `blob_url`, `checksum`, `status`, `page_count` |
+| `document_chunks` | one passage | `ingestion_id` (the document's `id`), `page_start`, `page_end`, `chunk_index`, `block_type`, `heading`, `chunk_text`, `embedding_model`, `source_table`, `row_pk` |
+
+These are the columns. doc-rag's own API answers with other names for five of them (`file_name`,
+`num_pages`, `document_id`, `section_label`, `text_content`) — use those only when reading its
+API responses, never in SQL.
 | `row_semantic_index` | a table row rendered as text | `source_table`, `row_pk`, `semantic_text` |
 | `rag_queries` / `rag_answers` / `rag_feedback` | the Q&A audit trail | `query_text`, `answer_text`, `citations`, `confidence` |
 
@@ -85,7 +89,7 @@ synthesis. Group by document, give the page for each hit.
 
 ### "Everything about this asset, including its documents"
 That question belongs to `udr` — `get_asset_documents` and `answer_with_graph_context` pull
-the asset's `document_ids` and their chunks together with the structured row. Answer the
+the asset's linked documents (`asset_documents`) and their chunks together with the structured row. Answer the
 document half if handed it, and pass an **empty** query when the ask is "complete / all
 information" so the whole document comes back, not one section.
 
@@ -115,7 +119,7 @@ torque figure or clause number is worse than no answer.
 | "Is this certificate valid?" | what the PDF says | `compliance` owns expiry and status |
 | "What does the contract charge per hour?" | the clause text | `contract_performance` holds the extracted parameter |
 | "What condition is this asset in?" | the inspection narrative | `energy_intelligence` scores it 1–5 |
-| "Which asset does this document belong to?" | `document_id` | `udr` via `assets.document_ids` |
+| "Which asset does this document belong to?" | `document_id` | `udr` via `asset_documents` |
 
 ---
 

@@ -1224,7 +1224,11 @@ def _cache_path(fp: str) -> str:
 
 #: How long a record question waits for an ontology that is still being built before it says so.
 #: The build carries on (it is shielded), so the next question finds it ready (2 Nov 2026).
-ONTOLOGY_WAIT_S = float(os.environ.get("ONTOLOGY_WAIT_S", "25"))
+#: 90 s, not 25 (25 Nov 2026): on a freshly started process the startup load (api/main.py) - the
+#: cached build read back and bound against the database - outlasted 25 s, and twice on 24 Nov a
+#: planned answer_from_records step gave up with "The records are still being loaded." moments
+#: before the load finished. A build from scratch (~15 minutes) still answers "still loading".
+ONTOLOGY_WAIT_S = float(os.environ.get("ONTOLOGY_WAIT_S", "90"))
 #: The longest one build may take before it is abandoned (its connection with it) and the next
 #: question starts afresh. A healthy build against the Azure database is ~15 minutes.
 ONTOLOGY_BUILD_TIMEOUT_S = float(os.environ.get("ONTOLOGY_BUILD_TIMEOUT_S", "1800"))
@@ -1407,17 +1411,48 @@ def value_expr(value, p: Params, col_type: str = ""):
 #: Column types a period can be compared against. An empty type means the types were not
 #: loaded, which is not the same as knowing the column is text, so it is left alone.
 _TEXT_TYPES = {"text", "character varying", "character"}
+_DATE_OPS = {"eq", "ne", "lt", "lte", "gt", "gte", "between", "within"}
 
 
-def _needs_date_column(col: str, ctype: str, period) -> None:
-    """A period filter compiles to `col >= <timestamp>`, and Postgres has no such operator for a
+def _date_value(v) -> bool:
+    """A value value_expr turns into a date whatever the column: a period, today+Nd, YYYY-MM-DD."""
+    return isinstance(v, str) and (date_expr(v) is not None or bool(ISO_DATE_RE.match(v)))
+
+
+def date_filter_problem(name: str, ctype: str, op: str, value) -> str | None:
+    """Why a filter cannot compare a column of type `ctype` with `value`, else None.
+
+    A period filter compiles to `col >= <timestamp>`, and Postgres has no such operator for a
     text column: it answers "operator does not exist: character varying >= timestamp with time
     zone", which tells the model nothing it can act on. Say which column and why instead, so the
-    step can be replanned onto one that holds a date."""
-    if ctype in _TEXT_TYPES:
-        raise OntologyError(
-            col + " is " + ctype + ", not a date column, so it cannot be filtered by the period "
-            + repr(period) + " - choose a column that holds a date")
+    step can be replanned onto one that holds a date.
+
+    25 Nov 2026: for ANY column whose known type is not a date - buildings.hoist_score is integer,
+    and "hoist_score BETWEEN CAST(:p0 AS date) ..." died as "integer >= date" (2 Nov) - and for a
+    range (gte, between) as well as a period. A date column is compared only with a date: any
+    other text is bound as a str under a timestamptz cast, which the driver cannot encode.
+    validate_plan asks this too, so the model is told while planning and tries again."""
+    if op not in _DATE_OPS:
+        return None
+    per = period_of(value) if op in ("eq", "ne", "within") else None
+    if op == "within" and not per:
+        return "within needs a period: " + ", ".join(PERIODS) + ", " + ROLLING_HELP
+    whole = bool(per) and (op == "within" or not per[1])   # eq last_month compiles as within it
+    vals = value if isinstance(value, list) else [value]
+    if ctype in DATE_TYPES:
+        odd = [v for v in vals if not (_date_value(v) or (isinstance(v, str) and _as_date(v)))]
+        if odd:
+            return (name + " holds dates, and " + repr(odd[0]) + " is not one - use YYYY-MM-DD, "
+                    "today+Nd / today-Nd or a period")
+        return None
+    if not ctype:
+        return None
+    if op in ("eq", "ne") and ctype in _TEXT_TYPES and not whole:
+        return None                                  # compared as text, which Postgres can do
+    if whole or any(_date_value(v) for v in vals):
+        return (name + " is " + ctype + ", not a date column, so it cannot be filtered by "
+                + repr(value) + " - choose a column that holds a date")
+    return None
 
 
 def compile_condition(onto, concept, alias, cond, p: Params) -> str:
@@ -1434,6 +1469,9 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
     et = "lower(" + e + "::text)"
     ctype = onto.col_types.get((concept.table, col), "")
     numeric_or_date = ctype not in ("text", "character varying", "character", "")
+    problem = date_filter_problem(col, ctype, op, v)
+    if problem:
+        raise OntologyError(problem)
     if op in ("in", "not_in"):
         ph = p.add([str(x).lower() for x in (v if isinstance(v, list) else [v])], "text[]")
         if op == "in":
@@ -1451,7 +1489,6 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
         per = period_of(v)
         if not per:
             raise OntologyError("within needs a period: " + ", ".join(PERIODS) + ", " + ROLLING_HELP)
-        _needs_date_column(col, ctype, v)
         start, end = period_bounds(per[0])
         return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
     if op == "between":
@@ -1459,7 +1496,6 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
             raise OntologyError("between needs [low, high]")
         a, b = period_of(v[0]), period_of(v[1])
         if a and b and a[0] == b[0] and not a[1] and not b[1]:      # ["last_month", "last_month"]
-            _needs_date_column(col, ctype, v)
             start, end = period_bounds(a[0])
             return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
         return e + " BETWEEN " + value_expr(v[0], p, ctype) + " AND " + value_expr(v[1], p, ctype)
@@ -1717,9 +1753,15 @@ def validate_plan(onto, plan):
                 errors.append(where + ": bad filter " + json.dumps(f, default=str) + " (op must be one of " + ", ".join(sorted(OPS)) + ")")
                 continue
             try:
-                c.col(f.get("attribute"))
+                col = c.col(f.get("attribute"))
             except OntologyError as e:
                 errors.append(where + ": " + str(e))
+                continue
+            # Checked here, not only when compiled, so the model is told and plans again (25 Nov 2026).
+            problem = date_filter_problem(str(f.get("attribute")), (getattr(onto, "col_types", None) or {})
+                                          .get((c.table, col), ""), f["op"], f.get("value"))
+            if problem:
+                errors.append(where + ": " + problem)
         if n.get("sort"):
             try:
                 c.col(n["sort"].get("attribute"))
@@ -1753,6 +1795,46 @@ def validate_plan(onto, plan):
     return errors
 
 
+def includes_that_end_at_a_place(onto, plan) -> list[str]:
+    """An include whose route runs on past its own records to a place (25 Nov 2026).
+
+    "Which vendors are recorded as working at Aire Mill Court (B-304), based on its assets and
+    work orders?" was planned with includes via [ASSET_VENDOR, ASSET_BUILDING] and
+    [WORK_ORDER_ASSIGNED_VENDOR, WORK_ORDER_BUILDING]: routes from Vendor that end at Building, not
+    at the Asset and WorkOrder they fetch. Refused on every attempt, the agent wrote its own SQL
+    and the person was told "Not answered". The route says two things: the records to fetch and
+    where they are. So the include keeps the route to its own records and lists only those at the
+    place ("at"), and the place is a constraint - the plan's own, or one made from the name the
+    include carried (an include's match is otherwise unused). A constraint with no route matches
+    through any link (_any_route). With no name and no constraint for the place, nothing says
+    which one: the include is left to be refused as before, not answered for every record.
+    Returns a note per include changed."""
+    focus = plan["focus"]["concept"]
+    notes: list[str] = []
+    for inc in plan["include"]:
+        via = inc.get("via") or []
+        if len(via) < 2 or focus not in onto.concepts or inc.get("concept") not in onto.concepts:
+            continue
+        try:
+            ends = [onto.expand(focus, via[:k])[2] for k in range(1, len(via) + 1)]
+        except OntologyError:
+            continue
+        place_name = ends[-1]
+        if place_name == inc["concept"] or inc["concept"] not in ends:
+            continue
+        k = ends.index(inc["concept"]) + 1
+        place = next((c for c in plan["constraints"] if c["concept"] == place_name), None)
+        if place is None and inc.get("match"):
+            place = normalise_node({"concept": place_name, "match": inc["match"]})
+            plan["constraints"].append(place)
+        if place is None:
+            continue
+        inc["via"], inc["match"], inc["at"] = via[:k], None, {"concept": place_name, "via": via[k:]}
+        notes.append(inc["name"] + ": only the " + inc["concept"] + " records at the " + place_name
+                     + " asked about.")
+    return notes
+
+
 async def _call_llm(messages) -> str:
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from ..llm_factory import create_chat_model
@@ -1780,12 +1862,14 @@ async def plan_question(onto, question, llm=_call_llm):
     attempts = []
     for attempt in range(1, MAX_PLAN_ATTEMPTS + 1):
         raw_text = strip_code_fences(await llm(messages))
+        repaired: list[str] = []
         try:
             plan = normalise_plan(json.loads(raw_text))
+            repaired = includes_that_end_at_a_place(onto, plan)
             errors = validate_plan(onto, plan)
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
             plan, errors = None, ["Not valid JSON in the required format: " + str(e)]
-        attempts.append({"attempt": attempt, "errors": errors})
+        attempts.append({"attempt": attempt, "errors": errors, **({"repaired": repaired} if repaired else {})})
         if not errors:
             return plan, attempts
         last = errors
@@ -2697,6 +2781,16 @@ async def execute_plan(r: ScopedReader, onto, plan):
         else:
             hops, reqs = onto.resolve_path(focus.name, target.name, inc["via"])
             variants = [(hops, reqs, " > ".join(rl.name for rl, _ in hops) or "(same record)", None)]
+        # An include whose route ran on to a place lists only its records there, matched to the
+        # place's keys as a rule's include is (includes_that_end_at_a_place, 25 Nov 2026).
+        at = inc.get("at") or {}
+        place = next((c for c in plan["constraints"] if c["concept"] == at.get("concept") and c.get("keys")), None)
+        if place is not None and not any(sc is place for sc, _ in inc.get("_scope", [])):
+            try:
+                p_tc, _ = onto.resolve_path(target.name, place["concept"], at.get("via") or [])
+                inc.setdefault("_scope", []).append((place, p_tc))
+            except OntologyError:
+                pass
         rel_key = inc["name"] + " (" + target.name + ")"
         for k in order:
             records[k]["related"].setdefault(rel_key, [])
@@ -3624,6 +3718,7 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     onto = await get_ontology()
     plan, attempts = await plan_question(onto, question, llm=llm)
     grouped = ensure_grouping(onto, plan, question)
+    grouped.extend((attempts[-1] if attempts else {}).get("repaired") or [])
     grouped.extend(swap_empty_links(onto, plan))
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))

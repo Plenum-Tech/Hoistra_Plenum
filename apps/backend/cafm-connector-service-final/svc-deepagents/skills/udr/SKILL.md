@@ -102,7 +102,7 @@ Run the shared five-step loop: **RESOLVE → LOCATE → PULL → JOIN → SUMMAR
 | `sites` | the CMMS site record behind a building | `site_id` (varchar PK), `site_name`, `site_code`, `city`, `country`, `gfa_sqm`, `manager`, `region` | `site_id` → `buildings.site_id` only. **Never** to `assets.site_id` (a uuid, empty) |
 | `locations` | location tree node | `id`, `name`, `type`, `parent_location_id`, `level`, `city` | `id` → assets.location_id |
 | `asset_categories` | category tree | `id`, `name`, `parent_id` | `id` → assets.category_id |
-| `vendors` | one contractor | `id` (varchar), `vendor_name`, `vendor_code`, `specialty`, `trade`, `status` (`'deleted'` = a deleted vendor, name ends "(deleted)": leave it out of lists, counts and suggestions unless asked about history), `block_state`, `block_reason` | `id` → contracts, certificates, scorecards, invoices |
+| `vendors` | one contractor | `id` (uuid), `vendor_name`, `vendor_code`, `trade`, `status` (`'deleted'` = a deleted vendor, name ends "(deleted)": leave it out of lists, counts and suggestions unless asked about history), `block_state`, `block_reason` | `id` → contracts, certificates, scorecards, invoices |
 | `vendor_contracts` | one contract | `id`, `vendor_id`, `contract_name`, `contract_start`, `contract_end`, `contract_value`, `status` | `vendor_id` |
 | `spare_parts` | one stock line | `id`, `part_code`, `part_name`, `stock_quantity`, `reorder_level`, `unit_price`, `supplier_id`, `bom_group_id` | `id` → work_order_parts, inventory_transactions |
 | `inventory_transactions` | one stock movement | `id`, `part_id`, `transaction_type`, `quantity`, `unit_cost`, `created_at` | `part_id` |
@@ -121,10 +121,16 @@ Confirm both against `get_schema()` before you filter on them.
 
 ## 2. Your tools
 
+**Order: `answer_from_records` first.** "Which vendors work at Aire Mill Court", "which assets
+at B-304", "how many open work orders at X" are records-engine questions even though they join
+tables: it follows every link (work orders, assets, certificates, contracts, PPM visits) inside
+the caller's scope. Go to `find_tables` → `table_card` → `udr_execute_select` only when it
+returns `ok: false` or the question is a shape it cannot plan.
+
 | Tool | Use it for |
 |------|-----------|
 | `answer_from_records(question)` | **First call for a question about particular records** — a named or coded asset, building, work order, certificate, vendor or meter, lists and counts of them by state, and what is linked to them. It plans in business terms, resolves names and codes, compiles the SQL from the ontology and reads inside the caller's scope. Answer from its `records` by its `answer_rules`; `found: false` → pass on `answer_hint`. Use the tools below when it returns `ok: false` or the question is a shape it cannot plan. |
-| `find_tables(question)` | **First call for any question whose table you are not certain of.** Searches the table catalogue by meaning: purpose, the questions each table answers, its grain, keys, links (declared and by-name) and sample values. Pass the question as asked. |
+| `find_tables(question)` | **When `answer_from_records` could not answer** and you are not certain of the table. Searches the table catalogue by meaning: purpose, the questions each table answers, its grain, keys, links (declared and by-name) and sample values. Pass the question as asked. |
 | `table_card(table)` | One table's card before you write SQL against it: every column with sample values (status spellings, id formats), every join available, which service owns it. |
 | `get_schema()` | Every table, every column, live. Confirms exact names after `find_tables` has chosen the table. |
 | `find_asset(identifier)` | Any asset reference — searches id, asset_code, asset_name, barcode, serial at once. |
@@ -134,8 +140,8 @@ Confirm both against `get_schema()` before you filter on them.
 | `query_table(table, filters)` | Simple equality filters, max 100 rows. |
 | `udr_list_tables()` / `udr_describe_table(table)` | Table inventory; one table's columns, PK, FKs, row estimate. |
 | `udr_read_records(...)` / `udr_get_record(...)` / `udr_search_records(...)` | Paged reads, one record by id, free-text search. |
-| `udr_execute_select(sql, params)` | **Joins, GROUP BY, aggregates, date maths, ranges.** Parameterise every value. |
-| `lookup_user(user_id)` | UUID → name, email, department, roles. |
+| `udr_execute_select(sql, params)` | **Joins, GROUP BY, aggregates, date maths, ranges — only after `answer_from_records` could not answer.** One statement — `SELECT` or `WITH … SELECT`; it runs read-only. Check every column on `table_card` first. Parameterise every value. |
+| `lookup_user(user_id)` | UUID → name, email, job title, roles. |
 | `udr_agent_query(message)` | Natural-language fallback to svc-udr for an ad-hoc shape none of the above fits. |
 
 ---
@@ -189,7 +195,7 @@ sounds like the part. Measured 17 Sep 2026: ten parts, zero linked rows in any t
 answer that listed up to seven "linked assets" each, one of which was not an asset code at all.
 
 ### "Give me complete information on AST-AHU-601" — structured + documents + graph
-1. `find_asset("AST-AHU-601")` → the row and its `document_ids`.
+1. `find_asset("AST-AHU-601")` → the row.
 2. `get_asset_documents("AST-AHU-601", query="")` → full document text, not one section.
 3. `answer_with_graph_context("everything related to AST-AHU-601")` → WOs, PMs, vendors, location.
 

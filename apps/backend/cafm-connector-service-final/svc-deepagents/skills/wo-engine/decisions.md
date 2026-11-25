@@ -55,7 +55,7 @@ a screen ends up reading "134 of 134" while showing 134 of two thousand.
 
 ## 1b. "Backlog on critical assets" is a join, not a filter
 
-`list_maintenance_decisions` filters on **state, source, building and vendor — nothing else.**
+`list_maintenance_decisions` filters on **state, source, statutory, building and vendor — nothing else.**
 There is no criticality filter and no condition filter. So "what is the backlog on critical
 assets in poor condition?" cannot be answered by this tool alone, and a call that returns 0
 rows because a filter did not exist is **not** "no backlog".
@@ -79,9 +79,11 @@ backlog by state instead. Never present a filter that does not exist as a result
 
 Compliance · Vendors · Assets · Energy · Maintenance.
 
-**"Which decisions are statutory?"** is the compliance-sourced ones — a certificate lapsed or
-inside 30 days. Answer it with `source="Compliance"` and name the certificate and its date, not
-just the count: "3 statutory" tells nobody which building loses its cover first.
+**"Which decisions are statutory?"** is the ones a certificate makes statutory — lapsed or
+inside 30 days. Each row says so in `statutory`, with the certificate in `statutory_certificate`.
+Answer it with `statutory=True` (25 Nov 2026: `source="Compliance"` misses a vendor or asset
+decision a lapsed certificate forces) and name the certificate and its date, not just the
+count: "3 statutory" tells nobody which building loses its cover first.
 
 A decision sourced from Energy came from a priced anomaly; one from Assets came from a condition
 flag. Saying which module raised it is half the answer, because it tells the reader which team

@@ -275,8 +275,8 @@ Rules:
   lapsed / expired certificates: write the step in the person's words ("lapsed certificates") - lapsed is read from
   the status AND the expiry date, so never write it as a stored value ("status is exactly 'Lapsed'");
   repurchase / reorder / restock / replace / end of life / write off -> replacement_candidates {{"building_name": "...", "period": "..."}};
-  decisions a manager owes / what needs my decision / which are statutory -> list_maintenance_decisions {{"building_id": "..."}}
-  (statutory = source Compliance or a certificate trigger; get_maintenance_overview for the counts); what delaying a
+  decisions a manager owes / what needs my decision -> list_maintenance_decisions {{"building_id": "..."}}; which are
+  statutory -> list_maintenance_decisions {{"statutory": true}} (its own filter, 25 Nov 2026; get_maintenance_overview for the counts); what delaying a
   job costs -> get_cost_savings (energy waste per asset, open jobs with money at stake) - never ApprovalItem records;
   an asset's CONDITION GRADE (1-5; 4-5 = end of life) or replacement value -> answer_from_records on assets.condition_score /
   replacement_value, or replacement_candidates; list_asset_conditions is the ENERGY band (threat/watch/in_control), never the grade.
@@ -1103,6 +1103,11 @@ def verify_claims(answer: str, question: str, results: dict[str, dict[str, Any]]
     if _QUALIFIER.search(question or ""):
         for sid, r in steps.items():
             o = r.get("output")
+            # A list the route narrowed to one building reports that building's own total, so count ==
+            # total there is the filter working, not doing nothing (25 Nov 2026).
+            args = next((c.get("input") for c in r.get("tool_calls") or [] if isinstance(c, dict)), None) or {}
+            if isinstance(args, dict) and any(args.get(k) for k in ("building_id", "building_name", "site_id")):
+                continue
             if isinstance(o, dict) and isinstance(o.get("count"), int) and o.get("count") == o.get("total") and o["count"] > 1:
                 if re.search(r"(?<!\d)" + str(o["count"]) + r"(?!\d)", a):
                     out.append(f"The answer quotes {o['count']} as the narrowed count, but step {sid} returned every row "

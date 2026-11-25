@@ -9,8 +9,9 @@ export default function Home({ vals }) {
         <div style={{ width: "100%", maxWidth: "1080px", display: "flex", flexDirection: "column" }}>
           {/* An instance home (logic/instances.js): its own four cards in place of the full
               platform's Hoist Score / P&L / Crons / Platform value row. Each card opens the
-              report its figure comes from. */}
-          {vals.isInstHome ? (
+              report its figure comes from. A consultant (homeQueryOnly) has no row at all: their
+              Home is the question box only (25 Nov 2026). */}
+          {vals.homeQueryOnly ? null : vals.isInstHome ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "0", padding: "8px 0 0", borderTop: "1px solid var(--color-divider)", borderBottom: "1px solid var(--color-divider)", marginTop: "8px" }}>
             {(vals.instHomeCards || []).map((c, $index) => (
               <div key={$index} className="hv19" role="button" tabIndex={0} onClick={c.click}

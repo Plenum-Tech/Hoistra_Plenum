@@ -151,23 +151,24 @@ async def get_schema() -> dict:
 async def lookup_user(user_id: str) -> dict:
     """Look up a CAFM platform user by their UUID.
 
-    Returns the user's name, email, roles list, department, and phone number.
+    Returns the user's name, email, roles list, job title, and phone number.
     Use this whenever you need to resolve who a user is or what permissions they hold.
 
     Args:
         user_id: UUID string of the user to look up.
     """
+    # users has no department column (25 Nov 2026: every call failed on `u.department`).
     async with database.AsyncSessionLocal() as session:
         try:
             result = await session.execute(
                 text("""
-                    SELECT u.id, u.full_name, u.email, u.department, u.phone,
+                    SELECT u.id, u.full_name, u.email, u.job_title, u.phone,
                            array_agg(r.name) FILTER (WHERE r.name IS NOT NULL) AS roles
                     FROM plenum_cafm.users u
                     LEFT JOIN plenum_cafm.user_roles ur ON ur.user_id = u.id
                     LEFT JOIN plenum_cafm.roles r ON r.id = ur.role_id
                     WHERE u.id = :user_id
-                    GROUP BY u.id, u.full_name, u.email, u.department, u.phone
+                    GROUP BY u.id, u.full_name, u.email, u.job_title, u.phone
                 """),
                 {"user_id": user_id},
             )
@@ -183,7 +184,7 @@ async def lookup_user(user_id: str) -> dict:
         "user_id": str(row["id"]),
         "name": row["full_name"],
         "email": row["email"],
-        "department": row["department"],
+        "job_title": row["job_title"],
         "phone": row["phone"],
         "roles": list(row["roles"] or []),
     }
@@ -595,9 +596,8 @@ async def find_asset(identifier: str) -> dict:
     Use this FIRST whenever the user refers to an asset by a code/name; don't guess which
     column holds it. Returns every matching asset of the caller's company (up to 25; `note`
     says when more matched) — several when the name is shared: list them and ask which, never
-    pick one. Each row includes `document_ids` — the ingested documents linked to that asset;
-    pass the asset to get_asset_documents to read their content (compliance reports, manuals,
-    certificates, etc.).
+    pick one. To read the documents linked to an asset (compliance reports, manuals,
+    certificates, etc.), pass the asset to get_asset_documents.
     """
     ident = (identifier or "").strip()
     if not ident:
@@ -639,17 +639,31 @@ def _coerce_doc_ids(value: Any) -> list[str]:
     return [str(x).strip() for x in items if str(x).strip()]
 
 
+async def _linked_document_ids(session: Any, asset_id: Any) -> list[str]:
+    """The documents asset_documents links to this asset. Production's assets table has no
+    document_ids column; the link table is where its documents hang (25 Nov 2026)."""
+    try:
+        res = await session.execute(
+            text("SELECT document_id::text AS document_id FROM plenum_cafm.asset_documents "
+                 "WHERE asset_id::text = :aid AND document_id IS NOT NULL"),
+            {"aid": str(asset_id)},
+        )
+        return [str(r["document_id"]) for r in res.mappings().all() if r["document_id"]]
+    except Exception as exc:  # noqa: BLE001 - no link table here: the asset row's own ids stand
+        log.warning("udr.get_asset_documents.link_error", error=str(exc)[:200])
+        return []
+
+
 @tool
 async def get_asset_documents(identifier: str, query: str = "", max_chunks: int = 12) -> dict:
     """Read the ingested DOCUMENTS linked to an asset and return their content to summarise.
 
-    Every asset row carries a `document_ids` array referencing files ingested into the document
-    store (public.documents + public.document_chunks — compliance reports, manuals, certificates,
-    inspection records, etc.). Use this whenever the user asks for an asset's details, compliance,
-    history or "all information" that lives in attached documents rather than the structured
-    columns of the assets table.
+    An asset's documents are linked through the asset_documents table (ingestion_documents +
+    document_chunks — compliance reports, manuals, certificates, inspection records, etc.). Use
+    this whenever the user asks for an asset's details, compliance, history or "all information"
+    that lives in attached documents rather than the structured columns of the assets table.
 
-    Flow: resolve the asset -> its document_ids -> document metadata + the most relevant text
+    Flow: resolve the asset -> its linked documents -> document metadata + the most relevant text
     chunks (filtered by `query`, falling back to the asset code, then to the opening chunks).
     Returns a bundle you should summarise for the user, citing the source file(s).
 
@@ -696,6 +710,8 @@ async def get_asset_documents(identifier: str, query: str = "", max_chunks: int 
         asset = assets[0]
         match_note = _match_note(ident, mode, found, sources)
         doc_ids = _coerce_doc_ids(asset.get("document_ids"))
+        if not doc_ids and asset.get("id") is not None:
+            doc_ids = await _linked_document_ids(session, asset["id"])
         # Return the FULL asset row (every structured field) so a "complete
         # information" answer can list them all — not just a 4-field brief.
         asset_brief = {
@@ -704,7 +720,7 @@ async def get_asset_documents(identifier: str, query: str = "", max_chunks: int 
         asset_brief["linked_document_count"] = len(doc_ids)
         if not doc_ids:
             return {"identifier": ident, "asset": asset_brief, "documents": [], "chunks": [],
-                    "note": "This asset has no linked documents (document_ids is empty).",
+                    "note": "This asset has no linked documents.",
                     **({"match_note": match_note} if match_note else {})}
 
         # Document metadata (plenum_cafm ingestion store).

@@ -306,6 +306,11 @@ async def _resolve_invoice_building(building_name) -> dict:
         attempts.append({"code": " ".join(core)})
     for params in attempts:
         body = await ask(**params)
+        if body.get("reason") == "no_buildings":
+            # No building at all is visible to this caller (25 Nov 2026): every other attempt, and
+            # the invoice names, read the same empty company. Said as that, never as "no match".
+            from .energy_intelligence_agent import no_buildings_visible
+            return no_buildings_visible(typed)
         outcome = body.get("outcome")
         if outcome == "resolved" and body.get("building_id"):
             if body.get("reason") == "name_contains" and not _names_the_building(

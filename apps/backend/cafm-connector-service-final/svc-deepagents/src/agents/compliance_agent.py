@@ -157,13 +157,15 @@ async def check_requirements(asset_code: str, regulation: str | None = None) -> 
                         "error": (f"'{asked_for}' names {len(codes)} assets - list them and "
                                   "ask which; never pick one.")}
             asset_code = codes[0]
-            # Fetch PM compliance — maintenance_plans joined to assets via asset_id UUID FK
+            # Fetch PM compliance — maintenance_plans joined to assets via asset_id UUID FK.
+            # Both sides are uuid in production (25 Nov 2026): the `::text` cast that stood here
+            # failed every call with "operator does not exist: uuid = text" (AHU-3, 20 Nov).
             pm_rows = (await session.execute(
                 text(f"""
                     SELECT mp.sm_code, mp.frequency_type, mp.frequency_value, mp.next_due_date,
                            mp.next_due_date < CURRENT_DATE AS is_overdue
                     FROM plenum_cafm.maintenance_plans mp
-                    JOIN plenum_cafm.assets a ON a.id = mp.asset_id::text
+                    JOIN plenum_cafm.assets a ON a.id = mp.asset_id
                     WHERE a.asset_code = :asset_code
                       AND mp.status = 'active'
                       {bsql}
@@ -177,7 +179,7 @@ async def check_requirements(asset_code: str, regulation: str | None = None) -> 
                     SELECT wo.wo_code, wo.priority, wo.status, wo.created_at,
                            now() - wo.created_at AS age
                     FROM plenum_cafm.work_orders wo
-                    JOIN plenum_cafm.assets a ON a.id = wo.asset_id::text
+                    JOIN plenum_cafm.assets a ON a.id = wo.asset_id
                     WHERE a.asset_code = :asset_code
                       AND wo.status NOT IN ('completed', 'closed', 'cancelled')
                       AND wo.priority IN ('high', 'critical')
@@ -186,16 +188,18 @@ async def check_requirements(asset_code: str, regulation: str | None = None) -> 
                 {"asset_code": asset_code, **bparams},
             )).mappings().all()
 
-            # Fetch open corrective-action inspections (inspections table uses asset_code directly)
+            # Fetch open corrective-action inspections (inspections table uses asset_code directly).
+            # Columns named through `i.` (25 Nov 2026): assets has an `id` too, and a bare `id`
+            # here is "ambiguous" to Postgres.
             inspection_rows = (await session.execute(
                 text(f"""
-                    SELECT id, inspection_date, risk_level, finding_type, observations
+                    SELECT i.id, i.inspection_date, i.risk_level, i.finding_type, i.observations
                     FROM plenum_cafm.inspections i
                     JOIN plenum_cafm.assets a ON a.asset_code = i.asset_code
                     WHERE i.asset_code = :asset_code
                       AND i.corrective_action = true
                       {bsql}
-                    ORDER BY inspection_date DESC
+                    ORDER BY i.inspection_date DESC
                     LIMIT 20
                 """),
                 {"asset_code": asset_code, **bparams},
@@ -280,18 +284,19 @@ async def generate_compliance_report(
     params: dict[str, Any] = {**bparams}
 
     # Build asset query — join asset_categories since assets has category_id FK (no direct category col)
+    # The category's column is `name` in production (25 Nov 2026); `category_name` does not exist.
     if scope != "all_assets":
         asset_sql = f"""
-            SELECT a.asset_code, a.asset_name, ac.category_name AS category
+            SELECT a.asset_code, a.asset_name, ac.name AS category
             FROM plenum_cafm.assets a
             LEFT JOIN plenum_cafm.asset_categories ac ON ac.id = a.category_id
-            WHERE ac.category_name = :category
+            WHERE ac.name = :category
             {bsql}
         """
         params["category"] = scope
     else:
         asset_sql = f"""
-            SELECT a.asset_code, a.asset_name, ac.category_name AS category
+            SELECT a.asset_code, a.asset_name, ac.name AS category
             FROM plenum_cafm.assets a
             LEFT JOIN plenum_cafm.asset_categories ac ON ac.id = a.category_id
             WHERE TRUE {bsql}
@@ -301,12 +306,13 @@ async def generate_compliance_report(
         try:
             assets = (await session.execute(text(asset_sql), params)).mappings().all()
 
-            # Overdue PMs — maintenance_plans joined to assets via asset_id UUID FK
+            # Overdue PMs — maintenance_plans joined to assets via asset_id UUID FK (uuid = uuid,
+            # no cast: see check_requirements, 25 Nov 2026)
             overdue_pms = (await session.execute(
                 text(f"""
                     SELECT a.asset_code, count(*) AS overdue_count
                     FROM plenum_cafm.maintenance_plans mp
-                    JOIN plenum_cafm.assets a ON a.id = mp.asset_id::text
+                    JOIN plenum_cafm.assets a ON a.id = mp.asset_id
                     WHERE mp.next_due_date < CURRENT_DATE
                       AND mp.status = 'active'
                       {bsql}
@@ -320,7 +326,7 @@ async def generate_compliance_report(
                 text(f"""
                     SELECT a.asset_code, count(*) AS wo_count
                     FROM plenum_cafm.work_orders wo
-                    JOIN plenum_cafm.assets a ON a.id = wo.asset_id::text
+                    JOIN plenum_cafm.assets a ON a.id = wo.asset_id
                     WHERE wo.status NOT IN ('completed', 'closed', 'cancelled')
                       AND wo.priority IN ('high', 'critical')
                       {bsql}

@@ -30,6 +30,7 @@ retrying on a timeout could cause duplicate side effects.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -101,14 +102,28 @@ def _breaker(service: str) -> _CircuitBreaker:
 # Retry predicate
 # ──────────────────────────────────────────────────────────────────────────────
 
+#: A 5xx body naming one of these is the database refusing the query as written (a column or
+#: table that does not exist, a bad cast) - svc-udr answers 500 for it. The same query fails the
+#: same way every time (25 Nov 2026: `column v.specialty does not exist`, sent three times).
+_WRONG_QUERY = re.compile(r"\b(ProgrammingError|DataError)\b")
+
+
 def _is_transient(exc: BaseException) -> bool:
     """True for errors that are worth retrying, with the same request: transport failures (a timeout,
     a dropped connection), 5xx responses and 429 (rate limited). Never an authorisation (401/403) or a
-    validation error (400/404/409/422): asking again cannot change those answers (Workstream A2)."""
+    validation error (400/404/409/422): asking again cannot change those answers (Workstream A2).
+    Nor a 5xx whose body says the query itself is wrong (_WRONG_QUERY)."""
     if isinstance(exc, httpx.TransportError):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500 or exc.response.status_code == 429
+        code = exc.response.status_code
+        if code >= 500:
+            try:
+                body = exc.response.text
+            except Exception:  # noqa: BLE001 - an unread body says nothing either way
+                body = ""
+            return not _WRONG_QUERY.search(body)
+        return code == 429
     return False
 
 
@@ -351,7 +366,10 @@ async def request(
                     return resp
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code >= 500:
-                    cb.record_failure()
+                    # A query the database refused as written says nothing about the service's
+                    # health: it must not close svc-udr to everyone for 30 s (25 Nov 2026).
+                    if _is_transient(exc):
+                        cb.record_failure()
                     log.warning(
                         "http_client.server_error",
                         service=service,

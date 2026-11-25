@@ -63,6 +63,11 @@ _DENIED_TEXT = re.compile(r"\b(forbidden|not authori[sz]ed|unauthori[sz]ed|permi
                           r"no_ingest_right|not_your_run)\b", re.I)
 _SIGNED_OUT = re.compile(r"\b(token (?:expired|missing|invalid)|not authenticated|sign(?:ed)? ?in again|"
                          r"no (?:bearer )?token|unauthenticated)\b", re.I)
+#: The AI provider refusing the PLATFORM's own key (OpenAI / Anthropic). Not the user's sign-in: its
+#: text carries a 401 and a link, which read as the caller's own 401 until 25 Nov 2026, when hoistra.ai
+#: told every user "Your sign-in has expired" over a dead OpenAI key.
+_PROVIDER_KEY = re.compile(r"\b(invalid_api_key|incorrect api key|api key has (?:expired|been invalidated)|"
+                           r"expired_secret_key|token_invalidated|invalid x-api-key)\b", re.I)
 #: A tool or sub-agent refusing a caller held to some pages (agents/page_access.OUTSIDE_PAGES).
 _OUTSIDE_PAGES = re.compile(r"outside the pages you have access to|\bpage_not_allowed\b", re.I)
 _TIMEOUT = re.compile(r"\b(time ?out|timed out|ReadTimeout|ConnectTimeout|deadline exceeded)\b", re.I)
@@ -156,6 +161,10 @@ def _classify_text(text: str, name: str, blob: str) -> dict[str, Any]:
     if _OUTSIDE_PAGES.search(blob):
         return record(DENIED, "outside_pages", True, "That is outside the pages you have access to.",
                       "Ask an administrator of your company if you need that page.")
+    if _PROVIDER_KEY.search(blob):
+        return record(UNAVAILABLE, "service_setup", False,
+                      "The assistant's AI service is refusing the platform's key, so nothing could be answered.",
+                      "Tell your administrator: this is a setup problem on the platform, not your account.")
     if _SIGNED_OUT.search(blob):
         return record(*_HTTP[401])
     if _DENIED_TEXT.search(blob):

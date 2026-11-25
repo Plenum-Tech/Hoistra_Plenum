@@ -387,6 +387,9 @@ export const instancesMethods = {
       out.instSwitch = () => {};
       out.navSections = (vals.navSections || []).filter((n) => screens.indexOf(NAV_REPORT[n.key]) > -1);
       out.navSpaces = (vals.navSpaces || []).filter((sp) => !SPACE_REPORT[sp.key] || screens.indexOf(SPACE_REPORT[sp.key]) > -1);
+      // Home is the question box only: no Hoist Score, P&L, Hoist Crons or Platform value row
+      // (Hussain, 25 Nov 2026). Consultants only - nobody else is given this flag.
+      out.homeQueryOnly = true;
       return out;
     }
     const mine = roleReports(a);

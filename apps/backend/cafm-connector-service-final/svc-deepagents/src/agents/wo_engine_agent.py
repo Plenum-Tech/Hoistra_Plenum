@@ -1525,6 +1525,77 @@ def _decision_dates_note(decisions: list[dict[str, Any]]) -> str:
             "how many fall in it from these counts; never call the whole list that period's.")
 
 
+#: The states and modules as the decisions route spells them. It compares them exactly, so a plan's
+#: "blocked" was a 422 and its "compliance" an empty list, read as "there are none" (25 Nov 2026).
+_DECISION_STATES = ("Blocked", "Deviation", "Awaiting approval", "To raise")
+_DECISION_SOURCES = ("Compliance", "Vendors", "Assets", "Energy", "Maintenance")
+#: The most decisions the route returns in one read (its Query le=500).
+_DECISIONS_READ_MAX = 500
+
+
+def _decision_label(value: Any, labels: tuple[str, ...]) -> str | None:
+    """``value`` as the route spells it, however it was written ("awaiting_approval", "vendor");
+    None when it is none of ``labels``."""
+    key = re.sub(r"[^a-z]+", "", str(value).lower()).rstrip("s")
+    for label in labels:
+        if key and key == re.sub(r"[^a-z]+", "", label.lower()).rstrip("s"):
+            return label
+    return None
+
+
+def _group_decisions(rows: list[dict[str, Any]], by: str, limit: int) -> list[dict[str, Any]] | None:
+    """The narrowed decisions cut as the route cuts them (services/maintenance.py _group), so a group
+    counts only what survived the narrowing."""
+    if by not in ("state", "source", "building", "vendor"):
+        return None
+    unlabelled = {"building": "No building", "vendor": "Unassigned",
+                  "source": "Unattributed", "state": "No state"}[by]
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        buckets.setdefault(str(r.get(by) or unlabelled), []).append(r)
+    out = []
+    for key, items in buckets.items():
+        costs = [d["estimated_cost"] for d in items if d.get("estimated_cost") is not None]
+        out.append({
+            "key": key, "count": len(items),
+            "blocked": sum(1 for d in items if d.get("state") == "Blocked"),
+            "to_raise": sum(1 for d in items if d.get("state") == "To raise"),
+            "deviating": sum(1 for d in items if d.get("state") == "Deviation"),
+            "awaiting_approval": sum(1 for d in items if d.get("state") == "Awaiting approval"),
+            "estimated_cost": round(sum(costs), 2) if costs else None, "priced": len(costs),
+            "decisions": items[:limit],
+        })
+    order = {s: i for i, s in enumerate(_DECISION_STATES)}
+    out.sort(key=(lambda g: order.get(g["key"], 9)) if by == "state" else (lambda g: (-g["count"], g["key"])))
+    return out
+
+
+def _narrow_to_statutory(out: dict[str, Any], want: bool, limit: int) -> dict[str, Any]:
+    """The decisions read, cut to those a certificate does (or does not) make statutory.
+
+    The route marks every row it returns `statutory` but cannot filter on it, so "which decisions
+    are statutory" listed all of them: 49 of 49, every day from 16 to 23 Nov, and the plan's verify
+    step failed on it (25 Nov 2026). The read is made as wide as the route allows and cut here;
+    count, matched and groups are the cut's, `total` stays every decision in scope."""
+    read = [d for d in out.get("decisions") or [] if isinstance(d, dict)]
+    kept = [d for d in read if bool(d.get("statutory")) is want]
+    matched = out.get("matched")
+    unread = max(matched - len(read), 0) if isinstance(matched, int) else 0
+    out["decisions"] = kept[:limit]
+    out["count"] = len(out["decisions"])
+    out["matched"] = len(kept)
+    out["filtered"] = True
+    out["statutory_filter"] = want
+    if out.get("group_by"):
+        out["groups"] = _group_decisions(kept, str(out["group_by"]), limit)
+    what = "statutory" if want else "not statutory"
+    out["statutory_note"] = (
+        f"{len(kept)} of the {len(read)} decisions read are {what}"
+        + (f"; {unread} more in scope were not read, so {len(kept)} is a floor" if unread else "")
+        + ". by_state and by_source still count every decision in scope, statutory or not.")
+    return out
+
+
 @tool
 async def list_maintenance_decisions(
     building_id: str | None = None,
@@ -1532,6 +1603,7 @@ async def list_maintenance_decisions(
     source: str | None = None,
     group_by: str | None = None,
     limit: int = 200,
+    statutory: bool | None = None,
 ) -> dict:
     """D — The decisions a property manager owes, with what each is waiting on.
 
@@ -1550,8 +1622,10 @@ async def list_maintenance_decisions(
         Deviation          a live order drifting off SLA or certificate
 
     `source` says which module triggered it: Compliance, Vendors, Assets, Energy, Maintenance.
-    That is the answer to "which decisions are statutory" — the compliance-sourced ones, and a
-    lapsed or nearly-lapsed certificate behind them.
+
+    `statutory=True` lists only the decisions a certificate makes statutory (each row's
+    `statutory`, with the certificate behind it) — the answer to "which decisions are
+    statutory"; `statutory=False` the others. It combines with state and source.
 
     `group_by` accepts state, source, building or vendor, each group carrying its own count and
     cost — use it rather than counting a list yourself.
@@ -1560,17 +1634,28 @@ async def list_maintenance_decisions(
     fold its estimate into a figure for committed spend.
     """
     try:
+        if state and not _decision_label(state, _DECISION_STATES):
+            return {"ok": False, "error": f"state {state!r} is none of the four: "
+                    + ", ".join(_DECISION_STATES) + ". Pass one of them, or no state for all."}
+        if source and not _decision_label(source, _DECISION_SOURCES):
+            return {"ok": False, "error": f"source {source!r} is none of the modules: "
+                    + ", ".join(_DECISION_SOURCES) + ". Pass one of them, or no source for all."}
         building_id, problem = await _maintenance_building(building_id, use_thread=True)
         if problem:
             return problem
-        params: dict[str, Any] = {"limit": limit}
-        for k, v in (("building_id", building_id), ("state", state),
-                     ("source", source), ("group_by", group_by)):
+        # statutory is cut here from what the route returns, so read as many as it allows.
+        params: dict[str, Any] = {"limit": _DECISIONS_READ_MAX if statutory is not None else limit}
+        for k, v in (("building_id", building_id),
+                     ("state", state and _decision_label(state, _DECISION_STATES)),
+                     ("source", source and _decision_label(source, _DECISION_SOURCES)),
+                     ("group_by", group_by)):
             if v:
                 params[k] = v
         resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/decisions",
                               service=_SERVICE, timeout=_TIMEOUT, params=params)
         out = resp.json()
+        if isinstance(out, dict) and statutory is not None:
+            out = _narrow_to_statutory(out, bool(statutory), limit)
         if isinstance(out, dict):
             # What the list covers, said in the result (2 Nov 2026): it was read for the whole
             # portfolio under a one-building answer, and its open items called "this month's".

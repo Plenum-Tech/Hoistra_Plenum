@@ -554,9 +554,15 @@ class DatabaseService:
         sql: str,
         params: dict[str, Any] | None = None,
     ) -> list[dict]:
-        """Run a caller-supplied SELECT query. Non-SELECT statements are rejected."""
+        """Run a caller-supplied SELECT (or WITH ... SELECT) query, in a read-only transaction.
+
+        25 Nov 2026: the prefix check alone refused every `WITH` the orchestrator's database agent
+        wrote, and was the only thing between this route and a write (a WITH can carry a DELETE,
+        a SELECT can call a function that writes). The transaction is now READ ONLY before the
+        caller's SQL runs, so Postgres itself refuses any write; WITH is accepted.
+        """
         stripped = sql.strip()
-        if not stripped.upper().startswith("SELECT"):
+        if not stripped.upper().startswith(("SELECT", "WITH")):
             log.warning(
                 "db.security.non_select_blocked",
                 sql_preview=stripped[:120],
@@ -577,6 +583,9 @@ class DatabaseService:
         if scope.allocated_to_nothing(self._principal):
             log.info("db.execute_select.no_buildings_allocated", sql_preview=stripped[:120])
             return []
+
+        # First statement of the transaction: nothing the caller sends below can write.
+        await self._db.execute(text("SET TRANSACTION READ ONLY"))
 
         # The views are built by a migration that runs at another service's startup. Until it
         # has, this route has no restriction to apply — and the one thing it must not do then is
